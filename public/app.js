@@ -598,7 +598,7 @@ function renderApprovals() {
     ? allApprovals.filter((approval) => approval.status === "pending")
     : allApprovals;
   renderList(lists.approvals, approvals, (approval) => `
-    <article class="item ${["human_verification", "context_question"].includes(approval.type) ? "human-request" : ""}">
+    <article class="item ${["human_verification", "context_question", "external_contact", "web_research"].includes(approval.type) ? "human-request" : ""}">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(approval.title)}</h2>
         <span class="badge ${escapeHtml(approval.status)}">${escapeHtml(approval.status)}</span>
@@ -616,6 +616,8 @@ function renderApprovals() {
           <p>${escapeHtml(approvalActionOutcome(approval))}</p>
         </div>
       ` : ""}
+      ${approval.type === "external_contact" ? contactApprovalSummary(approval) : ""}
+      ${approval.type === "web_research" ? researchApprovalSummary(approval) : ""}
       <p class="item-body">${escapeHtml(approval.details)}</p>
       ${approvalAdvice(approval) ? `<p class="approval-advice">${escapeHtml(approvalAdvice(approval))}</p>` : ""}
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
@@ -777,6 +779,8 @@ function approvalPlaceholder(approval, status) {
   if (status === "denied") return "Reason or safer alternative";
   if (approval.type === "context_question") return "Your answer will be saved into Context and shared with the worker";
   if (approval.type === "human_verification") return "Verification completed, or short result";
+  if (approval.type === "external_contact") return "Manual send result, edits, or reason to hold";
+  if (approval.type === "web_research") return "Approved scope, source limits, or safer research route";
   if (approval.type === "credential") return "Minimum non-secret result, never a password";
   if (approval.type === "command") return "Reviewed scope or manual result";
   if (approval.type === "purchase") return "Budget/vendor check or manual purchase result";
@@ -789,6 +793,12 @@ function approvalAdvice(approval) {
   }
   if (approval.type === "command" && !approval.command) {
     return "No exact command is attached. Deny this unless you are only recording a boundary or manual result.";
+  }
+  if (approval.type === "external_contact") {
+    return "External contact is draft-only. Latch will not send mail or messages in this phase.";
+  }
+  if (approval.type === "web_research") {
+    return "Research is scope-only in this phase. Keep page and token budgets small before enabling browser access.";
   }
   if (approval.sensitive) {
     return "Sensitive request. Do not paste passwords, recovery codes, payment details, or long-lived tokens back to the agent.";
@@ -805,6 +815,12 @@ function approvalActionOutcome(approval) {
   }
   if (approval.type === "command") {
     return "Approval records your decision; the current bridge will not execute arbitrary commands.";
+  }
+  if (approval.type === "external_contact") {
+    return "Approval records the reviewed draft. The operator still sends manually unless a future connector is enabled.";
+  }
+  if (approval.type === "web_research") {
+    return "Approval records a bounded research scope. The current bridge will not browse autonomously.";
   }
   if (approval.sensitive) {
     return "Approval records a human step; sensitive notes stay inside Latch.";
@@ -832,6 +848,8 @@ function formatApprovalType(value) {
     account_setup: "Account setup",
     purchase: "Purchase",
     credential: "Credential",
+    external_contact: "External contact",
+    web_research: "Web research",
     other: "Other"
   };
   return labels[value] || "Other";
@@ -840,7 +858,48 @@ function formatApprovalType(value) {
 function approvalActionLabel(approval, status) {
   if (approval.type === "context_question") return status === "approved" ? "Save answer" : "Skip";
   if (approval.type === "human_verification") return status === "approved" ? "Mark done" : "Cannot help";
+  if (approval.type === "external_contact") return status === "approved" ? "Mark reviewed" : "Hold";
+  if (approval.type === "web_research") return status === "approved" ? "Approve scope" : "Deny scope";
   return status === "approved" ? "Approve" : "Deny";
+}
+
+function contactApprovalSummary(approval) {
+  const attachments = approval.attachments || [];
+  return `
+    <div class="approval-summary contact-summary">
+      <strong>Draft contact request</strong>
+      <dl class="detail-grid">
+        <dt>Recipient</dt><dd>${escapeHtml(approval.recipient || "Not specified")}</dd>
+        <dt>Subject</dt><dd>${escapeHtml(approval.subject || "Not specified")}</dd>
+        <dt>Send mode</dt><dd>${escapeHtml(approval.sendMode === "approved_connector" ? "Approved connector" : "Manual")}</dd>
+        <dt>Attachments</dt><dd>${attachments.length ? escapeHtml(attachments.join(", ")) : "None"}</dd>
+      </dl>
+      ${approval.bodyPreview ? `
+        <details class="command-details">
+          <summary>Show draft preview</summary>
+          <pre class="item-body">${escapeHtml(approval.bodyPreview)}</pre>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+function researchApprovalSummary(approval) {
+  const domains = approval.allowedDomains || [];
+  const budget = [
+    approval.maxPages ? `${approval.maxPages} pages` : "page budget unset",
+    approval.tokenBudget ? `${approval.tokenBudget} tokens` : "token budget unset"
+  ].join(" / ");
+  return `
+    <div class="approval-summary research-summary">
+      <strong>Bounded research scope</strong>
+      <dl class="detail-grid">
+        <dt>Question</dt><dd>${escapeHtml(approval.researchQuestion || "Not specified")}</dd>
+        <dt>Allowed domains</dt><dd>${domains.length ? escapeHtml(domains.join(", ")) : "Not specified"}</dd>
+        <dt>Budget</dt><dd>${escapeHtml(budget)}</dd>
+      </dl>
+    </div>
+  `;
 }
 
 function renderEvents() {

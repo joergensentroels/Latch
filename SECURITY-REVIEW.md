@@ -41,6 +41,8 @@ The bridge cannot:
 - access provider API keys
 - send outbound email or messages to third parties
 
+The bridge may create `external_contact` and `web_research` approval records. These are control records only; they do not grant mail, messaging, or browser powers.
+
 ## Future Co-Creator Contact
 
 Eventually an agent may need to contact a potential collaborator, reviewer, or co-creator. That should be built as a supervised workflow, not as a general messaging power.
@@ -54,6 +56,8 @@ Recommended first version:
 5. Latch stores an audit summary.
 
 Do not start by giving the agent a real inbox, SMTP password, social account, or unrestricted browser session.
+
+See [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md) for the current approval shapes and token-efficiency rules.
 
 ## External Contact Approval Shape
 
@@ -138,4 +142,3 @@ Latch should not become public until:
 - the README clearly says this is private-first software
 - external contact remains manual or approval-gated
 - command execution remains read-only or separately reviewed
-

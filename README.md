@@ -4,7 +4,7 @@ Latch is a private agent gateway for sending instructions, status updates, model
 
 Read [SECURITY.md](./SECURITY.md) before exposing it beyond localhost.
 
-If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), and [NOTIFICATIONS.md](./NOTIFICATIONS.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
+If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), and [NOTIFICATIONS.md](./NOTIFICATIONS.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
 
 For the Ubuntu OpenClaw worker VM, see [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md).
 
