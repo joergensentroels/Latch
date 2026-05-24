@@ -1,6 +1,12 @@
 # Latch on Android
 
-Use the private Tailscale URL first:
+Use the private Tailscale HTTPS URL first when available:
+
+```text
+https://<windows-device>.<tailnet>.ts.net
+```
+
+The direct private Tailscale HTTP URL remains useful as a fallback:
 
 ```text
 http://<windows-tailscale-ip>:8787
@@ -17,9 +23,11 @@ Requirements:
 
 1. Open Tailscale on the phone and make sure it says connected.
 2. Open Chrome on the phone.
-3. Browse to `http://<windows-tailscale-ip>:8787`.
+3. Browse to the private HTTPS URL from `Status-Latch.ps1`, or use `http://<windows-tailscale-ip>:8787` as a fallback.
 4. Enter the Latch operator key.
-5. Open the Chrome menu and choose `Add to Home screen` or `Install app`.
+5. Tap `P` in the top bar and set a local app PIN.
+6. If Chrome offers it, add a passkey from the app-lock dialog.
+7. Open the Chrome menu and choose `Add to Home screen` or `Install app`.
 
 The installed shortcut/app still uses the private Tailscale connection. It will not work when Tailscale is disconnected.
 
@@ -37,4 +45,11 @@ Latch sends generic notification text only. The task or approval content stays i
 
 Android may install the app from the private HTTP URL as a home-screen app or shortcut. Full browser notification support usually requires HTTPS.
 
-The intended HTTPS path is Tailscale Serve, which is private to the tailnet and different from public Tailscale Funnel. On this Windows install, the `tailscale serve` CLI did not complete from the Codex shell, so the currently verified phone URL is the direct private Tailscale HTTP URL above.
+The intended HTTPS path is Tailscale Serve, which is private to the tailnet and different from public Tailscale Funnel. On Windows, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Serve-Over-Tailscale.ps1
+powershell -ExecutionPolicy Bypass -File .\Status-Latch.ps1
+```
+
+Use the `PrivateHttpsUrl` value on the phone when it is present.

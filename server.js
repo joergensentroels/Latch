@@ -12,6 +12,7 @@ const dbPath = path.join(dataDir, "db.json");
 const authPath = path.join(dataDir, "auth.json");
 const llmConfigPath = path.join(dataDir, "llm-provider.json");
 const notificationConfigPath = path.join(dataDir, "notifications.json");
+const localSettingsPath = path.join(dataDir, "local-settings.json");
 const contextFilesDir = path.join(dataDir, "context-files");
 const backupsDir = path.join(dataDir, "backups");
 const maxUploadBytes = 2_000_000;
@@ -151,6 +152,7 @@ async function handleApi(req, res, url) {
     const db = await readDb();
     const llm = await loadLlmConfig();
     const notifications = await loadNotificationConfig();
+    const localSettings = await loadLocalSettings();
     sendJson(res, 200, {
       app: "latch",
       version: appVersion,
@@ -159,6 +161,7 @@ async function handleApi(req, res, url) {
       uptimeSeconds: Math.round(process.uptime()),
       hosts,
       port,
+      urls: publicUrls(localSettings),
       dataDir,
       dbPath,
       counts: {
@@ -608,6 +611,23 @@ async function handleApi(req, res, url) {
   }
 
   sendJson(res, 404, { error: "not_found" });
+}
+
+async function loadLocalSettings() {
+  try {
+    return JSON.parse(await readFile(localSettingsPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function publicUrls(localSettings) {
+  const windowsTailscaleIp = localSettings.windowsTailscaleIp || hosts.find((host) => /^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host));
+  return {
+    localUrl: `http://127.0.0.1:${port}`,
+    tailscaleHttpUrl: windowsTailscaleIp ? `http://${windowsTailscaleIp}:${port}` : null,
+    privateHttpsUrl: localSettings.privateHttpsUrl || null
+  };
 }
 
 async function serveStatic(req, res, url) {

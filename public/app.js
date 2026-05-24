@@ -60,6 +60,7 @@ const pinInput = document.querySelector("#pinInput");
 const pinConfirmLabel = document.querySelector("#pinConfirmLabel");
 const pinConfirmInput = document.querySelector("#pinConfirmInput");
 const pinStatus = document.querySelector("#pinStatus");
+const passkeyButton = document.querySelector("#passkeyButton");
 const pinCancelButton = document.querySelector("#pinCancelButton");
 const pinSubmitButton = document.querySelector("#pinSubmitButton");
 const approvalDialog = document.querySelector("#approvalDialog");
@@ -83,6 +84,7 @@ const lists = {
   events: document.querySelector("#eventsList")
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
+const securityChecklist = document.querySelector("#securityChecklist");
 let pinMode = "unlock";
 
 loginForm.addEventListener("submit", async (event) => {
@@ -208,7 +210,7 @@ backupButton.addEventListener("click", createBackup);
 exportContextButton.addEventListener("click", exportContext);
 appLockButton.addEventListener("click", () => {
   if (!state.token) return;
-  if (!isPinConfigured()) {
+  if (!isAppLockConfigured()) {
     openPinDialog("set");
     return;
   }
@@ -236,6 +238,7 @@ approvalDialog.addEventListener("click", (event) => {
 });
 approvalDecisionForm.addEventListener("submit", submitApprovalDecision);
 pinForm.addEventListener("submit", submitPin);
+passkeyButton?.addEventListener("click", handlePasskeyButton);
 pinCancelButton.addEventListener("click", () => {
   if (pinMode === "unlock") {
     localStorage.removeItem("latchOperatorToken");
@@ -298,7 +301,7 @@ async function boot() {
     showLogin();
     return;
   }
-  if (isPinConfigured() && !state.pinUnlocked) {
+  if (isAppLockConfigured() && !state.pinUnlocked) {
     showPinLock();
     return;
   }
@@ -379,6 +382,7 @@ function render() {
   renderApprovals();
   renderContext();
   renderDiagnostics();
+  renderSecurityChecklist();
   renderArchives();
   renderEvents();
 }
@@ -795,6 +799,12 @@ function renderDiagnostics() {
       note: `Started ${formatTime(about.startedAt)} / uptime ${uptime}`
     },
     {
+      label: "Private URL",
+      value: about.urls?.privateHttpsUrl || about.urls?.tailscaleHttpUrl || "Not recorded",
+      status: about.urls?.privateHttpsUrl ? "ok" : "warn",
+      note: about.urls?.privateHttpsUrl ? "Tailscale Serve HTTPS" : "Run Serve-Over-Tailscale.ps1 for private HTTPS"
+    },
+    {
       label: "Storage",
       value: `${about.counts?.contextItems || 0} context / ${about.counts?.archived || 0} archived`,
       status: about.counts?.archived ? "warn" : "ok",
@@ -809,6 +819,52 @@ function renderDiagnostics() {
       ${card.note ? `<p>${escapeHtml(card.note)}</p>` : ""}
     </article>
   `).join("");
+}
+
+function renderSecurityChecklist() {
+  if (!securityChecklist) return;
+
+  const about = state.about || {};
+  const checks = [
+    {
+      label: "Private route",
+      ok: isPrivateRoute(),
+      warn: false,
+      note: isPrivateRoute() ? "This browser is using localhost or a Tailscale address." : "Open Latch through Tailscale before using it away from home."
+    },
+    {
+      label: "Private HTTPS",
+      ok: location.protocol === "https:" && location.hostname.toLowerCase().endsWith(".ts.net"),
+      warn: Boolean(about.urls?.privateHttpsUrl),
+      note: about.urls?.privateHttpsUrl || "Run Serve-Over-Tailscale.ps1 to enable the phone-friendly HTTPS route."
+    },
+    {
+      label: "App lock",
+      ok: isAppLockConfigured(),
+      warn: false,
+      note: isAppLockConfigured() ? appLockLabel() : "Set a local PIN, then add a passkey if the phone supports it."
+    },
+    {
+      label: "Public exposure",
+      ok: true,
+      warn: false,
+      note: "Latch uses Tailscale Serve/private IPs only. Do not enable Tailscale Funnel for this app."
+    }
+  ];
+
+  securityChecklist.innerHTML = checks.map((check) => {
+    const stateName = check.ok ? "ok" : check.warn ? "warn" : "bad";
+    const mark = check.ok ? "OK" : check.warn ? "!" : "!";
+    return `
+      <article class="security-row ${stateName}">
+        <span class="security-mark">${mark}</span>
+        <div>
+          <strong>${escapeHtml(check.label)}</strong>
+          <p>${escapeHtml(check.note)}</p>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderArchives() {
@@ -908,16 +964,43 @@ function isPinConfigured() {
   return Boolean(localStorage.getItem("latchPinSalt") && localStorage.getItem("latchPinHash"));
 }
 
+function isPasskeyConfigured() {
+  return Boolean(localStorage.getItem("latchPasskeyCredentialId"));
+}
+
+function isAppLockConfigured() {
+  return isPinConfigured() || isPasskeyConfigured();
+}
+
+function isPasskeySupported() {
+  return Boolean(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+}
+
+function appLockLabel() {
+  const parts = [];
+  if (isPinConfigured()) parts.push("PIN");
+  if (isPasskeyConfigured()) parts.push("passkey");
+  return `${parts.join(" + ")} configured on this device.`;
+}
+
 function openPinDialog(mode) {
   pinMode = mode;
   const isSet = mode === "set";
+  const passkeySupported = isPasskeySupported();
+  const passkeyConfigured = isPasskeyConfigured();
   pinDialogEyebrow.textContent = isSet ? "Set PIN" : "App Lock";
   pinDialogTitle.textContent = isSet ? "Set App PIN" : "Unlock Latch";
   pinHelp.textContent = isSet
-    ? "Set a local PIN for this device. This protects the app when your phone is already unlocked."
-    : "Enter your local PIN to unlock this device.";
+    ? "Set a local PIN for this device. You can add a passkey when Latch is opened over private HTTPS."
+    : passkeyConfigured
+      ? "Use your passkey or enter your local PIN to unlock this device."
+      : "Enter your local PIN to unlock this device.";
   pinSubmitButton.textContent = isSet ? "Save PIN" : "Unlock";
   pinCancelButton.textContent = isSet ? "Cancel" : "Use Operator Key";
+  if (passkeyButton) {
+    passkeyButton.textContent = passkeyConfigured ? "Use Passkey" : "Add Passkey";
+    passkeyButton.classList.toggle("hidden", !passkeySupported || (!passkeyConfigured && !state.token));
+  }
   pinConfirmLabel.classList.toggle("hidden", !isSet);
   pinConfirmInput.classList.toggle("hidden", !isSet);
   pinInput.value = "";
@@ -925,6 +1008,18 @@ function openPinDialog(mode) {
   setFormStatus(pinStatus, "", "");
   pinDialog.classList.remove("hidden");
   pinInput.focus();
+}
+
+async function handlePasskeyButton() {
+  try {
+    if (isPasskeyConfigured()) {
+      await unlockWithPasskey();
+      return;
+    }
+    await createPasskey();
+  } catch (error) {
+    setFormStatus(pinStatus, `Passkey failed: ${error.message}`, "error");
+  }
 }
 
 function closePinDialog() {
@@ -959,6 +1054,10 @@ async function submitPin(event) {
       return;
     }
 
+    if (!isPinConfigured()) {
+      setFormStatus(pinStatus, "PIN is not configured on this device.", "error");
+      return;
+    }
     const salt = base64ToBytes(localStorage.getItem("latchPinSalt") || "");
     const expected = localStorage.getItem("latchPinHash") || "";
     const hash = await hashPin(pin, salt);
@@ -972,6 +1071,70 @@ async function submitPin(event) {
   } catch (error) {
     setFormStatus(pinStatus, `PIN failed: ${error.message}`, "error");
   }
+}
+
+async function createPasskey() {
+  if (!isPasskeySupported()) {
+    throw new Error("Open Latch over private HTTPS to use passkeys.");
+  }
+  const userId = crypto.getRandomValues(new Uint8Array(16));
+  const challenge = crypto.getRandomValues(new Uint8Array(32));
+  const credential = await navigator.credentials.create({
+    publicKey: {
+      challenge,
+      rp: { name: "Latch" },
+      user: {
+        id: userId,
+        name: "Latch operator",
+        displayName: "Latch operator"
+      },
+      pubKeyCredParams: [
+        { type: "public-key", alg: -7 },
+        { type: "public-key", alg: -257 }
+      ],
+      authenticatorSelection: {
+        residentKey: "preferred",
+        userVerification: "required"
+      },
+      timeout: 60000,
+      attestation: "none"
+    }
+  });
+
+  if (!credential?.rawId) {
+    throw new Error("No passkey was created.");
+  }
+  localStorage.setItem("latchPasskeyCredentialId", bytesToBase64Url(new Uint8Array(credential.rawId)));
+  localStorage.setItem("latchPasskeyUserId", bytesToBase64Url(userId));
+  state.pinUnlocked = true;
+  closePinDialog();
+  await refresh();
+}
+
+async function unlockWithPasskey() {
+  if (!isPasskeySupported()) {
+    throw new Error("Open Latch over private HTTPS to use passkeys.");
+  }
+  const credentialId = base64UrlToBytes(localStorage.getItem("latchPasskeyCredentialId") || "");
+  if (!credentialId.length) {
+    throw new Error("No passkey is configured.");
+  }
+
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: "public-key", id: credentialId }],
+      userVerification: "required",
+      timeout: 60000
+    }
+  });
+
+  if (!assertion?.rawId) {
+    throw new Error("Passkey unlock was cancelled.");
+  }
+  state.pinUnlocked = true;
+  closePinDialog();
+  await boot();
 }
 
 async function hashPin(pin, salt) {
@@ -997,6 +1160,20 @@ function bytesToBase64(bytes) {
     binary += String.fromCharCode(byte);
   });
   return btoa(binary);
+}
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
+function base64UrlToBytes(value) {
+  const padded = `${value}${"=".repeat((4 - (value.length % 4)) % 4)}`
+    .replaceAll("-", "+")
+    .replaceAll("_", "/");
+  return base64ToBytes(padded);
 }
 
 function base64ToBytes(value) {

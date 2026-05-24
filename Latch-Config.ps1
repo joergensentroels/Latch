@@ -15,6 +15,15 @@ function Get-LatchLocalConfig {
     Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 }
 
+function Save-LatchLocalConfig {
+    param([Parameter(Mandatory = $true)]$Config)
+
+    $ConfigPath = Join-Path $script:LatchConfigRoot "data\local-settings.json"
+    $ConfigDir = Split-Path -Parent $ConfigPath
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    $Config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
+}
+
 function Resolve-LatchHostAddress {
     param([string]$HostAddress = "")
 
@@ -49,4 +58,17 @@ function Resolve-LatchPort {
     }
 
     return "8787"
+}
+
+function Resolve-TailscaleCli {
+    $Tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
+    if (-not $Tailscale -and (Test-Path -LiteralPath "C:\Program Files\Tailscale\tailscale.exe")) {
+        $Tailscale = Get-Item -LiteralPath "C:\Program Files\Tailscale\tailscale.exe"
+    }
+
+    if (-not $Tailscale) {
+        throw "Tailscale CLI was not found. Install and sign in to Tailscale first."
+    }
+
+    return $Tailscale.FullName
 }
