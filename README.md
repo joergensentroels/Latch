@@ -91,7 +91,7 @@ In another PowerShell window, publish it privately inside your tailnet:
 powershell -ExecutionPolicy Bypass -File .\Serve-Over-Tailscale.ps1
 ```
 
-Open the HTTPS Tailscale URL shown by `tailscale serve status` on your phone.
+Open the HTTPS Tailscale URL shown by the script or by `Status-Latch.ps1` on your phone. The script records it in `data\local-settings.json` as `privateHttpsUrl` when Tailscale reports the device DNS name.
 
 - Android Chrome: open the site, then choose `Install app` or `Add to Home screen`.
 - iPhone Safari: open the site, tap Share, then choose `Add to Home Screen`.
@@ -168,6 +168,12 @@ http://<host-tailscale-ip>:8787
 
 Plain HTTP is useful for quick testing, but phone app installation usually requires HTTPS. Tailscale Serve provides HTTPS privately inside your tailnet. Do not expose this app with router port forwarding. Use Tailscale private networking, and avoid Tailscale Funnel unless you intentionally want public internet exposure.
 
+To check the currently known URLs:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Status-Latch.ps1
+```
+
 ## Context Library
 
 The Context tab is for operator-provided memory: goals, boundaries, personality notes, background, and small supporting files.
@@ -200,9 +206,9 @@ Use the Timeline tab for local operations:
 
 ## App Lock
 
-The `P` button in the top bar sets or activates a local PIN lock for the current browser/device. This is meant for the practical phone-handoff case: if your phone is unlocked, Latch can still require a PIN before showing notes and messages.
+The `P` button in the top bar sets or activates a local app lock for the current browser/device. This is meant for the practical phone-handoff case: if your phone is unlocked, Latch can still require a PIN or passkey before showing notes and messages.
 
-The PIN is local to that installed app/browser profile. It does not replace the operator key, phone OS lock, or Tailscale. Biometric/passkey unlock can be added later when Latch is served over private HTTPS, such as Tailscale Serve, because browser biometrics require a secure context.
+The PIN and passkey registration are local to that installed app/browser profile. They do not replace the operator key, phone OS lock, or Tailscale. Passkey unlock requires private HTTPS, such as Tailscale Serve, because browser biometrics require a secure context.
 
 Latch also warns when it is opened from a route that does not look like localhost, a Tailscale `100.x.y.z` address, or a `.ts.net` private URL.
 

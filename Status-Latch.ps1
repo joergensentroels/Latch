@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $HostAddress = Resolve-LatchHostAddress -HostAddress $HostAddress
 $Port = Resolve-LatchPort -Port $Port
+$Config = Get-LatchLocalConfig
 
 $Targets = @("127.0.0.1", $HostAddress) | Select-Object -Unique
 $Checks = foreach ($Target in $Targets) {
@@ -37,4 +38,5 @@ $Checks = foreach ($Target in $Targets) {
     Checks = $Checks
     LanUrl = "http://$HostAddress`:$Port"
     LocalUrl = "http://127.0.0.1:$Port"
+    PrivateHttpsUrl = $Config.privateHttpsUrl
 }

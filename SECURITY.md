@@ -69,9 +69,9 @@ Use the built-in backup/export controls before manual maintenance. Backups remai
 
 ## Local App Lock
 
-The Latch web app can use a local PIN lock on each browser/device. This protects against casual access when a phone is already unlocked, but it is not a replacement for the operator key, Tailscale, or the phone's OS-level lock. The PIN verifier is stored in browser storage on that device.
+The Latch web app can use a local PIN lock on each browser/device. On private HTTPS, it can also register a local passkey/biometric unlock. This protects against casual access when a phone is already unlocked, but it is not a replacement for the operator key, Tailscale, or the phone's OS-level lock.
 
-Browser biometric/passkey unlock should be implemented only on private HTTPS, for example via Tailscale Serve, because WebAuthn is not available on ordinary `http://100.x.y.z` pages.
+The PIN verifier and passkey credential ID are stored in browser storage on that device. Current passkey unlock is a local device gate; it relies on the browser/OS user-verification prompt and does not replace server-side authentication. Browser passkeys require private HTTPS, for example via Tailscale Serve, because WebAuthn is not available on ordinary `http://100.x.y.z` pages.
 
 To rotate keys:
 
@@ -105,3 +105,11 @@ The operator should complete those steps only on a trusted device and return the
 ## Phone Install
 
 For phone installation, prefer the HTTPS URL created by Tailscale Serve. Some mobile browsers limit PWA installation on plain HTTP.
+
+## First-Run Checklist
+
+- Open Latch through Tailscale, preferably the private `https://*.ts.net` Serve URL.
+- Set the local app PIN with the `P` button.
+- Add a passkey from the same dialog if the phone/browser offers it.
+- Keep Tailscale Funnel off for Latch.
+- Confirm `Status-Latch.ps1` shows only private URLs.

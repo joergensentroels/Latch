@@ -1,5 +1,6 @@
 {
   "windowsTailscaleIp": "100.x.y.z",
   "openclawTailscaleIp": "100.a.b.c",
-  "port": 8787
+  "port": 8787,
+  "privateHttpsUrl": "https://your-device.your-tailnet.ts.net"
 }
