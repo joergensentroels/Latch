@@ -186,6 +186,16 @@ powershell -ExecutionPolicy Bypass -File .\Status-Latch.ps1
 
 The Context tab is for operator-provided memory: goals, boundaries, personality notes, background, and small supporting files.
 
+The top of the Context tab has an Agent Profile section for durable identity and direction:
+
+- working name
+- purpose
+- current goals
+- boundaries
+- communication style
+
+When `Share with worker` is enabled, this profile is sent to the worker as a structured briefing before ordinary context notes. This is the preferred place to shape the agent's personality and agency over time.
+
 Context notes and uploaded files are stored under:
 
 ```text

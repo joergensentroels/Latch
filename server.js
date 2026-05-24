@@ -43,7 +43,8 @@ const mimeTypes = {
 const emptyDb = {
   meta: {
     createdAt: new Date().toISOString(),
-    name: "Latch"
+    name: "Latch",
+    agentProfile: {}
   },
   messages: [],
   tasks: [],
@@ -188,6 +189,28 @@ async function handleApi(req, res, url) {
       version: appVersion,
       contextItems: db.contextItems.map(operatorContextItem)
     });
+    return;
+  }
+
+  if (url.pathname === "/api/profile" && req.method === "PATCH") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    db.meta.agentProfile = {
+      ...publicAgentProfile(db.meta.agentProfile),
+      name: cleanText(body.name || "", 120),
+      purpose: cleanText(body.purpose || "", 2000),
+      goals: cleanText(body.goals || "", 4000),
+      boundaries: cleanText(body.boundaries || "", 4000),
+      communicationStyle: cleanText(body.communicationStyle || "", 2000),
+      shareWithAgent: cleanBoolean(body.shareWithAgent, true),
+      updatedAt: new Date().toISOString()
+    };
+    db.events.unshift(event("profile.updated", "operator", "agentProfile", db.meta.agentProfile.name || "Agent profile"));
+    await writeDb(db);
+    sendJson(res, 200, publicAgentProfile(db.meta.agentProfile));
     return;
   }
 
@@ -578,6 +601,7 @@ async function handleApi(req, res, url) {
       tasks: activeItems(db.tasks).filter((task) => ["queued", "running", "waiting"].includes(task.status)),
       messages: activeItems(db.messages).slice(0, 20),
       approvals: activeItems(db.approvals).slice(0, 50),
+      profile: publicAgentProfile(db.meta.agentProfile),
       contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50))
     });
     return;
@@ -884,6 +908,7 @@ function requireAgent(role, res) {
 function visibleState(db) {
   return {
     meta: db.meta,
+    profile: publicAgentProfile(db.meta.agentProfile),
     messages: activeItems(db.messages).slice(0, 100),
     tasks: activeItems(db.tasks).slice(0, 100),
     approvals: activeItems(db.approvals).slice(0, 100),
@@ -900,6 +925,7 @@ function visibleState(db) {
 
 function normalizeDb(db) {
   db.meta = db.meta || {};
+  db.meta.agentProfile = publicAgentProfile(db.meta.agentProfile);
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.approvals = Array.isArray(db.approvals) ? db.approvals : [];
@@ -907,6 +933,18 @@ function normalizeDb(db) {
   db.attachments = Array.isArray(db.attachments) ? db.attachments : [];
   db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
   return db;
+}
+
+function publicAgentProfile(profile = {}) {
+  return {
+    name: cleanText(profile.name || "", 120),
+    purpose: cleanText(profile.purpose || "", 2000),
+    goals: cleanText(profile.goals || "", 4000),
+    boundaries: cleanText(profile.boundaries || "", 4000),
+    communicationStyle: cleanText(profile.communicationStyle || "", 2000),
+    shareWithAgent: cleanBoolean(profile.shareWithAgent, true),
+    updatedAt: profile.updatedAt || ""
+  };
 }
 
 function publicContextItem(item) {
