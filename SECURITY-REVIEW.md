@@ -27,6 +27,7 @@ The bridge can:
 - use explicitly shared context
 - create approval requests
 - run approved read-only diagnostic templates
+- fetch exact approved public URLs for `web_research` approvals
 
 The bridge cannot:
 
@@ -40,8 +41,9 @@ The bridge cannot:
 - access the operator key
 - access provider API keys
 - send outbound email or messages to third parties
+- search the web, crawl links, log in, download files, or access private/internal web targets
 
-The bridge may create `external_contact` and `web_research` approval records. These are control records only; they do not grant mail, messaging, or browser powers.
+The bridge may create `external_contact` and `web_research` approval records. `external_contact` remains draft/manual only. `web_research` may fetch exact approved public URLs after approval and report compact source notes.
 
 ## Future Co-Creator Contact
 
@@ -142,3 +144,4 @@ Latch should not become public until:
 - the README clearly says this is private-first software
 - external contact remains manual or approval-gated
 - command execution remains read-only or separately reviewed
+- exact-URL research has been reviewed for URL validation and private-network blocking

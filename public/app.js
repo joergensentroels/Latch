@@ -25,6 +25,13 @@ const taskForm = document.querySelector("#taskForm");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
 const taskPriority = document.querySelector("#taskPriority");
+const contactDraftForm = document.querySelector("#contactDraftForm");
+const contactRecipient = document.querySelector("#contactRecipient");
+const contactSubject = document.querySelector("#contactSubject");
+const contactPurpose = document.querySelector("#contactPurpose");
+const contactBody = document.querySelector("#contactBody");
+const contactAttachments = document.querySelector("#contactAttachments");
+const contactDraftStatus = document.querySelector("#contactDraftStatus");
 const profileForm = document.querySelector("#profileForm");
 const profileName = document.querySelector("#profileName");
 const profilePurpose = document.querySelector("#profilePurpose");
@@ -147,6 +154,49 @@ taskForm.addEventListener("submit", async (event) => {
     taskPriority.value = "normal";
     await refresh();
   });
+});
+
+contactDraftForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const recipient = contactRecipient.value.trim();
+  const subject = contactSubject.value.trim();
+  const purpose = contactPurpose.value.trim();
+  const body = contactBody.value.trim();
+  if (!recipient || !subject || !body) {
+    setFormStatus(contactDraftStatus, "Recipient, subject, and draft body are required.", "error");
+    return;
+  }
+
+  try {
+    await withSubmitLock(contactDraftForm, async () => {
+      await api("/api/approvals", {
+        method: "POST",
+        body: JSON.stringify({
+          type: "external_contact",
+          title: subject,
+          details: purpose || "Operator-created contact draft.",
+          recipient,
+          subject,
+          contactPurpose: purpose,
+          bodyPreview: body,
+          attachments: tagsFromInput(contactAttachments.value),
+          sendMode: "manual",
+          riskLevel: "medium",
+          sensitive: true,
+          expectedResponse: "Review the draft, send manually if appropriate, or return edits."
+        })
+      });
+      contactRecipient.value = "";
+      contactSubject.value = "";
+      contactPurpose.value = "";
+      contactBody.value = "";
+      contactAttachments.value = "";
+      setFormStatus(contactDraftStatus, "Draft approval created.", "success");
+      await refresh();
+    });
+  } catch (error) {
+    setFormStatus(contactDraftStatus, `Could not create draft: ${error.message}`, "error");
+  }
 });
 
 profileForm.addEventListener("submit", async (event) => {
@@ -652,6 +702,9 @@ function renderApprovals() {
       openApprovalDialog(button.dataset.approval, button.dataset.status);
     });
   });
+  lists.approvals.querySelectorAll("[data-copy-contact]").forEach((button) => {
+    button.addEventListener("click", () => copyContactDraft(button.dataset.copyContact));
+  });
   bindArchiveButtons(lists.approvals);
 }
 
@@ -871,6 +924,7 @@ function contactApprovalSummary(approval) {
       <dl class="detail-grid">
         <dt>Recipient</dt><dd>${escapeHtml(approval.recipient || "Not specified")}</dd>
         <dt>Subject</dt><dd>${escapeHtml(approval.subject || "Not specified")}</dd>
+        <dt>Purpose</dt><dd>${escapeHtml(approval.contactPurpose || "Not specified")}</dd>
         <dt>Send mode</dt><dd>${escapeHtml(approval.sendMode === "approved_connector" ? "Approved connector" : "Manual")}</dd>
         <dt>Attachments</dt><dd>${attachments.length ? escapeHtml(attachments.join(", ")) : "None"}</dd>
       </dl>
@@ -880,6 +934,7 @@ function contactApprovalSummary(approval) {
           <pre class="item-body">${escapeHtml(approval.bodyPreview)}</pre>
         </details>
       ` : ""}
+      ${approval.bodyPreview ? `<button class="secondary-button" data-copy-contact="${escapeHtml(approval.id)}" type="button">Copy Draft</button>` : ""}
     </div>
   `;
 }
@@ -1045,7 +1100,7 @@ function researchOperationCard(item) {
           ${sources.map((source) => `
             <div class="source-note">
               <strong>${escapeHtml(source.title || source.url)}</strong>
-              <p class="item-meta">${escapeHtml(source.url)}${source.status ? ` / ${escapeHtml(String(source.status))}` : ""}</p>
+              <p class="item-meta">${escapeHtml(source.finalUrl || source.url)}${source.requestedUrl && source.requestedUrl !== (source.finalUrl || source.url) ? ` / from ${escapeHtml(source.requestedUrl)}` : ""}${source.status ? ` / ${escapeHtml(String(source.status))}` : ""}${source.cached ? " / cached" : ""}</p>
               <p class="item-body">${escapeHtml(source.summary || source.excerpt || "")}</p>
             </div>
           `).join("")}
@@ -1054,6 +1109,18 @@ function researchOperationCard(item) {
       ${(item.errors || []).length ? `<p class="approval-advice">${escapeHtml(item.errors.join("\\n"))}</p>` : ""}
     </article>
   `;
+}
+
+async function copyContactDraft(id) {
+  const approval = (state.data?.approvals || []).find((item) => item.id === id);
+  if (!approval?.bodyPreview) return;
+  const draft = [
+    `To: ${approval.recipient || ""}`,
+    `Subject: ${approval.subject || approval.title || ""}`,
+    "",
+    approval.bodyPreview
+  ].join("\n");
+  await navigator.clipboard.writeText(draft);
 }
 
 function renderSecurityChecklist() {

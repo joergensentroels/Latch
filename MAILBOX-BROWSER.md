@@ -11,6 +11,7 @@ Implemented now:
 - structured fields for recipient, subject, preview, domains, page budget, and token budget
 - approved read-only research against exact seed URLs
 - compact source-note reporting back into Latch
+- VM-local source-note caching by URL
 - no automatic sending
 - no interactive browser automation
 - no mailbox credentials on the OpenClaw VM
@@ -61,7 +62,8 @@ The worker does not send raw pages directly to the LLM. It uses a small retrieva
 3. Extract the main article/content.
 4. Create a source note with URL, title, status, compact summary, and short excerpt.
 5. Report source notes to Latch.
-6. Send only summaries/snippets into future reasoning, not full raw pages.
+6. Cache successful source notes by URL on the VM.
+7. Send only summaries/snippets into future reasoning, not full raw pages.
 
 The current implementation does not follow links. More advanced crawling should require a second review.
 
@@ -71,6 +73,7 @@ The current implementation does not follow links. More advanced crawling should 
 - Keep page budgets small.
 - Summarize sources before using them in reasoning.
 - Cache source notes by URL.
+- Use cached notes unless the operator asks to refresh/refetch.
 - Ask the operator before increasing budget.
 - Return links and short evidence snippets, not huge copied pages.
 - Avoid broad scraping and search-result wandering.

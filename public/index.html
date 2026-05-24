@@ -156,6 +156,32 @@
         </section>
 
         <section id="approvalsPanel" class="panel hidden">
+          <form id="contactDraftForm" class="context-form contact-draft-form">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">External Contact</p>
+                <h2 class="section-title">Draft Contact</h2>
+              </div>
+            </div>
+            <div class="form-row">
+              <label for="contactRecipient">
+                Recipient
+                <input id="contactRecipient" type="email" placeholder="reviewer@example.com">
+              </label>
+              <label for="contactSubject">
+                Subject
+                <input id="contactSubject" type="text" placeholder="Security review request">
+              </label>
+            </div>
+            <label for="contactPurpose">Purpose</label>
+            <textarea id="contactPurpose" rows="2" placeholder="Why this person should be contacted"></textarea>
+            <label for="contactBody">Draft body</label>
+            <textarea id="contactBody" rows="5" placeholder="Message draft to review and send manually"></textarea>
+            <label for="contactAttachments">Attachments list</label>
+            <input id="contactAttachments" type="text" placeholder="Optional names only, comma separated">
+            <p id="contactDraftStatus" class="form-status" aria-live="polite"></p>
+            <button type="submit">Create Draft Approval</button>
+          </form>
           <div class="panel-toolbar">
             <div class="segmented-control" aria-label="Approval filter">
               <button class="segment active" type="button" data-approval-filter="pending">Pending</button>

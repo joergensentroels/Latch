@@ -32,6 +32,7 @@ from pathlib import Path
 
 
 DEFAULT_STATE_PATH = Path.home() / ".local" / "state" / "latch-agent-bridge" / "state.json"
+DEFAULT_SOURCE_CACHE_PATH = Path.home() / ".cache" / "latch-agent-bridge" / "source-notes.json"
 SYSTEM_PROMPT = """You are the text-only Latch worker for a private OpenClaw setup.
 You may help with planning, explanation, coding advice, and next-step suggestions.
 You cannot run shell commands, browse, scrape websites, send emails/messages, use credentials, create accounts, make purchases, access payment tools, or perform actions outside this chat.
@@ -56,6 +57,7 @@ class ApprovalNeed:
     execution_mode: str = "none"
     recipient: str = ""
     subject: str = ""
+    contact_purpose: str = ""
     body_preview: str = ""
     attachments: tuple[str, ...] = ()
     send_mode: str = "manual"
@@ -64,6 +66,7 @@ class ApprovalNeed:
     max_pages: int = 0
     token_budget: int = 0
     research_question: str = ""
+    refresh_research: bool = False
 
 
 READ_ONLY_TEMPLATE_LABELS = {
@@ -128,6 +131,7 @@ def main() -> int:
     parser.add_argument("--openclaw-health-url", default=os.getenv("OPENCLAW_HEALTH_URL", ""))
     parser.add_argument("--openclaw-compose-dir", default=os.getenv("OPENCLAW_COMPOSE_DIR", str(Path.home() / "openclaw")))
     parser.add_argument("--latch-repo-dir", default=os.getenv("LATCH_REPO_DIR", str(Path.home() / "code" / "latch-readonly")))
+    parser.add_argument("--source-cache-path", default=os.getenv("LATCH_SOURCE_CACHE_PATH", str(DEFAULT_SOURCE_CACHE_PATH)))
     parser.add_argument("--interval", type=int, default=int(os.getenv("LATCH_POLL_INTERVAL", "15")))
     parser.add_argument("--state-path", default=os.getenv("LATCH_STATE_PATH", str(DEFAULT_STATE_PATH)))
     parser.add_argument("--max-tasks-per-tick", type=int, default=int(os.getenv("LATCH_MAX_TASKS_PER_TICK", "1")))
@@ -351,6 +355,7 @@ class Bridge:
                 "riskLevel": approval.risk_level,
                 "recipient": approval.recipient,
                 "subject": approval.subject,
+                "contactPurpose": approval.contact_purpose,
                 "bodyPreview": approval.body_preview,
                 "attachments": list(approval.attachments),
                 "sendMode": approval.send_mode,
@@ -359,6 +364,7 @@ class Bridge:
                 "maxPages": approval.max_pages,
                 "tokenBudget": approval.token_budget,
                 "researchQuestion": approval.research_question,
+                "refreshResearch": approval.refresh_research,
                 "actionTemplate": approval.action_template,
                 "actionPreview": approval.action_preview,
                 "renderedCommands": list(approval.rendered_commands),
@@ -496,7 +502,7 @@ class Bridge:
             return
 
         if approval_type == "web_research":
-            result = perform_read_only_research(approval)
+            result = perform_read_only_research(approval, self.args)
             self.report_research(result)
             self.report(format_research_report(result), task_id)
             if approval.get("taskId"):
@@ -713,6 +719,7 @@ def detect_external_contact(title: str, details: str) -> ApprovalNeed | None:
         risk_level="medium",
         recipient=extract_email(raw),
         subject=guess_subject(raw),
+        contact_purpose=raw,
         body_preview=raw,
         send_mode="manual",
     )
@@ -789,6 +796,7 @@ def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> 
         execution_mode=approval.execution_mode,
         recipient=approval.recipient,
         subject=approval.subject,
+        contact_purpose=approval.contact_purpose,
         body_preview=approval.body_preview,
         attachments=approval.attachments,
         send_mode=approval.send_mode,
@@ -797,6 +805,7 @@ def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> 
         max_pages=approval.max_pages,
         token_budget=approval.token_budget,
         research_question=approval.research_question,
+        refresh_research=approval.refresh_research,
     )
 
 
@@ -849,7 +858,7 @@ def guess_subject(text: str) -> str:
     return ""
 
 
-def perform_read_only_research(approval: dict) -> dict:
+def perform_read_only_research(approval: dict, args: argparse.Namespace) -> dict:
     started_at = utc_now()
     question = clean(approval.get("researchQuestion") or approval.get("details") or "", 1000)
     seed_urls = ordered_unique(
@@ -862,6 +871,10 @@ def perform_read_only_research(approval: dict) -> dict:
     max_pages = clamp_int(approval.get("maxPages"), 1, 5, 3)
     token_budget = clamp_int(approval.get("tokenBudget"), 500, 4000, 3000)
     char_budget = token_budget * 4
+    refresh = bool(approval.get("refreshResearch")) or wants_refresh(approval.get("responseNote") or "")
+    cache_path = Path(args.source_cache_path).expanduser()
+    cache = load_source_cache(cache_path)
+    cache_changed = False
     sources = []
     errors = []
 
@@ -875,21 +888,22 @@ def perform_read_only_research(approval: dict) -> dict:
             break
         try:
             validate_research_url(url, allowed_domains)
-            page = fetch_research_page(url)
-            validate_research_url(page["url"], allowed_domains)
-            text = extract_readable_text(page["body"], page["contentType"])
-            title = extract_title(page["body"]) or page["url"]
-            summary = summarize_text(text, question, max(500, min(1200, char_budget // max_pages)))
-            excerpt = clean(text, 1000)
-            sources.append({
-                "url": page["url"],
-                "title": title,
-                "status": page["status"],
-                "summary": summary,
-                "excerpt": excerpt,
-            })
+            cache_key = normalized_url_key(url)
+            if not refresh and cache_key in cache:
+                cached = dict(cache[cache_key])
+                cached["cached"] = True
+                sources.append(cached)
+                continue
+
+            source = fetch_source_note(url, allowed_domains, question, max(500, min(1200, char_budget // max_pages)))
+            sources.append(source)
+            cache[cache_key] = {**source, "cached": False}
+            cache_changed = True
         except Exception as exc:  # noqa: BLE001 - capture per-source failure
             errors.append(f"{url}: {exc}")
+
+    if cache_changed:
+        save_source_cache(cache_path, cache)
 
     combined_summary = summarize_sources(question, sources, char_budget)
     status = "completed" if sources and not errors else "partial" if sources else "failed"
@@ -908,6 +922,73 @@ def perform_read_only_research(approval: dict) -> dict:
         "startedAt": started_at,
         "finishedAt": utc_now(),
     }
+
+
+def fetch_source_note(url: str, allowed_domains: list[str], question: str, summary_limit: int) -> dict:
+    page = fetch_research_page(url)
+    validate_research_url(page["url"], allowed_domains)
+    text = extract_readable_text(page["body"], page["contentType"])
+    title = extract_title(page["body"]) or page["url"]
+    summary = summarize_text(text, question, summary_limit)
+    return {
+        "requestedUrl": url,
+        "finalUrl": page["url"],
+        "url": page["url"],
+        "title": title,
+        "status": page["status"],
+        "summary": summary,
+        "excerpt": clean(text, 1000),
+        "fetchedAt": utc_now(),
+        "cached": False,
+    }
+
+
+def load_source_cache(path: Path) -> dict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for key, source in raw.items():
+        if not isinstance(source, dict):
+            continue
+        cleaned = {
+            "requestedUrl": clean(source.get("requestedUrl") or "", 500),
+            "finalUrl": clean(source.get("finalUrl") or source.get("url") or "", 500),
+            "url": clean(source.get("url") or source.get("finalUrl") or "", 500),
+            "title": clean(source.get("title") or "", 240),
+            "status": clamp_int(source.get("status"), 0, 599, 0),
+            "summary": clean(source.get("summary") or "", 1500),
+            "excerpt": clean(source.get("excerpt") or "", 1000),
+            "fetchedAt": clean(source.get("fetchedAt") or "", 80),
+            "cached": False,
+        }
+        if key and cleaned["url"]:
+            result[clean(key, 500)] = cleaned
+    return result
+
+
+def save_source_cache(path: Path, cache: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    limited = dict(list(cache.items())[-200:])
+    path.write_text(json.dumps(limited, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def normalized_url_key(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{scheme}://{host}{port}{path}{query}"
+
+
+def wants_refresh(note: str) -> bool:
+    lowered = str(note or "").lower()
+    return any(phrase in lowered for phrase in ("refresh", "refetch", "ignore cache", "fresh fetch"))
 
 
 def validate_research_url(url: str, allowed_domains: list[str]) -> None:

@@ -84,6 +84,7 @@ try {
       details: "Draft contact request",
       recipient: "reviewer@example.com",
       subject: "Security review request",
+      contactPurpose: "Ask a trusted reviewer to inspect Latch before public release.",
       bodyPreview: "Could you review Latch?",
       sendMode: "manual",
       riskLevel: "medium",
@@ -92,6 +93,7 @@ try {
   });
   assert(contactApproval.type === "external_contact", "external contact approval type should be accepted");
   assert(contactApproval.recipient === "reviewer@example.com", "external contact recipient should be stored");
+  assert(contactApproval.contactPurpose.includes("trusted reviewer"), "external contact purpose should be stored");
   assert(contactApproval.bodyPreview.includes("review"), "external contact draft preview should be stored");
 
   const researchApproval = await request("/api/approvals", {
@@ -106,6 +108,7 @@ try {
       seedUrls: ["https://example.com/docs"],
       maxPages: 5,
       tokenBudget: 3000,
+      refreshResearch: true,
       riskLevel: "medium"
     }
   });
@@ -114,6 +117,7 @@ try {
   assert(researchApproval.seedUrls[0] === "https://example.com/docs", "research seed urls should be stored");
   assert(researchApproval.maxPages === 5, "research page budget should be stored");
   assert(researchApproval.tokenBudget === 3000, "research token budget should be stored");
+  assert(researchApproval.refreshResearch === true, "research refresh flag should be stored");
 
   const note = await request("/api/context/notes", {
     method: "POST",
@@ -212,11 +216,15 @@ try {
       status: "completed",
       summary: "Use a bounded read-only browser sandbox.",
       sources: [{
+        requestedUrl: "https://example.com/docs",
+        finalUrl: "https://example.com/docs",
         url: "https://example.com/docs",
         title: "Docs",
         status: 200,
         summary: "A compact source note",
-        excerpt: "Short excerpt"
+        excerpt: "Short excerpt",
+        fetchedAt: new Date().toISOString(),
+        cached: true
       }],
       startedAt: new Date().toISOString(),
       finishedAt: new Date().toISOString()
@@ -224,6 +232,7 @@ try {
   });
   assert(researchRun.status === "completed", "research result status should be stored");
   assert(researchRun.sources[0].summary.includes("compact"), "research source summary should be stored");
+  assert(researchRun.sources[0].cached === true, "research source cache marker should be stored");
 
   const visible = await request("/api/state", { headers: operatorHeaders });
   assert(visible.contextItems.some((item) => item.id === fileItem.id), "operator state should include context items");
