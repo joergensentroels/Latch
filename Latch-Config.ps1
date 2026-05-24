@@ -61,14 +61,19 @@ function Resolve-LatchPort {
 }
 
 function Resolve-TailscaleCli {
-    $Tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
-    if (-not $Tailscale -and (Test-Path -LiteralPath "C:\Program Files\Tailscale\tailscale.exe")) {
-        $Tailscale = Get-Item -LiteralPath "C:\Program Files\Tailscale\tailscale.exe"
+    $KnownPath = "C:\Program Files\Tailscale\tailscale.exe"
+    if (Test-Path -LiteralPath $KnownPath) {
+        return $KnownPath
     }
 
+    $Tailscale = Get-Command tailscale.exe -ErrorAction SilentlyContinue
     if (-not $Tailscale) {
+        $Tailscale = Get-Command tailscale -ErrorAction SilentlyContinue
+    }
+
+    if (-not $Tailscale -or -not $Tailscale.Source) {
         throw "Tailscale CLI was not found. Install and sign in to Tailscale first."
     }
 
-    return $Tailscale.FullName
+    return $Tailscale.Source
 }
