@@ -1,0 +1,144 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const dataDir = await mkdtemp(path.join(tmpdir(), "latch-smoke-"));
+const port = String(19000 + Math.floor(Math.random() * 1000));
+const baseUrl = `http://127.0.0.1:${port}`;
+const operatorToken = "op_test_operator";
+const agentToken = "agent_test_agent";
+
+const child = spawn(process.execPath, ["server.js"], {
+  cwd: root,
+  env: {
+    ...process.env,
+    DATA_DIR: dataDir,
+    HOST: "127.0.0.1",
+    PORT: port,
+    OPERATOR_TOKEN: operatorToken,
+    AGENT_TOKEN: agentToken
+  },
+  stdio: ["ignore", "pipe", "pipe"]
+});
+
+let stdout = "";
+let stderr = "";
+child.stdout.on("data", (chunk) => {
+  stdout += chunk.toString();
+});
+child.stderr.on("data", (chunk) => {
+  stderr += chunk.toString();
+});
+
+try {
+  await waitForHealth();
+  await expectStatus("/api/state", {}, 401);
+
+  const operatorHeaders = authHeaders(operatorToken);
+  const agentHeaders = authHeaders(agentToken);
+
+  const message = await request("/api/messages", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { text: "hello worker" }
+  });
+  assert(message.direction === "operator_to_agent", "operator message should be stored");
+
+  const task = await request("/api/tasks", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { title: "Smoke task", details: "test details", priority: "low" }
+  });
+  assert(task.status === "queued", "task should start queued");
+
+  const approval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "command",
+      title: "Command approval",
+      details: "Test command approval",
+      taskId: task.id
+    }
+  });
+  assert(approval.requestedBy === "agent", "approval should record agent requester");
+
+  const poll = await request("/api/agent/poll", { headers: agentHeaders });
+  assert(poll.tasks.some((item) => item.id === task.id), "agent poll should include queued task");
+  assert(poll.approvals.some((item) => item.id === approval.id), "agent poll should include approval");
+
+  const report = await request("/api/agent/report", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { text: "report ok", taskId: task.id }
+  });
+  assert(report.direction === "agent_to_operator", "agent report should be stored");
+
+  const patched = await request(`/api/tasks/${task.id}`, {
+    method: "PATCH",
+    headers: agentHeaders,
+    body: { status: "done", note: "completed" }
+  });
+  assert(patched.status === "done", "agent should patch task status");
+
+  console.log("Latch smoke tests passed.");
+} finally {
+  child.kill();
+  await onceExit(child);
+  await rm(dataDir, { recursive: true, force: true });
+}
+
+async function waitForHealth() {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const health = await request("/api/health");
+      if (health.ok) return;
+    } catch {
+      await delay(100);
+    }
+  }
+  throw new Error(`server did not become healthy\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+}
+
+async function request(pathname, options = {}) {
+  const response = await fetch(`${baseUrl}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      ...(options.body ? { "content-type": "application/json" } : {}),
+      ...(options.headers || {})
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  const text = await response.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    throw new Error(`${options.method || "GET"} ${pathname} failed: ${response.status} ${text}`);
+  }
+  return json;
+}
+
+async function expectStatus(pathname, options, status) {
+  const response = await fetch(`${baseUrl}${pathname}`, options);
+  assert(response.status === status, `${pathname} should return ${status}, got ${response.status}`);
+}
+
+function authHeaders(token) {
+  return { authorization: `Bearer ${token}` };
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function onceExit(process) {
+  if (process.exitCode !== null || process.signalCode) return Promise.resolve();
+  return new Promise((resolve) => process.once("exit", resolve));
+}
