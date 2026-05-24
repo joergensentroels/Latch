@@ -135,9 +135,11 @@ class Bridge:
         if not payload:
             return
 
-        self.process_approval_decisions(payload.get("approvals", []))
-        self.process_tasks(payload.get("tasks", []))
-        self.process_messages(payload.get("messages", []))
+        tasks = payload.get("tasks", [])
+        messages = payload.get("messages", [])
+        self.process_approval_decisions(payload.get("approvals", []), tasks, messages)
+        self.process_tasks(tasks)
+        self.process_messages(messages)
         self.save_state()
 
     def check_openclaw_gateway(self) -> str:
@@ -297,8 +299,10 @@ class Bridge:
             raise RuntimeError("Latch did not create the approval request.")
         return response
 
-    def process_approval_decisions(self, approvals: list[dict]) -> None:
+    def process_approval_decisions(self, approvals: list[dict], tasks: list[dict], messages: list[dict]) -> None:
         seen = set(self.state.setdefault("seen_approval_decisions", []))
+        tasks_by_id = {str(task.get("id", "")): task for task in tasks}
+        messages_by_id = {str(message.get("id", "")): message for message in messages}
         for approval in reversed(approvals):
             approval_id = str(approval.get("id", ""))
             status = str(approval.get("status", ""))
@@ -308,14 +312,12 @@ class Bridge:
             title = clean(approval.get("title") or approval_id, 180)
             note = clean(approval.get("responseNote") or "", 1000)
             task_id = clean(approval.get("taskId") or approval.get("messageId") or approval_id, 120)
+            if approval.get("taskId"):
+                self.remember("processed_tasks", str(approval.get("taskId")))
+            if approval.get("messageId"):
+                self.remember("processed_messages", str(approval.get("messageId")))
             if status == "approved":
-                self.report(
-                    f"Approval recorded: {title}\n\nThe text-only bridge will not execute commands or handle secrets yet."
-                    f"{f' Operator note: {note}' if note else ''}",
-                    task_id,
-                )
-                if approval.get("taskId"):
-                    self.patch_task(task_id, "paused", "Approval recorded. Execution is not enabled in text-only mode.")
+                self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id)
             else:
                 self.report(
                     f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
@@ -325,6 +327,69 @@ class Bridge:
                     self.patch_task(task_id, "failed", "Approval denied by operator.")
             seen.add(approval_id)
             self.state["seen_approval_decisions"] = sorted(seen)[-500:]
+
+    def handle_approved_decision(
+        self,
+        approval: dict,
+        title: str,
+        note: str,
+        task_id: str,
+        tasks_by_id: dict[str, dict],
+        messages_by_id: dict[str, dict],
+    ) -> None:
+        approval_type = str(approval.get("type", "other"))
+        is_sensitive = bool(approval.get("sensitive"))
+        task = tasks_by_id.get(str(approval.get("taskId", "")))
+        message = messages_by_id.get(str(approval.get("messageId", "")))
+
+        if approval_type in {"command", "purchase"}:
+            self.report(
+                f"Approval recorded: {title}\n\nThe text-only bridge will not execute commands, make purchases, or handle secrets yet."
+                f"{f' Operator note: {note}' if note else ''}",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "paused", "Approval recorded. Execution is not enabled in text-only mode.")
+            return
+
+        if is_sensitive:
+            self.report(
+                f"Sensitive approval recorded: {title}\n\nOperator note was not forwarded to the external LLM. Continue manually if the note contains credentials, verification codes, or private account details.",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "paused", "Sensitive approval recorded. Note was not forwarded to the LLM.")
+            return
+
+        if not note:
+            self.report(
+                f"Approval recorded: {title}\n\nNo operator note was provided, so there is nothing further to process.",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "paused", "Approval recorded without an operator note.")
+            return
+
+        original = original_request_text(task, message, approval)
+        answer = self.ask_llm(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        "Continue after this approved human/operator step. "
+                        "Use the operator note as context, but do not claim to have executed actions.\n\n"
+                        f"Approval type: {approval_type}\n"
+                        f"Approval title: {title}\n\n"
+                        f"Original request:\n{original}\n\n"
+                        f"Operator note:\n{note}"
+                    ),
+                },
+            ]
+        )
+        self.report(f"Follow-up after approval: {title}\n\n{answer}", task_id)
+        if approval.get("taskId"):
+            self.patch_task(task_id, "done", "Follow-up response posted after operator approval.")
 
     def patch_task(self, task_id: str, status: str, note: str = "") -> None:
         self.request_json("PATCH", f"/api/tasks/{task_id}", {"status": status, "note": note})
@@ -392,6 +457,17 @@ def extract_command(text: str) -> str:
         if line.startswith(("`", "$", ">", "sudo ", "docker ", "systemctl ", "ssh ", "scp ", "powershell"))
     ]
     return clean("\n".join(command_lines).replace("`", ""), 4000)
+
+
+def original_request_text(task: dict | None, message: dict | None, approval: dict) -> str:
+    if task:
+        return clean(
+            f"Task: {task.get('title', '')}\n\nDetails:\n{task.get('details') or task.get('note') or ''}",
+            3000,
+        )
+    if message:
+        return clean(f"Message:\n{message.get('text', '')}", 3000)
+    return clean(str(approval.get("details", "")), 3000)
 
 
 def env_bool(name: str, default: bool) -> bool:
