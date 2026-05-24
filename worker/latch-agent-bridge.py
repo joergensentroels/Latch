@@ -29,6 +29,7 @@ SYSTEM_PROMPT = """You are the text-only Latch worker for a private OpenClaw set
 You may help with planning, explanation, coding advice, and next-step suggestions.
 You cannot run shell commands, browse, use credentials, create accounts, make purchases, access payment tools, or perform actions outside this chat.
 If a request needs a real-world action, credential, purchase, account setup, CAPTCHA, or command execution, say what you would need and ask the operator to approve or perform that step manually.
+If you need durable context from the operator before giving a good answer, include one to three lines that start exactly with CONTEXT_QUESTION: followed by a concrete question.
 Keep replies concise and practical."""
 
 
@@ -137,9 +138,10 @@ class Bridge:
 
         tasks = payload.get("tasks", [])
         messages = payload.get("messages", [])
-        self.process_approval_decisions(payload.get("approvals", []), tasks, messages)
-        self.process_tasks(tasks)
-        self.process_messages(messages)
+        context_items = payload.get("contextItems", [])
+        self.process_approval_decisions(payload.get("approvals", []), tasks, messages, context_items)
+        self.process_tasks(tasks, context_items)
+        self.process_messages(messages, context_items)
         self.save_state()
 
     def check_openclaw_gateway(self) -> str:
@@ -169,7 +171,7 @@ class Bridge:
         if changed:
             self.state[f"seen_{bucket}"] = sorted(seen)[-500:]
 
-    def process_tasks(self, tasks: list[dict]) -> None:
+    def process_tasks(self, tasks: list[dict], context_items: list[dict]) -> None:
         queued = [task for task in tasks if task.get("status") == "queued"]
         for task in queued[: max(0, self.args.max_tasks_per_tick)]:
             task_id = str(task.get("id", ""))
@@ -191,6 +193,7 @@ class Bridge:
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": context_briefing(context_items)},
                         {
                             "role": "user",
                             "content": (
@@ -201,6 +204,14 @@ class Bridge:
                         },
                     ]
                 )
+                questions = extract_context_questions(answer)
+                if questions:
+                    created = self.create_context_question(questions, task_id=task_id)
+                    suffix = f" ({created.get('id')})" if created else ""
+                    self.report(f"Context question requested for task: {title}{suffix}", task_id)
+                    self.patch_task(task_id, "waiting", "Waiting for operator context answer.")
+                    self.remember("processed_tasks", task_id)
+                    continue
                 self.report(f"Task completed: {title}\n\n{answer}", task_id)
                 self.patch_task(task_id, "done", "Text-only response posted to inbox.")
                 self.remember("processed_tasks", task_id)
@@ -209,7 +220,7 @@ class Bridge:
                 self.patch_task(task_id, "failed", str(exc)[:1800])
                 self.remember("processed_tasks", task_id)
 
-    def process_messages(self, messages: list[dict]) -> None:
+    def process_messages(self, messages: list[dict], context_items: list[dict]) -> None:
         operator_messages = [
             message for message in messages
             if message.get("direction") == "operator_to_agent" and message.get("text")
@@ -245,6 +256,7 @@ class Bridge:
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": context_briefing(context_items)},
                         {
                             "role": "user",
                             "content": (
@@ -254,6 +266,13 @@ class Bridge:
                         },
                     ]
                 )
+                questions = extract_context_questions(answer)
+                if questions:
+                    created = self.create_context_question(questions, message_id=message_id)
+                    suffix = f" ({created.get('id')})" if created else ""
+                    self.report(f"Context question requested for inbox instruction{suffix}.", message_id)
+                    self.remember("processed_messages", message_id)
+                    continue
                 self.report(f"Reply to inbox instruction:\n\n{answer}", message_id)
                 self.remember("processed_messages", message_id)
             except Exception as exc:  # noqa: BLE001 - keep bridge alive and avoid hot loops
@@ -299,7 +318,34 @@ class Bridge:
             raise RuntimeError("Latch did not create the approval request.")
         return response
 
-    def process_approval_decisions(self, approvals: list[dict], tasks: list[dict], messages: list[dict]) -> None:
+    def create_context_question(self, questions: list[str], task_id: str = "", message_id: str = "") -> dict:
+        question_text = "\n".join(f"- {question}" for question in questions[:3])
+        response = self.request_json(
+            "POST",
+            "/api/approvals",
+            {
+                "type": "context_question",
+                "title": "Context question",
+                "details": question_text,
+                "expectedResponse": "Answer this if you want it saved as worker context. Keep secrets out of the answer.",
+                "contextCategory": "memory",
+                "contextTags": ["operator-answer"],
+                "sensitive": False,
+                "taskId": task_id,
+                "messageId": message_id,
+            },
+        )
+        if not response:
+            raise RuntimeError("Latch did not create the context question.")
+        return response
+
+    def process_approval_decisions(
+        self,
+        approvals: list[dict],
+        tasks: list[dict],
+        messages: list[dict],
+        context_items: list[dict],
+    ) -> None:
         seen = set(self.state.setdefault("seen_approval_decisions", []))
         tasks_by_id = {str(task.get("id", "")): task for task in tasks}
         messages_by_id = {str(message.get("id", "")): message for message in messages}
@@ -317,7 +363,7 @@ class Bridge:
             if approval.get("messageId"):
                 self.remember("processed_messages", str(approval.get("messageId")))
             if status == "approved":
-                self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id)
+                self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id, context_items)
             else:
                 self.report(
                     f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
@@ -336,11 +382,26 @@ class Bridge:
         task_id: str,
         tasks_by_id: dict[str, dict],
         messages_by_id: dict[str, dict],
+        context_items: list[dict],
     ) -> None:
         approval_type = str(approval.get("type", "other"))
         is_sensitive = bool(approval.get("sensitive"))
         task = tasks_by_id.get(str(approval.get("taskId", "")))
         message = messages_by_id.get(str(approval.get("messageId", "")))
+
+        if approval_type == "context_question":
+            self.report(
+                f"Context answer recorded: {title}\n\nThe answer was saved into Latch Context for future worker responses.",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "queued", "Operator context answer saved. Task can be reconsidered.")
+                self.state.setdefault("processed_tasks", [])
+                self.state["processed_tasks"] = [
+                    item for item in self.state["processed_tasks"]
+                    if item != str(approval.get("taskId"))
+                ]
+            return
 
         if approval_type in {"command", "purchase"}:
             self.report(
@@ -374,6 +435,7 @@ class Bridge:
         answer = self.ask_llm(
             [
                 {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": context_briefing(context_items)},
                 {
                     "role": "user",
                     "content": (
@@ -457,6 +519,46 @@ def extract_command(text: str) -> str:
         if line.startswith(("`", "$", ">", "sudo ", "docker ", "systemctl ", "ssh ", "scp ", "powershell"))
     ]
     return clean("\n".join(command_lines).replace("`", ""), 4000)
+
+
+def context_briefing(items: list[dict]) -> str:
+    if not items:
+        return "Latch context briefing: no saved context has been shared yet."
+
+    lines = [
+        "Latch context briefing:",
+        "Use shared context as durable operator-provided memory. Treat private/unshared items as unavailable except for their title/metadata.",
+    ]
+    for item in items[:12]:
+        title = clean(item.get("title") or item.get("name") or "Context", 120)
+        category = clean(item.get("category") or "memory", 40)
+        tags = ", ".join(clean(tag, 30) for tag in item.get("tags", [])[:5])
+        shared = bool(item.get("shareWithAgent"))
+        label = f"- [{category}] {title}"
+        if tags:
+            label += f" ({tags})"
+        if not shared:
+            lines.append(f"{label}: private metadata only.")
+            continue
+        if item.get("text"):
+            lines.append(f"{label}:\n{clean(item.get('text'), 1600)}")
+        elif item.get("contentText"):
+            name = clean(item.get("name") or title, 120)
+            lines.append(f"{label} file {name}:\n{clean(item.get('contentText'), 1800)}")
+        else:
+            lines.append(f"{label}: shared, but no text content is available.")
+    return "\n".join(lines)
+
+
+def extract_context_questions(answer: str) -> list[str]:
+    questions = []
+    for line in str(answer or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("CONTEXT_QUESTION:"):
+            question = clean(stripped.split("CONTEXT_QUESTION:", 1)[1], 500)
+            if question:
+                questions.append(question)
+    return questions[:3]
 
 
 def original_request_text(task: dict | None, message: dict | None, approval: dict) -> str:

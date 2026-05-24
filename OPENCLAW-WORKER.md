@@ -151,6 +151,14 @@ sudo env $(sudo grep -v '^#' /etc/latch-agent-bridge.env | xargs) \
   --state-path /tmp/latch-agent-bridge-test.json
 ```
 
+## Context And Memory
+
+Use the Latch Context tab for normal operator-provided memory: goals, personality, boundaries, project notes, and small supporting files. The bridge receives a compact context briefing with explicitly shared notes and selected small text files.
+
+The worker may ask for missing durable context by creating a `context_question` approval. When the operator answers that card, Latch saves the answer as shared Context for future responses.
+
+For larger files, copy them to the VM over SSH only when needed for VM-local work. Direct SSH uploads are not part of Latch Context unless the operator also adds a note or a future import step records them.
+
 Latch health from the VM:
 
 ```bash

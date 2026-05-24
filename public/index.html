@@ -141,14 +141,58 @@
             <form id="contextNoteForm" class="context-form">
               <label for="contextTitle">Context title</label>
               <input id="contextTitle" type="text" placeholder="Goal, preference, background">
+              <div class="form-row">
+                <label>
+                  Category
+                  <select id="contextCategory">
+                    <option value="memory">Memory</option>
+                    <option value="goals">Goals</option>
+                    <option value="personality">Personality</option>
+                    <option value="security">Security</option>
+                    <option value="project">Project</option>
+                    <option value="reference">Reference</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label>
+                  Tags
+                  <input id="contextTags" type="text" placeholder="comma, separated">
+                </label>
+              </div>
               <label for="contextText">Context note</label>
               <textarea id="contextText" rows="5" placeholder="Notes, goals, boundaries, preferences"></textarea>
+              <label class="check-row">
+                <input id="contextShare" type="checkbox" checked>
+                <span>Share with worker</span>
+              </label>
               <button type="submit">Save Note</button>
             </form>
 
             <form id="contextFileForm" class="context-form">
               <label for="contextFileInput">Upload file</label>
               <input id="contextFileInput" type="file">
+              <div class="form-row">
+                <label>
+                  Category
+                  <select id="contextFileCategory">
+                    <option value="reference">Reference</option>
+                    <option value="project">Project</option>
+                    <option value="goals">Goals</option>
+                    <option value="personality">Personality</option>
+                    <option value="security">Security</option>
+                    <option value="memory">Memory</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label>
+                  Tags
+                  <input id="contextFileTags" type="text" placeholder="comma, separated">
+                </label>
+              </div>
+              <label class="check-row">
+                <input id="contextFileShare" type="checkbox">
+                <span>Share text contents with worker</span>
+              </label>
               <button type="submit">Upload</button>
             </form>
           </div>

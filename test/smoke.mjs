@@ -70,7 +70,13 @@ try {
   const note = await request("/api/context/notes", {
     method: "POST",
     headers: operatorHeaders,
-    body: { title: "Agent goals", text: "Be useful, bounded, and explicit about uncertainty." }
+    body: {
+      title: "Agent goals",
+      text: "Be useful, bounded, and explicit about uncertainty.",
+      category: "goals",
+      tags: ["agency"],
+      shareWithAgent: true
+    }
   });
   assert(note.kind === "note", "context note should be stored");
   assert(note.text.includes("bounded"), "operator state should keep full note text");
@@ -82,20 +88,41 @@ try {
     body: {
       name: "context.txt",
       type: "text/plain",
+      shareWithAgent: true,
       contentBase64: fileContent
     }
   });
   assert(fileItem.kind === "file", "context file should be stored");
   assert(fileItem.size === 18, "context file should report stored size");
 
+  const contextQuestion = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "context_question",
+      title: "Context question",
+      details: "- What should the worker optimize for?",
+      contextCategory: "personality",
+      contextTags: ["question"]
+    }
+  });
+  await request(`/api/approvals/${contextQuestion.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved", note: "Optimize for careful, transparent progress." }
+  });
+
   const poll = await request("/api/agent/poll", { headers: agentHeaders });
   assert(poll.tasks.some((item) => item.id === task.id), "agent poll should include queued task");
   assert(poll.approvals.some((item) => item.id === approval.id), "agent poll should include approval");
   assert(poll.contextItems.some((item) => item.id === note.id), "agent poll should include context metadata");
-  assert(!poll.contextItems.find((item) => item.id === note.id).text, "agent poll should not include full note text");
+  assert(poll.contextItems.find((item) => item.id === note.id).text.includes("bounded"), "shared notes should be included in agent context");
+  assert(poll.contextItems.find((item) => item.id === fileItem.id).contentText.includes("small context"), "shared text file content should be included in agent context");
+  assert(poll.contextItems.some((item) => item.id === fileItem.id), "agent poll should keep shared file metadata");
 
   const visible = await request("/api/state", { headers: operatorHeaders });
   assert(visible.contextItems.some((item) => item.id === fileItem.id), "operator state should include context items");
+  assert(visible.contextItems.some((item) => item.originApprovalId === contextQuestion.id), "approved context questions should save operator answers");
 
   const report = await request("/api/agent/report", {
     method: "POST",
