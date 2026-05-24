@@ -51,6 +51,9 @@
             <button id="refreshButton" class="icon-button" title="Refresh" aria-label="Refresh">
               <span aria-hidden="true">R</span>
             </button>
+            <button id="appLockButton" class="icon-button" title="App PIN lock" aria-label="App PIN lock">
+              <span aria-hidden="true">P</span>
+            </button>
             <button id="lockButton" class="icon-button" title="Lock" aria-label="Lock">
               <span aria-hidden="true">L</span>
             </button>
@@ -71,6 +74,13 @@
             <p>Use the browser menu or Share sheet, then choose Add to Home Screen.</p>
           </div>
           <button id="dismissInstallHint" class="secondary-button" type="button">Dismiss</button>
+        </section>
+
+        <section id="routeWarning" class="route-warning hidden" aria-live="polite">
+          <div>
+            <strong>Not on a Tailscale route</strong>
+            <p>Use the Tailscale IP or private HTTPS Tailscale Serve URL when opening Latch from your phone.</p>
+          </div>
         </section>
 
         <nav class="tabs" aria-label="Views">
@@ -225,6 +235,27 @@
           </div>
           <div id="eventsList" class="list compact-list"></div>
         </section>
+      </section>
+
+      <section id="pinDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pinDialogTitle">
+        <form id="pinForm" class="dialog-panel">
+          <div class="dialog-header">
+            <div>
+              <p class="eyebrow" id="pinDialogEyebrow">App Lock</p>
+              <h2 id="pinDialogTitle">Unlock Latch</h2>
+            </div>
+          </div>
+          <p id="pinHelp" class="item-body"></p>
+          <label for="pinInput">PIN</label>
+          <input id="pinInput" type="password" inputmode="numeric" autocomplete="current-password" minlength="4" maxlength="12">
+          <label id="pinConfirmLabel" for="pinConfirmInput" class="hidden">Confirm PIN</label>
+          <input id="pinConfirmInput" class="hidden" type="password" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="12">
+          <p id="pinStatus" class="form-status" aria-live="polite"></p>
+          <div class="dialog-actions">
+            <button id="pinCancelButton" class="secondary-button" type="button">Cancel</button>
+            <button id="pinSubmitButton" class="action-button" type="submit">Unlock</button>
+          </div>
+        </form>
       </section>
 
       <section id="approvalDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="approvalDialogTitle">

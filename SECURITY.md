@@ -67,6 +67,12 @@ Keep secrets, recovery codes, payment data, and long-lived credentials out of sh
 
 Use the built-in backup/export controls before manual maintenance. Backups remain local under `data\` and are not tracked by Git.
 
+## Local App Lock
+
+The Latch web app can use a local PIN lock on each browser/device. This protects against casual access when a phone is already unlocked, but it is not a replacement for the operator key, Tailscale, or the phone's OS-level lock. The PIN verifier is stored in browser storage on that device.
+
+Browser biometric/passkey unlock should be implemented only on private HTTPS, for example via Tailscale Serve, because WebAuthn is not available on ordinary `http://100.x.y.z` pages.
+
 To rotate keys:
 
 1. Stop the app.
