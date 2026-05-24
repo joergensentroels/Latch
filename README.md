@@ -33,6 +33,12 @@ powershell -ExecutionPolicy Bypass -File .\Show-CommandCenter-Keys.ps1
 
 This app uses only Node.js built-ins and no downloaded dependencies.
 
+Run a local operator health check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Invoke-Latch-Doctor.ps1
+```
+
 Run a local health/key check:
 
 ```powershell
