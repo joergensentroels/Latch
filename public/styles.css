@@ -377,6 +377,22 @@ button[type="submit"]:hover,
   margin: 0;
 }
 
+.form-status {
+  min-height: 20px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.form-status.success {
+  color: var(--ok);
+}
+
+.form-status.error {
+  color: var(--danger);
+}
+
 .list {
   display: grid;
   gap: 10px;
