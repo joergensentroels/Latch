@@ -202,7 +202,27 @@
         </section>
 
         <section id="timelinePanel" class="panel hidden">
+          <div class="ops-panel">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Diagnostics</p>
+                <h2 class="section-title">System</h2>
+              </div>
+              <div class="toolbar-actions">
+                <button id="backupButton" class="secondary-button" type="button">Backup</button>
+                <button id="exportContextButton" class="secondary-button" type="button">Export Context</button>
+              </div>
+            </div>
+            <p id="backupStatus" class="form-status" aria-live="polite"></p>
+          </div>
           <div id="diagnosticsGrid" class="status-grid"></div>
+          <div class="ops-panel">
+            <div>
+              <p class="eyebrow">Archived</p>
+              <h2 class="section-title">Review or Delete</h2>
+            </div>
+            <div id="archivesList" class="list compact-list"></div>
+          </div>
           <div id="eventsList" class="list compact-list"></div>
         </section>
       </section>

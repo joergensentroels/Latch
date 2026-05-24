@@ -52,6 +52,7 @@ Operator-provided context lives in:
 ```text
 data/db.json
 data/context-files/
+data/backups/
 ```
 
 Treat this as private data. It can contain goals, notes, uploaded documents, and other sensitive context.
@@ -63,6 +64,8 @@ Agents receive:
 - text-like uploaded file contents only when explicitly shared and no larger than 200 KB
 
 Keep secrets, recovery codes, payment data, and long-lived credentials out of shared context.
+
+Use the built-in backup/export controls before manual maintenance. Backups remain local under `data\` and are not tracked by Git.
 
 To rotate keys:
 

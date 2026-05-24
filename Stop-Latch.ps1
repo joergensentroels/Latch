@@ -12,12 +12,14 @@ if (-not $Listeners) {
     exit 0
 }
 
-foreach ($Listener in $Listeners) {
-    $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
+$ProcessIds = $Listeners | Select-Object -ExpandProperty OwningProcess -Unique
+
+foreach ($ProcessId in $ProcessIds) {
+    $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($Process -and $Process.ProcessName -eq "node") {
         Stop-Process -Id $Process.Id -Force
-        Write-Output "Stopped Latch process $($Process.Id) on $($Listener.LocalAddress):$Port."
+        Write-Output "Stopped Latch process $($Process.Id) on port $Port."
     } else {
-        Write-Output "Skipping non-Node listener PID $($Listener.OwningProcess) on $($Listener.LocalAddress):$Port."
+        Write-Output "Skipping non-Node listener PID $ProcessId on port $Port."
     }
 }

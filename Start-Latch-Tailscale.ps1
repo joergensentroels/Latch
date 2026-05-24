@@ -3,7 +3,9 @@ param(
 
     [string]$Port = "",
 
-    [int]$WaitSeconds = 120
+    [int]$WaitSeconds = 120,
+
+    [switch]$NoRestartExisting
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,19 +48,32 @@ $NodeExe = if (Test-Path -LiteralPath $BundledNode) { $BundledNode } else { "nod
 
 Wait-ForHostAddress -HostAddress $HostAddress -TimeoutSeconds $WaitSeconds
 
-$Existing = Get-NetTCPConnection -LocalAddress $HostAddress -LocalPort ([int]$Port) -ErrorAction SilentlyContinue |
-    Where-Object { $_.State -eq "Listen" } |
-    Select-Object -First 1
+$Existing = Get-NetTCPConnection -LocalPort ([int]$Port) -ErrorAction SilentlyContinue |
+    Where-Object { $_.State -eq "Listen" }
 
 if ($Existing) {
-    try {
-        $Health = Invoke-RestMethod -Uri "http://$HostAddress`:$Port/api/health" -Method Get -TimeoutSec 3
-        Write-Output "Latch is already running on http://$HostAddress`:$Port ($($Health.app))."
-        exit 0
-    } catch {
-        Write-Output "Port $Port is already listening on $HostAddress, but health check failed."
-        exit 1
+    if ($NoRestartExisting) {
+        try {
+            $Health = Invoke-RestMethod -Uri "http://$HostAddress`:$Port/api/health" -Method Get -TimeoutSec 3
+            Write-Output "Latch is already running on http://$HostAddress`:$Port ($($Health.app))."
+            exit 0
+        } catch {
+            Write-Output "Port $Port is already listening on $HostAddress, but health check failed."
+            exit 1
+        }
     }
+
+    foreach ($ProcessId in ($Existing | Select-Object -ExpandProperty OwningProcess -Unique)) {
+        $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($Process -and $Process.ProcessName -eq "node") {
+            Stop-Process -Id $Process.Id -Force
+            Write-Output "Stopped existing Latch Node process $($Process.Id) on port $Port."
+        } else {
+            throw "Port $Port is already used by non-Node process PID $ProcessId."
+        }
+    }
+
+    Start-Sleep -Seconds 1
 }
 
 Set-Location $Root

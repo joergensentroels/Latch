@@ -124,6 +124,38 @@ try {
   assert(visible.contextItems.some((item) => item.id === fileItem.id), "operator state should include context items");
   assert(visible.contextItems.some((item) => item.originApprovalId === contextQuestion.id), "approved context questions should save operator answers");
 
+  const about = await request("/api/about", { headers: operatorHeaders });
+  assert(about.version, "about endpoint should expose version");
+  assert(about.counts.contextItems >= 3, "about endpoint should expose context counts");
+
+  const backup = await request("/api/backups", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: {}
+  });
+  assert(backup.ok && backup.fileName.endsWith(".json"), "backup endpoint should create a JSON backup");
+
+  const exportResponse = await fetch(`${baseUrl}/api/context/export`, { headers: operatorHeaders });
+  assert(exportResponse.ok, "context export should succeed");
+  const exported = await exportResponse.json();
+  assert(exported.contextItems.some((item) => item.id === note.id), "context export should include notes");
+
+  const archivedMessage = await request(`/api/messages/${message.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { archived: true }
+  });
+  assert(archivedMessage.archivedAt, "message archive should set archivedAt");
+  const afterArchive = await request("/api/state", { headers: operatorHeaders });
+  assert(!afterArchive.messages.some((item) => item.id === message.id), "archived messages should leave active state");
+  assert(afterArchive.archives.messages.some((item) => item.id === message.id), "archived messages should appear in archives");
+  await request(`/api/messages/${message.id}`, {
+    method: "DELETE",
+    headers: operatorHeaders
+  });
+  const afterDelete = await request("/api/state", { headers: operatorHeaders });
+  assert(!afterDelete.archives.messages.some((item) => item.id === message.id), "deleted archived message should be removed");
+
   const report = await request("/api/agent/report", {
     method: "POST",
     headers: agentHeaders,
