@@ -39,6 +39,7 @@ const contextFileShare = document.querySelector("#contextFileShare");
 const contextFileStatus = document.querySelector("#contextFileStatus");
 const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
+const appLockButton = document.querySelector("#appLockButton");
 const installButton = document.querySelector("#installButton");
 const notifyButton = document.querySelector("#notifyButton");
 const backupButton = document.querySelector("#backupButton");
@@ -49,6 +50,18 @@ const dismissInstallHint = document.querySelector("#dismissInstallHint");
 const connectionDot = document.querySelector("#connectionDot");
 const connectionText = document.querySelector("#connectionText");
 const pendingSummary = document.querySelector("#pendingSummary");
+const routeWarning = document.querySelector("#routeWarning");
+const pinDialog = document.querySelector("#pinDialog");
+const pinForm = document.querySelector("#pinForm");
+const pinDialogEyebrow = document.querySelector("#pinDialogEyebrow");
+const pinDialogTitle = document.querySelector("#pinDialogTitle");
+const pinHelp = document.querySelector("#pinHelp");
+const pinInput = document.querySelector("#pinInput");
+const pinConfirmLabel = document.querySelector("#pinConfirmLabel");
+const pinConfirmInput = document.querySelector("#pinConfirmInput");
+const pinStatus = document.querySelector("#pinStatus");
+const pinCancelButton = document.querySelector("#pinCancelButton");
+const pinSubmitButton = document.querySelector("#pinSubmitButton");
 const approvalDialog = document.querySelector("#approvalDialog");
 const approvalDecisionForm = document.querySelector("#approvalDecisionForm");
 const approvalDialogEyebrow = document.querySelector("#approvalDialogEyebrow");
@@ -70,6 +83,7 @@ const lists = {
   events: document.querySelector("#eventsList")
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
+let pinMode = "unlock";
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -192,6 +206,15 @@ refreshButton.addEventListener("click", refresh);
 notifyButton.addEventListener("click", enableNotifications);
 backupButton.addEventListener("click", createBackup);
 exportContextButton.addEventListener("click", exportContext);
+appLockButton.addEventListener("click", () => {
+  if (!state.token) return;
+  if (!isPinConfigured()) {
+    openPinDialog("set");
+    return;
+  }
+  state.pinUnlocked = false;
+  openPinDialog("unlock");
+});
 installButton.addEventListener("click", async () => {
   if (!state.deferredInstallPrompt) return;
   state.deferredInstallPrompt.prompt();
@@ -212,6 +235,17 @@ approvalDialog.addEventListener("click", (event) => {
   if (event.target === approvalDialog) closeApprovalDialog();
 });
 approvalDecisionForm.addEventListener("submit", submitApprovalDecision);
+pinForm.addEventListener("submit", submitPin);
+pinCancelButton.addEventListener("click", () => {
+  if (pinMode === "unlock") {
+    localStorage.removeItem("latchOperatorToken");
+    state.token = "";
+    closePinDialog();
+    showLogin();
+    return;
+  }
+  closePinDialog();
+});
 
 lockButton.addEventListener("click", () => {
   localStorage.removeItem("latchOperatorToken");
@@ -264,6 +298,10 @@ async function boot() {
     showLogin();
     return;
   }
+  if (isPinConfigured() && !state.pinUnlocked) {
+    showPinLock();
+    return;
+  }
 
   try {
     await refresh();
@@ -279,6 +317,13 @@ function showLogin() {
   tokenInput.value = state.token;
   loginView.classList.remove("hidden");
   mainView.classList.add("hidden");
+  closePinDialog();
+}
+
+function showPinLock() {
+  loginView.classList.add("hidden");
+  mainView.classList.add("hidden");
+  openPinDialog("unlock");
 }
 
 async function refresh() {
@@ -325,6 +370,7 @@ async function withSubmitLock(form, callback) {
 function render() {
   renderTabs();
   renderStatus();
+  renderRouteWarning();
   renderNotificationButton();
   renderInstallHint();
   maybeNotify();
@@ -335,6 +381,10 @@ function render() {
   renderDiagnostics();
   renderArchives();
   renderEvents();
+}
+
+function renderRouteWarning() {
+  routeWarning.classList.toggle("hidden", isPrivateRoute());
 }
 
 async function enableNotifications() {
@@ -364,6 +414,15 @@ function renderInstallHint() {
   const dismissed = localStorage.getItem("latchInstallHintDismissed") === "1" || localStorage.getItem("commandCenterInstallHintDismissed") === "1";
   const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   installHint.classList.toggle("hidden", dismissed || standalone);
+}
+
+function isPrivateRoute() {
+  const host = location.hostname.toLowerCase();
+  return host === "localhost"
+    || host === "127.0.0.1"
+    || host === "::1"
+    || /^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+    || host.endsWith(".ts.net");
 }
 
 function renderStatus() {
@@ -843,6 +902,106 @@ async function exportContext() {
   } catch (error) {
     setFormStatus(backupStatus, `Export failed: ${error.message}`, "error");
   }
+}
+
+function isPinConfigured() {
+  return Boolean(localStorage.getItem("latchPinSalt") && localStorage.getItem("latchPinHash"));
+}
+
+function openPinDialog(mode) {
+  pinMode = mode;
+  const isSet = mode === "set";
+  pinDialogEyebrow.textContent = isSet ? "Set PIN" : "App Lock";
+  pinDialogTitle.textContent = isSet ? "Set App PIN" : "Unlock Latch";
+  pinHelp.textContent = isSet
+    ? "Set a local PIN for this device. This protects the app when your phone is already unlocked."
+    : "Enter your local PIN to unlock this device.";
+  pinSubmitButton.textContent = isSet ? "Save PIN" : "Unlock";
+  pinCancelButton.textContent = isSet ? "Cancel" : "Use Operator Key";
+  pinConfirmLabel.classList.toggle("hidden", !isSet);
+  pinConfirmInput.classList.toggle("hidden", !isSet);
+  pinInput.value = "";
+  pinConfirmInput.value = "";
+  setFormStatus(pinStatus, "", "");
+  pinDialog.classList.remove("hidden");
+  pinInput.focus();
+}
+
+function closePinDialog() {
+  pinDialog.classList.add("hidden");
+  pinInput.value = "";
+  pinConfirmInput.value = "";
+}
+
+async function submitPin(event) {
+  event.preventDefault();
+  const pin = pinInput.value.trim();
+  if (pin.length < 4) {
+    setFormStatus(pinStatus, "Use at least 4 digits.", "error");
+    return;
+  }
+
+  try {
+    if (pinMode === "set") {
+      const confirmation = pinConfirmInput.value.trim();
+      if (pin !== confirmation) {
+        setFormStatus(pinStatus, "PINs do not match.", "error");
+        return;
+      }
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const hash = await hashPin(pin, salt);
+      localStorage.setItem("latchPinSalt", bytesToBase64(salt));
+      localStorage.setItem("latchPinHash", bytesToBase64(hash));
+      localStorage.setItem("latchPinIterations", "150000");
+      state.pinUnlocked = true;
+      closePinDialog();
+      await refresh();
+      return;
+    }
+
+    const salt = base64ToBytes(localStorage.getItem("latchPinSalt") || "");
+    const expected = localStorage.getItem("latchPinHash") || "";
+    const hash = await hashPin(pin, salt);
+    if (bytesToBase64(hash) !== expected) {
+      setFormStatus(pinStatus, "Wrong PIN.", "error");
+      return;
+    }
+    state.pinUnlocked = true;
+    closePinDialog();
+    await boot();
+  } catch (error) {
+    setFormStatus(pinStatus, `PIN failed: ${error.message}`, "error");
+  }
+}
+
+async function hashPin(pin, salt) {
+  const iterations = Number(localStorage.getItem("latchPinIterations") || "150000");
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(pin),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations },
+    key,
+    256
+  );
+  return new Uint8Array(bits);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
 function markConnection(isOnline) {

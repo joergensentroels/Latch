@@ -260,6 +260,27 @@ button[type="submit"]:hover,
   line-height: 1.35;
 }
 
+.route-warning {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  background: #fffaeb;
+  color: #7a4f01;
+}
+
+.route-warning strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.route-warning p {
+  margin: 0;
+  color: #8a5a00;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 .tabs {
   position: fixed;
   left: 10px;

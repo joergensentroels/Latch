@@ -198,6 +198,14 @@ Use the Timeline tab for local operations:
 - Archive buttons remove test items from active views without deleting them
 - Archived items can be restored or permanently deleted from Timeline
 
+## App Lock
+
+The `P` button in the top bar sets or activates a local PIN lock for the current browser/device. This is meant for the practical phone-handoff case: if your phone is unlocked, Latch can still require a PIN before showing notes and messages.
+
+The PIN is local to that installed app/browser profile. It does not replace the operator key, phone OS lock, or Tailscale. Biometric/passkey unlock can be added later when Latch is served over private HTTPS, such as Tailscale Serve, because browser biometrics require a secure context.
+
+Latch also warns when it is opened from a route that does not look like localhost, a Tailscale `100.x.y.z` address, or a `.ts.net` private URL.
+
 ## Agent API
 
 Use the agent key as a bearer token:
