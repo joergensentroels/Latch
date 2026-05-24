@@ -53,3 +53,11 @@ powershell -ExecutionPolicy Bypass -File .\Status-Latch.ps1
 ```
 
 Use the `PrivateHttpsUrl` value on the phone when it is present.
+
+If `Serve-Over-Tailscale.ps1` says HTTPS certificates are not enabled yet, open the Tailscale admin console on this trusted machine:
+
+```text
+https://login.tailscale.com/admin/dns
+```
+
+Enable HTTPS certificates once, then rerun the Serve script. Keep Tailscale Funnel off for Latch.
