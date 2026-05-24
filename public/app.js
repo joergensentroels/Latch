@@ -18,6 +18,7 @@ const loginView = document.querySelector("#loginView");
 const mainView = document.querySelector("#mainView");
 const loginForm = document.querySelector("#loginForm");
 const tokenInput = document.querySelector("#tokenInput");
+const toggleTokenVisibility = document.querySelector("#toggleTokenVisibility");
 const messageForm = document.querySelector("#messageForm");
 const messageText = document.querySelector("#messageText");
 const taskForm = document.querySelector("#taskForm");
@@ -99,6 +100,15 @@ loginForm.addEventListener("submit", async (event) => {
   localStorage.setItem("latchOperatorToken", state.token);
   localStorage.removeItem("commandCenterToken");
   await boot();
+});
+
+toggleTokenVisibility.addEventListener("click", () => {
+  const shouldShow = tokenInput.type === "password";
+  tokenInput.type = shouldShow ? "text" : "password";
+  toggleTokenVisibility.classList.toggle("active", shouldShow);
+  toggleTokenVisibility.title = shouldShow ? "Hide operator key" : "Show operator key";
+  toggleTokenVisibility.setAttribute("aria-label", toggleTokenVisibility.title);
+  tokenInput.focus();
 });
 
 messageForm.addEventListener("submit", async (event) => {
