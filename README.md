@@ -230,6 +230,29 @@ The PIN and passkey registration are local to that installed app/browser profile
 
 Latch also warns when it is opened from a route that does not look like localhost, a Tailscale `100.x.y.z` address, or a `.ts.net` private URL.
 
+## Emergency Lockdown
+
+If you accidentally expose a key or something feels wrong, rotate both Latch keys immediately:
+
+```powershell
+cd "C:\Users\troel\Documents\LLM server\openclaw-command-center"
+powershell -ExecutionPolicy Bypass -File .\Emergency-Latch-Lockdown.ps1
+```
+
+This backs up `data\auth.json`, writes a fresh operator key and agent key, and restarts Latch so the old keys stop working. The OpenClaw bridge will be locked out until you update its `LATCH_AGENT_KEY`.
+
+To stop serving as well:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Emergency-Latch-Lockdown.ps1 -StopServing
+```
+
+After rotation, show the new local operator key only on the trusted Windows machine:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Show-CommandCenter-Keys.ps1
+```
+
 ## Agent API
 
 Use the agent key as a bearer token:
