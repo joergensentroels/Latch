@@ -117,12 +117,39 @@
         </section>
 
         <section id="approvalsPanel" class="panel hidden">
+          <div class="panel-toolbar">
+            <div class="segmented-control" aria-label="Approval filter">
+              <button class="segment active" type="button" data-approval-filter="pending">Pending</button>
+              <button class="segment" type="button" data-approval-filter="all">All</button>
+            </div>
+          </div>
           <div id="approvalsList" class="list"></div>
         </section>
 
         <section id="timelinePanel" class="panel hidden">
           <div id="eventsList" class="list compact-list"></div>
         </section>
+      </section>
+
+      <section id="approvalDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="approvalDialogTitle">
+        <form id="approvalDecisionForm" class="dialog-panel">
+          <div class="dialog-header">
+            <div>
+              <p class="eyebrow" id="approvalDialogEyebrow">Approval</p>
+              <h2 id="approvalDialogTitle">Review request</h2>
+            </div>
+            <button id="approvalDialogClose" class="icon-button compact-icon" type="button" title="Close" aria-label="Close">
+              <span aria-hidden="true">x</span>
+            </button>
+          </div>
+          <p id="approvalDialogSummary" class="item-body"></p>
+          <label for="approvalDecisionNote">Operator note</label>
+          <textarea id="approvalDecisionNote" rows="4" placeholder="Optional note or result for the agent"></textarea>
+          <div class="dialog-actions">
+            <button id="approvalDecisionCancel" class="secondary-button" type="button">Cancel</button>
+            <button id="approvalDecisionSubmit" class="action-button" type="submit">Save</button>
+          </div>
+        </form>
       </section>
     </main>
 

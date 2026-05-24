@@ -4,9 +4,11 @@ const state = {
   token: localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
   tab: ["inbox", "tasks", "approvals", "timeline"].includes(initialTab) ? initialTab : "inbox",
   data: null,
+  approvalsFilter: localStorage.getItem("latchApprovalsFilter") || "pending",
   seenNotificationIds: new Set(JSON.parse(localStorage.getItem("latchSeenNotificationIds") || "[]")),
   notificationBaselineReady: false,
-  deferredInstallPrompt: null
+  deferredInstallPrompt: null,
+  approvalDecision: null
 };
 
 const loginView = document.querySelector("#loginView");
@@ -28,6 +30,16 @@ const dismissInstallHint = document.querySelector("#dismissInstallHint");
 const connectionDot = document.querySelector("#connectionDot");
 const connectionText = document.querySelector("#connectionText");
 const pendingSummary = document.querySelector("#pendingSummary");
+const approvalDialog = document.querySelector("#approvalDialog");
+const approvalDecisionForm = document.querySelector("#approvalDecisionForm");
+const approvalDialogEyebrow = document.querySelector("#approvalDialogEyebrow");
+const approvalDialogTitle = document.querySelector("#approvalDialogTitle");
+const approvalDialogSummary = document.querySelector("#approvalDialogSummary");
+const approvalDecisionNote = document.querySelector("#approvalDecisionNote");
+const approvalDecisionSubmit = document.querySelector("#approvalDecisionSubmit");
+const approvalDialogClose = document.querySelector("#approvalDialogClose");
+const approvalDecisionCancel = document.querySelector("#approvalDecisionCancel");
+const approvalFilterButtons = document.querySelectorAll("[data-approval-filter]");
 
 const lists = {
   messages: document.querySelector("#messagesList"),
@@ -97,6 +109,13 @@ dismissInstallHint.addEventListener("click", () => {
   installHint.classList.add("hidden");
 });
 
+approvalDialogClose.addEventListener("click", closeApprovalDialog);
+approvalDecisionCancel.addEventListener("click", closeApprovalDialog);
+approvalDialog.addEventListener("click", (event) => {
+  if (event.target === approvalDialog) closeApprovalDialog();
+});
+approvalDecisionForm.addEventListener("submit", submitApprovalDecision);
+
 lockButton.addEventListener("click", () => {
   localStorage.removeItem("latchOperatorToken");
   localStorage.removeItem("commandCenterToken");
@@ -119,6 +138,14 @@ document.querySelectorAll(".tab").forEach((button) => {
     state.tab = button.dataset.tab;
     history.replaceState(null, "", `?tab=${state.tab}`);
     renderTabs();
+  });
+});
+
+approvalFilterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.approvalsFilter = button.dataset.approvalFilter;
+    localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
+    renderApprovals();
   });
 });
 
@@ -335,7 +362,14 @@ function renderTasks() {
 }
 
 function renderApprovals() {
-  const approvals = state.data?.approvals || [];
+  approvalFilterButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.approvalFilter === state.approvalsFilter);
+  });
+
+  const allApprovals = state.data?.approvals || [];
+  const approvals = state.approvalsFilter === "pending"
+    ? allApprovals.filter((approval) => approval.status === "pending")
+    : allApprovals;
   renderList(lists.approvals, approvals, (approval) => `
     <article class="item ${approval.type === "human_verification" ? "human-request" : ""}">
       <div class="item-header">
@@ -362,13 +396,65 @@ function renderApprovals() {
 
   lists.approvals.querySelectorAll("[data-approval]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await api(`/api/approvals/${button.dataset.approval}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: button.dataset.status })
-      });
-      await refresh();
+      openApprovalDialog(button.dataset.approval, button.dataset.status);
     });
   });
+}
+
+function openApprovalDialog(approvalId, status) {
+  const approval = (state.data?.approvals || []).find((item) => item.id === approvalId);
+  if (!approval) return;
+
+  state.approvalDecision = { approval, status };
+  const isApproved = status === "approved";
+  approvalDialogEyebrow.textContent = formatApprovalType(approval.type);
+  approvalDialogTitle.textContent = isApproved
+    ? (approval.type === "human_verification" ? "Mark Done" : "Approve Request")
+    : (approval.type === "human_verification" ? "Cannot Help" : "Deny Request");
+  approvalDialogSummary.textContent = approval.title;
+  approvalDecisionNote.value = "";
+  approvalDecisionNote.placeholder = approvalPlaceholder(approval, status);
+  approvalDecisionSubmit.textContent = isApproved ? "Save Approval" : "Save Denial";
+  approvalDecisionSubmit.classList.toggle("danger-button", !isApproved);
+  approvalDecisionSubmit.classList.toggle("action-button", isApproved);
+  approvalDialog.classList.remove("hidden");
+  approvalDecisionNote.focus();
+}
+
+function closeApprovalDialog() {
+  state.approvalDecision = null;
+  approvalDialog.classList.add("hidden");
+  approvalDecisionNote.value = "";
+}
+
+async function submitApprovalDecision(event) {
+  event.preventDefault();
+  if (!state.approvalDecision) return;
+
+  const { approval, status } = state.approvalDecision;
+  approvalDecisionSubmit.disabled = true;
+  try {
+    await api(`/api/approvals/${approval.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status,
+        note: approvalDecisionNote.value.trim()
+      })
+    });
+    closeApprovalDialog();
+    await refresh();
+  } finally {
+    approvalDecisionSubmit.disabled = false;
+  }
+}
+
+function approvalPlaceholder(approval, status) {
+  if (status === "denied") return "Reason or safer alternative";
+  if (approval.type === "human_verification") return "Verification completed, or short result";
+  if (approval.type === "credential") return "Minimum non-secret result, never a password";
+  if (approval.type === "command") return "Reviewed scope or manual result";
+  if (approval.type === "purchase") return "Budget/vendor check or manual purchase result";
+  return "Decision note";
 }
 
 function formatApprovalType(value) {
