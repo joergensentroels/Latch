@@ -64,7 +64,8 @@ const emptyDb = {
   events: [],
   attachments: [],
   contextItems: [],
-  executions: []
+  executions: [],
+  researchRuns: []
 };
 
 await mkdir(dataDir, { recursive: true });
@@ -184,6 +185,7 @@ async function handleApi(req, res, url) {
         approvals: activeItems(db.approvals).length,
         contextItems: activeItems(db.contextItems).length,
         executions: activeItems(db.executions).length,
+        researchRuns: activeItems(db.researchRuns).length,
         archived: countArchived(db)
       },
       llm: publicLlmConfig(llm),
@@ -370,6 +372,7 @@ async function handleApi(req, res, url) {
       attachments: cleanTextArray(body.attachments, 8, 240),
       sendMode: cleanChoice(body.sendMode, contactSendModes, "manual"),
       allowedDomains: cleanTextArray(body.allowedDomains, 12, 120),
+      seedUrls: cleanTextArray(body.seedUrls, 12, 500),
       maxPages: cleanInteger(body.maxPages, 0, 25, 0),
       tokenBudget: cleanInteger(body.tokenBudget, 0, 20000, 0),
       researchQuestion: cleanText(body.researchQuestion || "", 1000),
@@ -633,6 +636,37 @@ async function handleApi(req, res, url) {
       contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50)),
       executions: activeItems(db.executions).slice(0, 20)
     });
+    return;
+  }
+
+  if (url.pathname === "/api/agent/research-results" && req.method === "POST") {
+    requireAgent(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    const run = {
+      id: newId("research"),
+      approvalId: cleanText(body.approvalId || "", 120),
+      taskId: cleanText(body.taskId || "", 120),
+      question: cleanText(body.question || "", 1000),
+      allowedDomains: cleanTextArray(body.allowedDomains, 12, 120),
+      seedUrls: cleanTextArray(body.seedUrls, 12, 500),
+      pagesFetched: cleanInteger(body.pagesFetched, 0, 25, 0),
+      tokenBudget: cleanInteger(body.tokenBudget, 0, 20000, 0),
+      status: cleanChoice(body.status, ["completed", "partial", "failed"], "completed"),
+      summary: cleanText(body.summary || "", 6000),
+      sources: cleanResearchSources(body.sources),
+      errors: cleanTextArray(body.errors, 12, 500),
+      startedAt: cleanText(body.startedAt || new Date().toISOString(), 80),
+      finishedAt: cleanText(body.finishedAt || new Date().toISOString(), 80),
+      requestedBy: role,
+      createdAt: new Date().toISOString()
+    };
+    db.researchRuns.unshift(run);
+    db.events.unshift(event("research.reported", role, run.id, `${run.status}: ${run.question || run.seedUrls[0] || "research"}`));
+    await writeDb(db);
+    sendJson(res, 201, run);
     return;
   }
 
@@ -969,6 +1003,7 @@ function visibleState(db) {
     tasks: activeItems(db.tasks).slice(0, 100),
     approvals: activeItems(db.approvals).slice(0, 100),
     executions: activeItems(db.executions).slice(0, 100),
+    researchRuns: activeItems(db.researchRuns).slice(0, 100),
     events: db.events.slice(0, 100),
     contextItems: activeItems(db.contextItems).slice(0, 100).map(operatorContextItem),
     archives: {
@@ -990,6 +1025,7 @@ function normalizeDb(db) {
   db.attachments = Array.isArray(db.attachments) ? db.attachments : [];
   db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
   db.executions = Array.isArray(db.executions) ? db.executions : [];
+  db.researchRuns = Array.isArray(db.researchRuns) ? db.researchRuns : [];
   return db;
 }
 
@@ -1160,6 +1196,17 @@ function cleanTextArray(value, maxItems, maxLength) {
     .map((item) => cleanText(item, maxLength))
     .filter(Boolean)
     .slice(0, maxItems);
+}
+
+function cleanResearchSources(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 12).map((source) => ({
+    url: cleanText(source?.url || "", 500),
+    title: cleanText(source?.title || "", 240),
+    status: cleanInteger(source?.status, 0, 599, 0),
+    summary: cleanText(source?.summary || "", 1500),
+    excerpt: cleanText(source?.excerpt || "", 1000)
+  })).filter((source) => source.url);
 }
 
 function cleanCategory(value) {

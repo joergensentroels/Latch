@@ -9,11 +9,13 @@ Implemented now:
 - `external_contact` approvals for draft outbound messages
 - `web_research` approvals for bounded research scopes
 - structured fields for recipient, subject, preview, domains, page budget, and token budget
+- approved read-only research against exact seed URLs
+- compact source-note reporting back into Latch
 - no automatic sending
-- no browser automation
+- no interactive browser automation
 - no mailbox credentials on the OpenClaw VM
 
-The current bridge records approvals and reports back. It does not send email, operate a browser, scrape pages, log in, download files, or bypass human verification.
+The current bridge records approvals and reports back. After approval, it may fetch exact approved public URLs for `web_research`. It does not send email, operate a browser, search the web, crawl links, log in, download files, or bypass human verification.
 
 ## External Contact Rule
 
@@ -38,26 +40,30 @@ Future connector rules:
 
 ## Browser And Research Rule
 
-The first browser/research workflow should be read-only and bounded:
+The first research workflow is read-only and bounded:
 
 ```text
 Goal: one concrete question
 Allowed domains: short explicit list
+Seed URLs: exact approved public URLs
 Max pages: 3-5 by default
 Token budget: 2000-4000 by default
 Login allowed: no
 Downloads allowed: no
 Actions allowed: no
+Search/crawl allowed: no
 ```
 
-The worker should not send raw pages directly to the LLM. Use a retrieval layer:
+The worker does not send raw pages directly to the LLM. It uses a small retrieval layer:
 
 1. Fetch one allowed page.
 2. Strip scripts, nav, footer, ads, and unrelated layout.
 3. Extract the main article/content.
-4. Save a local source note with URL, title, timestamp, and compact summary.
-5. Send only the summary and a few relevant snippets to the LLM.
-6. Reuse saved source notes instead of repeatedly fetching and summarizing the same page.
+4. Create a source note with URL, title, status, compact summary, and short excerpt.
+5. Report source notes to Latch.
+6. Send only summaries/snippets into future reasoning, not full raw pages.
+
+The current implementation does not follow links. More advanced crawling should require a second review.
 
 ## Token Efficiency Rules
 
@@ -92,6 +98,7 @@ Web research:
   "riskLevel": "medium",
   "researchQuestion": "What is the safest browser sandbox design for Latch?",
   "allowedDomains": ["example.com"],
+  "seedUrls": ["https://example.com/security/browser-sandbox"],
   "maxPages": 5,
   "tokenBudget": 3000
 }
@@ -107,4 +114,4 @@ Web research:
 - logging in to third-party sites
 - scraping large sites
 - accepting arbitrary URLs or domains from untrusted instructions without operator review
-
+- fetching internal IPs, localhost, `.local` hosts, or private network targets

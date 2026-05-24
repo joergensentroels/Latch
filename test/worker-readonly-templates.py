@@ -69,7 +69,29 @@ research = bridge.detect_approval_need(
 )
 assert research.type == "web_research"
 assert research.allowed_domains == ("example.com",)
+assert research.seed_urls == ("https://example.com/docs",)
 assert research.max_pages == 5
 assert research.token_budget == 3000
+
+bridge.validate_research_url("https://93.184.216.34/docs", ["93.184.216.34"])
+
+for url, domains in (
+    ("file:///etc/passwd", ["example.com"]),
+    ("https://127.0.0.1/status", ["127.0.0.1"]),
+    ("https://example.org/docs", ["example.com"]),
+    ("https://user:pass@example.com/docs", ["example.com"]),
+):
+    try:
+        bridge.validate_research_url(url, domains)
+        raise AssertionError(f"unsafe research URL was accepted: {url}")
+    except RuntimeError:
+        pass
+
+summary = bridge.summarize_text(
+    "Install Latch with Tailscale. Use a small page budget. Avoid broad scraping.",
+    "How should Latch avoid scraping?",
+    120,
+)
+assert "scraping" in summary.lower()
 
 print("Worker read-only template tests passed.")

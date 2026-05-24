@@ -798,7 +798,7 @@ function approvalAdvice(approval) {
     return "External contact is draft-only. Latch will not send mail or messages in this phase.";
   }
   if (approval.type === "web_research") {
-    return "Research is scope-only in this phase. Keep page and token budgets small before enabling browser access.";
+    return "Read-only research can fetch exact approved public URLs only. It will not search, crawl, log in, download files, or touch private network addresses.";
   }
   if (approval.sensitive) {
     return "Sensitive request. Do not paste passwords, recovery codes, payment details, or long-lived tokens back to the agent.";
@@ -820,7 +820,7 @@ function approvalActionOutcome(approval) {
     return "Approval records the reviewed draft. The operator still sends manually unless a future connector is enabled.";
   }
   if (approval.type === "web_research") {
-    return "Approval records a bounded research scope. The current bridge will not browse autonomously.";
+    return "If approved, the worker fetches exact approved public URLs, extracts compact source notes, and reports a summary.";
   }
   if (approval.sensitive) {
     return "Approval records a human step; sensitive notes stay inside Latch.";
@@ -886,6 +886,7 @@ function contactApprovalSummary(approval) {
 
 function researchApprovalSummary(approval) {
   const domains = approval.allowedDomains || [];
+  const seedUrls = approval.seedUrls || [];
   const budget = [
     approval.maxPages ? `${approval.maxPages} pages` : "page budget unset",
     approval.tokenBudget ? `${approval.tokenBudget} tokens` : "token budget unset"
@@ -895,6 +896,7 @@ function researchApprovalSummary(approval) {
       <strong>Bounded research scope</strong>
       <dl class="detail-grid">
         <dt>Question</dt><dd>${escapeHtml(approval.researchQuestion || "Not specified")}</dd>
+        <dt>Seed URLs</dt><dd>${seedUrls.length ? escapeHtml(seedUrls.join(", ")) : "Exact URL required before anything runs"}</dd>
         <dt>Allowed domains</dt><dd>${domains.length ? escapeHtml(domains.join(", ")) : "Not specified"}</dd>
         <dt>Budget</dt><dd>${escapeHtml(budget)}</dd>
       </dl>
@@ -920,8 +922,10 @@ function renderDiagnostics() {
   const tasks = state.data?.tasks || [];
   const approvals = state.data?.approvals || [];
   const executions = state.data?.executions || [];
+  const researchRuns = state.data?.researchRuns || [];
   const latestAgentMessage = messages.find((message) => message.direction === "agent_to_operator");
   const latestExecution = executions[0];
+  const latestResearch = researchRuns[0];
   const openTasks = tasks.filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const pendingApprovals = approvals.filter((item) => item.status === "pending").length;
   const llmReady = Boolean(state.llmConfig?.enabled);
@@ -957,6 +961,12 @@ function renderDiagnostics() {
       note: latestExecution ? formatTime(latestExecution.finishedAt || latestExecution.createdAt) : "Read-only operations have not run yet"
     },
     {
+      label: "Last Research",
+      value: latestResearch ? `${latestResearch.status} / ${latestResearch.pagesFetched || 0} pages` : "None yet",
+      status: !latestResearch ? "warn" : latestResearch.status === "completed" ? "ok" : latestResearch.status === "partial" ? "warn" : "bad",
+      note: latestResearch ? (latestResearch.question || latestResearch.seedUrls?.[0] || "").slice(0, 140) : "Read-only web research has not run yet"
+    },
+    {
       label: "Server",
       value: `v${about.version || "dev"} / PID ${about.pid || "?"}`,
       status: "ok",
@@ -987,7 +997,12 @@ function renderDiagnostics() {
 
 function renderOperations() {
   const executions = state.data?.executions || [];
-  renderList(lists.operations, executions.slice(0, 8), (item) => `
+  const researchRuns = state.data?.researchRuns || [];
+  const operations = [
+    ...executions.map((item) => ({ ...item, operationKind: "execution", sortTime: item.finishedAt || item.createdAt })),
+    ...researchRuns.map((item) => ({ ...item, operationKind: "research", sortTime: item.finishedAt || item.createdAt }))
+  ].sort((left, right) => String(right.sortTime || "").localeCompare(String(left.sortTime || "")));
+  renderList(lists.operations, operations.slice(0, 10), (item) => item.operationKind === "research" ? researchOperationCard(item) : `
     <article class="item">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(commandTemplateLabel(item.template))}</h2>
@@ -1007,6 +1022,38 @@ function renderOperations() {
       ${item.stderr ? `<p class="approval-advice">${escapeHtml(item.stderr)}</p>` : ""}
     </article>
   `);
+}
+
+function researchOperationCard(item) {
+  const sources = item.sources || [];
+  return `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">Read-only research</h2>
+        <span class="badge ${item.status === "completed" ? "done" : item.status === "partial" ? "waiting" : "failed"}">${escapeHtml(item.status || "reported")}</span>
+      </div>
+      <div class="meta-row">
+        <span class="type-pill web_research">Web research</span>
+        <span class="item-meta">${formatTime(item.finishedAt || item.createdAt)}</span>
+        <span class="item-meta">${escapeHtml(String(item.pagesFetched || 0))} pages</span>
+      </div>
+      <p class="item-body">${escapeHtml(item.question || "Research result")}</p>
+      ${item.summary ? `<pre class="item-body">${escapeHtml(item.summary)}</pre>` : ""}
+      ${sources.length ? `
+        <details class="command-details">
+          <summary>Show sources</summary>
+          ${sources.map((source) => `
+            <div class="source-note">
+              <strong>${escapeHtml(source.title || source.url)}</strong>
+              <p class="item-meta">${escapeHtml(source.url)}${source.status ? ` / ${escapeHtml(String(source.status))}` : ""}</p>
+              <p class="item-body">${escapeHtml(source.summary || source.excerpt || "")}</p>
+            </div>
+          `).join("")}
+        </details>
+      ` : ""}
+      ${(item.errors || []).length ? `<p class="approval-advice">${escapeHtml(item.errors.join("\\n"))}</p>` : ""}
+    </article>
+  `;
 }
 
 function renderSecurityChecklist() {

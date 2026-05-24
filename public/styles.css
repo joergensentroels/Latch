@@ -735,6 +735,18 @@ button[type="submit"]:hover,
   color: var(--text);
 }
 
+.source-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.source-note strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.9rem;
+}
+
 .type-pill.risk-low {
   background: #ecfdf3;
   color: var(--ok);
