@@ -86,6 +86,10 @@
             <span aria-hidden="true">A</span>
             <span>Approvals</span>
           </button>
+          <button class="tab" data-tab="context">
+            <span aria-hidden="true">C</span>
+            <span>Context</span>
+          </button>
           <button class="tab" data-tab="timeline">
             <span aria-hidden="true">E</span>
             <span>Timeline</span>
@@ -130,6 +134,25 @@
             </div>
           </div>
           <div id="approvalsList" class="list"></div>
+        </section>
+
+        <section id="contextPanel" class="panel hidden">
+          <div class="context-forms">
+            <form id="contextNoteForm" class="context-form">
+              <label for="contextTitle">Context title</label>
+              <input id="contextTitle" type="text" placeholder="Goal, preference, background">
+              <label for="contextText">Context note</label>
+              <textarea id="contextText" rows="5" placeholder="Notes, goals, boundaries, preferences"></textarea>
+              <button type="submit">Save Note</button>
+            </form>
+
+            <form id="contextFileForm" class="context-form">
+              <label for="contextFileInput">Upload file</label>
+              <input id="contextFileInput" type="file">
+              <button type="submit">Upload</button>
+            </form>
+          </div>
+          <div id="contextList" class="list"></div>
         </section>
 
         <section id="timelinePanel" class="panel hidden">

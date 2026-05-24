@@ -47,6 +47,15 @@ data/notifications.json
 
 Agents should not receive notification provider tokens. Latch should send phone alerts on the operator's behalf.
 
+Operator-provided context lives in:
+
+```text
+data/db.json
+data/context-files/
+```
+
+Treat this as private data. It can contain goals, notes, uploaded documents, and other sensitive context. Agents currently receive context metadata and note previews, not uploaded file bytes, through their poll endpoint.
+
 To rotate keys:
 
 1. Stop the app.

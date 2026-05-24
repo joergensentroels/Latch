@@ -1,8 +1,10 @@
 const initialTab = new URLSearchParams(location.search).get("tab");
+const tabs = ["inbox", "tasks", "approvals", "context", "timeline"];
+const maxContextUploadBytes = 2_000_000;
 
 const state = {
   token: localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
-  tab: ["inbox", "tasks", "approvals", "timeline"].includes(initialTab) ? initialTab : "inbox",
+  tab: tabs.includes(initialTab) ? initialTab : "inbox",
   data: null,
   taskFilter: localStorage.getItem("latchTaskFilter") || "open",
   approvalsFilter: localStorage.getItem("latchApprovalsFilter") || "pending",
@@ -22,6 +24,11 @@ const taskForm = document.querySelector("#taskForm");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
 const taskPriority = document.querySelector("#taskPriority");
+const contextNoteForm = document.querySelector("#contextNoteForm");
+const contextTitle = document.querySelector("#contextTitle");
+const contextText = document.querySelector("#contextText");
+const contextFileForm = document.querySelector("#contextFileForm");
+const contextFileInput = document.querySelector("#contextFileInput");
 const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
 const installButton = document.querySelector("#installButton");
@@ -47,6 +54,7 @@ const lists = {
   messages: document.querySelector("#messagesList"),
   tasks: document.querySelector("#tasksList"),
   approvals: document.querySelector("#approvalsList"),
+  context: document.querySelector("#contextList"),
   events: document.querySelector("#eventsList")
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
@@ -92,6 +100,48 @@ taskForm.addEventListener("submit", async (event) => {
     taskTitle.value = "";
     taskDetails.value = "";
     taskPriority.value = "normal";
+    await refresh();
+  });
+});
+
+contextNoteForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const title = contextTitle.value.trim();
+  const text = contextText.value.trim();
+  if (!text) return;
+
+  await withSubmitLock(contextNoteForm, async () => {
+    await api("/api/context/notes", {
+      method: "POST",
+      body: JSON.stringify({ title, text })
+    });
+    contextTitle.value = "";
+    contextText.value = "";
+    await refresh();
+  });
+});
+
+contextFileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = contextFileInput.files?.[0];
+  if (!file) return;
+  if (file.size > maxContextUploadBytes) {
+    window.alert(`Files are limited to ${formatBytes(maxContextUploadBytes)} for now.`);
+    return;
+  }
+
+  await withSubmitLock(contextFileForm, async () => {
+    const contentBase64 = await fileToBase64(file);
+    await api("/api/context/files", {
+      method: "POST",
+      body: JSON.stringify({
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size,
+        contentBase64
+      })
+    });
+    contextFileInput.value = "";
     await refresh();
   });
 });
@@ -235,6 +285,7 @@ function render() {
   renderMessages();
   renderTasks();
   renderApprovals();
+  renderContext();
   renderDiagnostics();
   renderEvents();
 }
@@ -420,6 +471,51 @@ function renderApprovals() {
   });
 }
 
+function renderContext() {
+  const items = state.data?.contextItems || [];
+  renderList(lists.context, items, (item) => `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(item.title || item.name || "Context")}</h2>
+        <span class="badge">${escapeHtml(item.kind || "note")}</span>
+      </div>
+      <div class="meta-row">
+        <span class="item-meta">${escapeHtml(item.source || "operator")}</span>
+        <span class="item-meta">${formatTime(item.createdAt)}</span>
+        ${item.kind === "file" ? `<span class="item-meta">${escapeHtml(formatBytes(item.size || 0))}</span>` : ""}
+      </div>
+      ${item.kind === "file" ? `
+        <p class="item-body">${escapeHtml(item.name || "")}</p>
+        <div class="approval-actions">
+          <button class="secondary-button" data-context-download="${escapeHtml(item.id)}" type="button">Download</button>
+        </div>
+      ` : `<p class="item-body">${escapeHtml(item.text || item.preview || "")}</p>`}
+    </article>
+  `);
+
+  lists.context.querySelectorAll("[data-context-download]").forEach((button) => {
+    button.addEventListener("click", () => downloadContextFile(button.dataset.contextDownload));
+  });
+}
+
+async function downloadContextFile(id) {
+  const response = await fetch(`/api/context/files/${encodeURIComponent(id)}`, {
+    headers: { authorization: `Bearer ${state.token}` }
+  });
+  if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+
+  const blob = await response.blob();
+  const item = (state.data?.contextItems || []).find((entry) => entry.id === id);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = item?.name || "context-file";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function openApprovalDialog(approvalId, status) {
   const approval = (state.data?.approvals || []).find((item) => item.id === approvalId);
   if (!approval) return;
@@ -565,6 +661,23 @@ function formatTime(value) {
     month: "short",
     day: "numeric"
   }).format(new Date(value));
+}
+
+function formatBytes(value) {
+  const number = Number(value) || 0;
+  if (number < 1024) return `${number} B`;
+  if (number < 1024 * 1024) return `${Math.round(number / 1024)} KB`;
+  return `${(number / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function escapeHtml(value) {
