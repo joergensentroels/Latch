@@ -26,7 +26,15 @@
           </div>
           <form id="loginForm" class="login-form">
             <label for="tokenInput">Operator key</label>
-            <input id="tokenInput" name="token" type="password" autocomplete="current-password" required>
+            <div class="password-field">
+              <input id="tokenInput" name="token" type="password" autocomplete="current-password" required>
+              <button id="toggleTokenVisibility" class="field-icon-button" type="button" aria-label="Show operator key" title="Show operator key">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
             <button type="submit">Unlock</button>
           </form>
         </div>
