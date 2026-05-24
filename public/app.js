@@ -53,8 +53,6 @@ const notifyButton = document.querySelector("#notifyButton");
 const backupButton = document.querySelector("#backupButton");
 const exportContextButton = document.querySelector("#exportContextButton");
 const backupStatus = document.querySelector("#backupStatus");
-const installHint = document.querySelector("#installHint");
-const dismissInstallHint = document.querySelector("#dismissInstallHint");
 const connectionDot = document.querySelector("#connectionDot");
 const connectionText = document.querySelector("#connectionText");
 const pendingSummary = document.querySelector("#pendingSummary");
@@ -252,12 +250,6 @@ installButton.addEventListener("click", async () => {
   installButton.classList.add("hidden");
 });
 
-dismissInstallHint.addEventListener("click", () => {
-  localStorage.setItem("latchInstallHintDismissed", "1");
-  localStorage.removeItem("commandCenterInstallHintDismissed");
-  installHint.classList.add("hidden");
-});
-
 approvalDialogClose.addEventListener("click", closeApprovalDialog);
 approvalDecisionCancel.addEventListener("click", closeApprovalDialog);
 approvalDialog.addEventListener("click", (event) => {
@@ -402,7 +394,6 @@ function render() {
   renderStatus();
   renderRouteWarning();
   renderNotificationButton();
-  renderInstallHint();
   maybeNotify();
   renderMessages();
   renderTasks();
@@ -452,12 +443,6 @@ function renderNotificationButton() {
   notifyButton.classList.toggle("active", permission === "granted");
   notifyButton.title = permission === "granted" ? "Notifications enabled" : "Enable notifications";
   notifyButton.setAttribute("aria-label", notifyButton.title);
-}
-
-function renderInstallHint() {
-  const dismissed = localStorage.getItem("latchInstallHintDismissed") === "1" || localStorage.getItem("commandCenterInstallHintDismissed") === "1";
-  const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
-  installHint.classList.toggle("hidden", dismissed || standalone);
 }
 
 function isPrivateRoute() {

@@ -235,31 +235,6 @@ button[type="submit"]:hover,
   background: var(--danger);
 }
 
-.install-hint {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 12px;
-  border: 1px solid #99d6cd;
-  border-radius: 8px;
-  background: #e6fffb;
-  color: #134e48;
-}
-
-.install-hint strong {
-  display: block;
-  margin-bottom: 2px;
-}
-
-.install-hint p {
-  margin: 0;
-  color: #2c6f68;
-  font-size: 0.9rem;
-  line-height: 1.35;
-}
-
 .route-warning {
   margin-bottom: 12px;
   padding: 12px;
