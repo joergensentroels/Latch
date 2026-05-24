@@ -13,9 +13,12 @@ This script does not execute tasks. It only:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
+import shlex
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -41,6 +44,21 @@ class ApprovalNeed:
     expected_response: str
     sensitive: bool
     command: str = ""
+    risk_level: str = "medium"
+    action_template: str = ""
+    action_preview: str = ""
+    rendered_commands: tuple[str, ...] = ()
+    execution_mode: str = "none"
+
+
+READ_ONLY_TEMPLATE_LABELS = {
+    "bridge.status": "Check Latch bridge service status",
+    "bridge.logs": "Read recent Latch bridge logs",
+    "openclaw.gateway.health": "Check OpenClaw Gateway health",
+    "docker.status": "Check OpenClaw Docker container status",
+    "tailscale.status": "Check Tailscale status",
+    "repo.status": "Check read-only Latch repo status",
+}
 
 
 RISK_RULES = [
@@ -93,6 +111,8 @@ def main() -> int:
     parser.add_argument("--agent-key", default=os.getenv("LATCH_AGENT_KEY", ""))
     parser.add_argument("--worker-name", default=os.getenv("LATCH_WORKER_NAME", socket.gethostname()))
     parser.add_argument("--openclaw-health-url", default=os.getenv("OPENCLAW_HEALTH_URL", ""))
+    parser.add_argument("--openclaw-compose-dir", default=os.getenv("OPENCLAW_COMPOSE_DIR", str(Path.home() / "openclaw")))
+    parser.add_argument("--latch-repo-dir", default=os.getenv("LATCH_REPO_DIR", str(Path.home() / "code" / "latch-readonly")))
     parser.add_argument("--interval", type=int, default=int(os.getenv("LATCH_POLL_INTERVAL", "15")))
     parser.add_argument("--state-path", default=os.getenv("LATCH_STATE_PATH", str(DEFAULT_STATE_PATH)))
     parser.add_argument("--max-tasks-per-tick", type=int, default=int(os.getenv("LATCH_MAX_TASKS_PER_TICK", "1")))
@@ -183,6 +203,7 @@ class Bridge:
             try:
                 approval = detect_approval_need(title, details)
                 if approval:
+                    approval = enrich_status_template(approval, self.args)
                     self.patch_task(task_id, "waiting", "Waiting for operator approval or human help.")
                     created = self.create_approval(approval, task_id=task_id)
                     suffix = f" ({created.get('id')})" if created else ""
@@ -248,6 +269,7 @@ class Bridge:
             try:
                 approval = detect_approval_need("Inbox instruction", text)
                 if approval:
+                    approval = enrich_status_template(approval, self.args)
                     created = self.create_approval(approval, message_id=message_id)
                     suffix = f" ({created.get('id')})" if created else ""
                     self.report(f"Approval requested for inbox instruction{suffix}.", message_id)
@@ -311,6 +333,11 @@ class Bridge:
                 "command": approval.command,
                 "expectedResponse": approval.expected_response,
                 "sensitive": approval.sensitive,
+                "riskLevel": approval.risk_level,
+                "actionTemplate": approval.action_template,
+                "actionPreview": approval.action_preview,
+                "renderedCommands": list(approval.rendered_commands),
+                "executionMode": approval.execution_mode,
                 "taskId": task_id,
                 "messageId": message_id,
             },
@@ -406,6 +433,23 @@ class Bridge:
                 ]
             return
 
+        if approval_type == "command" and approval.get("executionMode") == "read_only_status":
+            result = self.execute_read_only_template(approval)
+            self.report_execution(result)
+            summary = (
+                f"Read-only diagnostic completed: {title}\n\n"
+                f"Template: {result['template']}\n"
+                f"Exit code: {result['exitCode']}\n\n"
+                f"Output:\n{result['stdout'] or '(no stdout)'}"
+            )
+            if result.get("stderr"):
+                summary += f"\n\nErrors:\n{result['stderr']}"
+            self.report(clean(summary, 6000), task_id)
+            if approval.get("taskId"):
+                status = "done" if result["exitCode"] == 0 else "failed"
+                self.patch_task(task_id, status, f"Read-only diagnostic {result['template']} exited {result['exitCode']}.")
+            return
+
         if approval_type in {"command", "purchase"}:
             self.report(
                 f"Approval recorded: {title}\n\nThe text-only bridge will not execute commands, make purchases, or handle secrets yet."
@@ -467,6 +511,51 @@ class Bridge:
     def report(self, text: str, task_id: str = "") -> None:
         self.request_json("POST", "/api/agent/report", {"text": text, "taskId": task_id})
 
+    def execute_read_only_template(self, approval: dict) -> dict:
+        template_id = clean(approval.get("actionTemplate") or "", 80)
+        commands = command_template(template_id, self.args)
+        if not commands:
+            raise RuntimeError(f"Unknown or unavailable read-only template: {template_id}")
+        validate_read_only_commands(commands)
+
+        started_at = utc_now()
+        stdout_parts = []
+        stderr_parts = []
+        exit_code = 0
+        rendered = []
+        for command in commands:
+            rendered.append(render_command(command))
+            completed = subprocess.run(
+                command["argv"],
+                cwd=command.get("cwd") or None,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            if completed.stdout:
+                stdout_parts.append(f"$ {render_command(command)}\n{completed.stdout.strip()}")
+            if completed.stderr:
+                stderr_parts.append(f"$ {render_command(command)}\n{completed.stderr.strip()}")
+            if completed.returncode != 0 and exit_code == 0:
+                exit_code = completed.returncode
+                break
+
+        return {
+            "approvalId": clean(approval.get("id") or "", 120),
+            "taskId": clean(approval.get("taskId") or "", 120),
+            "template": template_id,
+            "commands": rendered,
+            "exitCode": exit_code,
+            "stdout": clean("\n\n".join(stdout_parts), 3000),
+            "stderr": clean("\n\n".join(stderr_parts), 3000),
+            "startedAt": started_at,
+            "finishedAt": utc_now(),
+        }
+
+    def report_execution(self, result: dict) -> None:
+        self.request_json("POST", "/api/agent/executions", result)
+
     def request_json(self, method: str, path: str, body: dict | None = None) -> dict | None:
         url = f"{self.args.base_url}{path}"
         data = None
@@ -502,6 +591,23 @@ def clean(value: object, limit: int) -> str:
 
 def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     text = f"{title}\n{details}".lower()
+    template_id = detect_status_template(text)
+    if template_id:
+        return ApprovalNeed(
+            type="command",
+            title="Read-only diagnostic approval needed",
+            details=(
+                "The request appears to ask for a read-only OpenClaw VM diagnostic.\n\n"
+                f"Original request:\n{clean((title + chr(10) + details), 1800)}"
+            ),
+            expected_response="Approve to run the named read-only diagnostic template, or deny to skip it.",
+            sensitive=False,
+            risk_level="low",
+            action_template=template_id,
+            action_preview=READ_ONLY_TEMPLATE_LABELS.get(template_id, template_id),
+            execution_mode="read_only_status",
+        )
+
     for approval_type, keywords, request_title, reason, expected, sensitive in RISK_RULES:
         matched = [keyword for keyword in keywords if keyword in text]
         if matched:
@@ -519,6 +625,42 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     return None
 
 
+def detect_status_template(text: str) -> str:
+    if any(phrase in text for phrase in ("bridge log", "agent log", "latch-agent-bridge log")):
+        return "bridge.logs"
+    if any(phrase in text for phrase in ("bridge status", "agent status", "latch-agent-bridge status")):
+        return "bridge.status"
+    if "gateway health" in text or "openclaw health" in text:
+        return "openclaw.gateway.health"
+    if "docker status" in text or "docker compose ps" in text or "container status" in text:
+        return "docker.status"
+    if "tailscale status" in text or "tailscale ip" in text:
+        return "tailscale.status"
+    if "repo status" in text or "git status" in text or "checkout status" in text:
+        return "repo.status"
+    return ""
+
+
+def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> ApprovalNeed:
+    if approval.execution_mode != "read_only_status" or not approval.action_template:
+        return approval
+    commands = command_template(approval.action_template, args)
+    rendered = tuple(render_command(command) for command in commands)
+    return ApprovalNeed(
+        type=approval.type,
+        title=approval.title,
+        details=approval.details,
+        expected_response=approval.expected_response,
+        sensitive=approval.sensitive,
+        command="\n".join(rendered),
+        risk_level=approval.risk_level,
+        action_template=approval.action_template,
+        action_preview=approval.action_preview,
+        rendered_commands=rendered,
+        execution_mode=approval.execution_mode,
+    )
+
+
 def is_generic_command_boundary(matched_keywords: list[str], command: str) -> bool:
     if command:
         return False
@@ -533,6 +675,58 @@ def extract_command(text: str) -> str:
         if line.startswith(("`", "$", ">", "sudo ", "docker ", "systemctl ", "ssh ", "scp ", "powershell"))
     ]
     return clean("\n".join(command_lines).replace("`", ""), 4000)
+
+
+def command_template(template_id: str, args: argparse.Namespace) -> list[dict]:
+    repo_dir = str(Path(args.latch_repo_dir).expanduser())
+    compose_dir = str(Path(args.openclaw_compose_dir).expanduser())
+    health_url = clean(args.openclaw_health_url or "http://127.0.0.1:18789/healthz", 300)
+    templates = {
+        "bridge.status": [
+            {"argv": ["systemctl", "is-active", "latch-agent-bridge"]},
+            {"argv": ["systemctl", "status", "latch-agent-bridge", "--no-pager"]},
+        ],
+        "bridge.logs": [
+            {"argv": ["journalctl", "-u", "latch-agent-bridge", "--no-pager", "-n", "80"]},
+        ],
+        "openclaw.gateway.health": [
+            {"argv": ["curl", "-fsS", health_url]},
+        ],
+        "docker.status": [
+            {"argv": ["docker", "compose", "ps"], "cwd": compose_dir},
+        ],
+        "tailscale.status": [
+            {"argv": ["tailscale", "status"]},
+            {"argv": ["tailscale", "ip", "-4"]},
+        ],
+        "repo.status": [
+            {"argv": ["git", "status", "--short"], "cwd": repo_dir},
+            {"argv": ["git", "rev-parse", "--short", "HEAD"], "cwd": repo_dir},
+        ],
+    }
+    return templates.get(template_id, [])
+
+
+def validate_read_only_commands(commands: list[dict]) -> None:
+    banned = {"sudo", "su", "rm", "mv", "cp", "install", "chmod", "chown", "apt", "apt-get", "tee", "sh", "bash", "powershell"}
+    for command in commands:
+        argv = command.get("argv") or []
+        if not argv or any(token in {"|", ">", ">>", "<", "&&", "||", ";"} for token in argv):
+            raise RuntimeError("Rejected unsafe diagnostic command shape.")
+        if argv[0] in banned:
+            raise RuntimeError(f"Rejected unsafe diagnostic command: {argv[0]}")
+
+
+def render_command(command: dict) -> str:
+    prefix = ""
+    if command.get("cwd"):
+        prefix = f"(cd {shlex.quote(command['cwd'])} && "
+    rendered = shlex.join(command["argv"])
+    return f"{prefix}{rendered}{')' if prefix else ''}"
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def context_briefing(items: list[dict], profile: dict | None = None) -> str:

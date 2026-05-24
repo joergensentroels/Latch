@@ -87,6 +87,7 @@ const lists = {
   tasks: document.querySelector("#tasksList"),
   approvals: document.querySelector("#approvalsList"),
   context: document.querySelector("#contextList"),
+  operations: document.querySelector("#operationsList"),
   archives: document.querySelector("#archivesList"),
   events: document.querySelector("#eventsList")
 };
@@ -411,6 +412,7 @@ function render() {
   renderProfile();
   renderContext();
   renderDiagnostics();
+  renderOperations();
   renderSecurityChecklist();
   renderArchives();
   renderEvents();
@@ -604,12 +606,30 @@ function renderApprovals() {
       <div class="meta-row">
         <span class="type-pill ${escapeHtml(approval.type || "other")}">${formatApprovalType(approval.type)}</span>
         ${approval.sensitive ? `<span class="type-pill sensitive">Sensitive</span>` : ""}
+        ${approval.riskLevel ? `<span class="type-pill risk-${escapeHtml(approval.riskLevel)}">${escapeHtml(approval.riskLevel)} risk</span>` : ""}
+        ${approval.executionMode === "read_only_status" ? `<span class="type-pill shared">Read-only</span>` : ""}
         <span class="item-meta">Requested by ${escapeHtml(approval.requestedBy || "agent")}</span>
       </div>
+      ${approval.actionPreview || approval.actionTemplate ? `
+        <div class="approval-summary">
+          <strong>${escapeHtml(approval.actionPreview || commandTemplateLabel(approval.actionTemplate))}</strong>
+          <p>${escapeHtml(approvalActionOutcome(approval))}</p>
+        </div>
+      ` : ""}
       <p class="item-body">${escapeHtml(approval.details)}</p>
       ${approvalAdvice(approval) ? `<p class="approval-advice">${escapeHtml(approvalAdvice(approval))}</p>` : ""}
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
-      ${approval.command ? `<pre class="item-body">${escapeHtml(approval.command)}</pre>` : ""}
+      ${approval.renderedCommands?.length ? `
+        <details class="command-details">
+          <summary>Show exact command${approval.renderedCommands.length === 1 ? "" : "s"}</summary>
+          <pre class="item-body">${escapeHtml(approval.renderedCommands.join("\n"))}</pre>
+        </details>
+      ` : approval.command ? `
+        <details class="command-details">
+          <summary>Show exact command</summary>
+          <pre class="item-body">${escapeHtml(approval.command)}</pre>
+        </details>
+      ` : ""}
       ${approval.responseNote ? `<p class="help-note"><strong>Operator note:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
       ${approval.status === "pending" ? `
         <div class="approval-actions">
@@ -764,6 +784,9 @@ function approvalPlaceholder(approval, status) {
 }
 
 function approvalAdvice(approval) {
+  if (approval.type === "command" && approval.executionMode === "read_only_status" && approval.actionTemplate) {
+    return "This can only run the named read-only diagnostic template after approval. Raw command text is not executed.";
+  }
   if (approval.type === "command" && !approval.command) {
     return "No exact command is attached. Deny this unless you are only recording a boundary or manual result.";
   }
@@ -774,6 +797,31 @@ function approvalAdvice(approval) {
     return "Purchase request. Approve only after checking cost, vendor, and the exact manual action.";
   }
   return "";
+}
+
+function approvalActionOutcome(approval) {
+  if (approval.executionMode === "read_only_status") {
+    return "If approved, the worker runs this fixed read-only diagnostic and records a trimmed audit result.";
+  }
+  if (approval.type === "command") {
+    return "Approval records your decision; the current bridge will not execute arbitrary commands.";
+  }
+  if (approval.sensitive) {
+    return "Approval records a human step; sensitive notes stay inside Latch.";
+  }
+  return "Approval records your decision for the worker.";
+}
+
+function commandTemplateLabel(value) {
+  const labels = {
+    "bridge.status": "Check bridge status",
+    "bridge.logs": "Read bridge logs",
+    "openclaw.gateway.health": "Check OpenClaw Gateway health",
+    "docker.status": "Check Docker status",
+    "tailscale.status": "Check Tailscale status",
+    "repo.status": "Check repo status"
+  };
+  return labels[value] || value || "Diagnostic";
 }
 
 function formatApprovalType(value) {
@@ -812,7 +860,9 @@ function renderDiagnostics() {
   const messages = state.data?.messages || [];
   const tasks = state.data?.tasks || [];
   const approvals = state.data?.approvals || [];
+  const executions = state.data?.executions || [];
   const latestAgentMessage = messages.find((message) => message.direction === "agent_to_operator");
+  const latestExecution = executions[0];
   const openTasks = tasks.filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const pendingApprovals = approvals.filter((item) => item.status === "pending").length;
   const llmReady = Boolean(state.llmConfig?.enabled);
@@ -842,6 +892,12 @@ function renderDiagnostics() {
       note: latestAgentMessage ? latestAgentMessage.text.slice(0, 140) : ""
     },
     {
+      label: "Last Diagnostic",
+      value: latestExecution ? `${commandTemplateLabel(latestExecution.template)} / ${latestExecution.exitCode}` : "None yet",
+      status: !latestExecution ? "warn" : latestExecution.exitCode === 0 ? "ok" : "bad",
+      note: latestExecution ? formatTime(latestExecution.finishedAt || latestExecution.createdAt) : "Read-only operations have not run yet"
+    },
+    {
       label: "Server",
       value: `v${about.version || "dev"} / PID ${about.pid || "?"}`,
       status: "ok",
@@ -868,6 +924,30 @@ function renderDiagnostics() {
       ${card.note ? `<p>${escapeHtml(card.note)}</p>` : ""}
     </article>
   `).join("");
+}
+
+function renderOperations() {
+  const executions = state.data?.executions || [];
+  renderList(lists.operations, executions.slice(0, 8), (item) => `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(commandTemplateLabel(item.template))}</h2>
+        <span class="badge ${item.exitCode === 0 ? "done" : "failed"}">${escapeHtml(String(item.exitCode))}</span>
+      </div>
+      <div class="meta-row">
+        <span class="type-pill shared">Read-only</span>
+        <span class="item-meta">${formatTime(item.finishedAt || item.createdAt)}</span>
+      </div>
+      ${(item.commands || []).length ? `
+        <details class="command-details">
+          <summary>Show exact command${item.commands.length === 1 ? "" : "s"}</summary>
+          <pre class="item-body">${escapeHtml(item.commands.join("\n"))}</pre>
+        </details>
+      ` : ""}
+      ${item.stdout ? `<pre class="item-body">${escapeHtml(item.stdout)}</pre>` : ""}
+      ${item.stderr ? `<p class="approval-advice">${escapeHtml(item.stderr)}</p>` : ""}
+    </article>
+  `);
 }
 
 function renderSecurityChecklist() {

@@ -106,6 +106,8 @@ OPENCLAW_HEALTH_URL=http://127.0.0.1:<gateway-port>/health
 
 The bridge is intentionally text-only. It does not execute commands, control finance, access credentials, control a browser, or receive provider API keys.
 
+Approved read-only diagnostics are the only exception. The bridge can run fixed internal templates such as bridge status, recent bridge logs, OpenClaw Gateway health, Docker status, Tailscale status, and read-only repo status. It does not run raw command text supplied by Latch, and it does not use `sudo`, write files, install packages, restart services, or run shell pipelines.
+
 Test once:
 
 ```bash
@@ -140,6 +142,17 @@ sudo journalctl -u latch-agent-bridge -f
 sudo systemctl restart latch-agent-bridge
 sudo systemctl stop latch-agent-bridge
 sudo systemctl disable latch-agent-bridge
+```
+
+Read-only diagnostic templates exposed through Latch approvals:
+
+```text
+bridge.status
+bridge.logs
+openclaw.gateway.health
+docker.status
+tailscale.status
+repo.status
 ```
 
 Bridge one-shot test:

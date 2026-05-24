@@ -61,11 +61,19 @@ try {
       type: "command",
       title: "Command approval",
       details: "Test command approval",
+      riskLevel: "low",
+      actionTemplate: "bridge.status",
+      actionPreview: "Check bridge status",
+      renderedCommands: ["systemctl is-active latch-agent-bridge"],
+      executionMode: "read_only_status",
       taskId: task.id
     }
   });
   assert(approval.requestedBy === "agent", "approval should record agent requester");
   assert(approval.taskId === task.id, "approval should keep source task id");
+  assert(approval.actionTemplate === "bridge.status", "approval should store action template");
+  assert(approval.executionMode === "read_only_status", "approval should store execution mode");
+  assert(approval.renderedCommands[0].includes("systemctl"), "approval should store rendered commands");
 
   const note = await request("/api/context/notes", {
     method: "POST",
@@ -120,9 +128,34 @@ try {
   assert(poll.contextItems.find((item) => item.id === fileItem.id).contentText.includes("small context"), "shared text file content should be included in agent context");
   assert(poll.contextItems.some((item) => item.id === fileItem.id), "agent poll should keep shared file metadata");
 
+  await expectStatus("/api/agent/executions", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: JSON.stringify({ template: "bridge.status" })
+  }, 403);
+
+  const execution = await request("/api/agent/executions", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      approvalId: approval.id,
+      taskId: task.id,
+      template: "bridge.status",
+      commands: ["systemctl is-active latch-agent-bridge"],
+      exitCode: 0,
+      stdout: "active",
+      stderr: "",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString()
+    }
+  });
+  assert(execution.template === "bridge.status", "execution report should store template");
+  assert(execution.stdout === "active", "execution report should store trimmed stdout");
+
   const visible = await request("/api/state", { headers: operatorHeaders });
   assert(visible.contextItems.some((item) => item.id === fileItem.id), "operator state should include context items");
   assert(visible.contextItems.some((item) => item.originApprovalId === contextQuestion.id), "approved context questions should save operator answers");
+  assert(visible.executions.some((item) => item.id === execution.id), "operator state should include execution audits");
 
   const about = await request("/api/about", { headers: operatorHeaders });
   assert(about.version, "about endpoint should expose version");

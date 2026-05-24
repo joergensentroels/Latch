@@ -667,6 +667,29 @@ button[type="submit"]:hover,
   overflow-wrap: anywhere;
 }
 
+.approval-summary {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.approval-summary strong,
+.command-details summary {
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.approval-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
 .approval-advice {
   margin: 10px 0 0;
   padding: 10px;
@@ -676,6 +699,30 @@ button[type="submit"]:hover,
   color: #7a4f01;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.command-details {
+  margin-top: 10px;
+}
+
+.command-details summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.type-pill.risk-low {
+  background: #ecfdf3;
+  color: var(--ok);
+}
+
+.type-pill.risk-medium {
+  background: #fffaeb;
+  color: var(--warn);
+}
+
+.type-pill.risk-high {
+  background: #fff1f3;
+  color: #c01048;
 }
 
 .badge {

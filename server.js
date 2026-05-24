@@ -19,6 +19,16 @@ const maxUploadBytes = 2_000_000;
 const maxUploadBodyBytes = 3_000_000;
 const maxSharedFileBytes = 200_000;
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
+const executionModes = ["none", "read_only_status"];
+const riskLevels = ["low", "medium", "high"];
+const actionTemplates = [
+  "bridge.status",
+  "bridge.logs",
+  "openclaw.gateway.health",
+  "docker.status",
+  "tailscale.status",
+  "repo.status"
+];
 const hosts = (process.env.HOSTS || process.env.HOST || "127.0.0.1")
   .split(",")
   .map((value) => value.trim())
@@ -51,7 +61,8 @@ const emptyDb = {
   approvals: [],
   events: [],
   attachments: [],
-  contextItems: []
+  contextItems: [],
+  executions: []
 };
 
 await mkdir(dataDir, { recursive: true });
@@ -170,6 +181,7 @@ async function handleApi(req, res, url) {
         tasks: activeItems(db.tasks).length,
         approvals: activeItems(db.approvals).length,
         contextItems: activeItems(db.contextItems).length,
+        executions: activeItems(db.executions).length,
         archived: countArchived(db)
       },
       llm: publicLlmConfig(llm),
@@ -349,6 +361,11 @@ async function handleApi(req, res, url) {
       taskId: cleanText(body.taskId || "", 120),
       messageId: cleanText(body.messageId || "", 120),
       sensitive: Boolean(body.sensitive),
+      riskLevel: cleanChoice(body.riskLevel, riskLevels, body.sensitive ? "high" : "medium"),
+      actionTemplate: cleanChoice(body.actionTemplate, actionTemplates, ""),
+      actionPreview: cleanText(body.actionPreview || "", 500),
+      renderedCommands: cleanTextArray(body.renderedCommands, 8, 500),
+      executionMode: cleanChoice(body.executionMode, executionModes, "none"),
       status: "pending",
       requestedBy: role,
       createdAt: new Date().toISOString(),
@@ -602,8 +619,36 @@ async function handleApi(req, res, url) {
       messages: activeItems(db.messages).slice(0, 20),
       approvals: activeItems(db.approvals).slice(0, 50),
       profile: publicAgentProfile(db.meta.agentProfile),
-      contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50))
+      contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50)),
+      executions: activeItems(db.executions).slice(0, 20)
     });
+    return;
+  }
+
+  if (url.pathname === "/api/agent/executions" && req.method === "POST") {
+    requireAgent(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    const execution = {
+      id: newId("exec"),
+      approvalId: cleanText(body.approvalId || "", 120),
+      taskId: cleanText(body.taskId || "", 120),
+      template: cleanChoice(body.template, actionTemplates, ""),
+      commands: cleanTextArray(body.commands, 12, 500),
+      exitCode: cleanInteger(body.exitCode, -1, 255, -1),
+      stdout: cleanText(body.stdout || "", 3000),
+      stderr: cleanText(body.stderr || "", 3000),
+      startedAt: cleanText(body.startedAt || new Date().toISOString(), 80),
+      finishedAt: cleanText(body.finishedAt || new Date().toISOString(), 80),
+      requestedBy: role,
+      createdAt: new Date().toISOString()
+    };
+    db.executions.unshift(execution);
+    db.events.unshift(event("execution.reported", role, execution.id, `${execution.template || "unknown"}: ${execution.exitCode}`));
+    await writeDb(db);
+    sendJson(res, 201, execution);
     return;
   }
 
@@ -912,6 +957,7 @@ function visibleState(db) {
     messages: activeItems(db.messages).slice(0, 100),
     tasks: activeItems(db.tasks).slice(0, 100),
     approvals: activeItems(db.approvals).slice(0, 100),
+    executions: activeItems(db.executions).slice(0, 100),
     events: db.events.slice(0, 100),
     contextItems: activeItems(db.contextItems).slice(0, 100).map(operatorContextItem),
     archives: {
@@ -932,6 +978,7 @@ function normalizeDb(db) {
   db.events = Array.isArray(db.events) ? db.events : [];
   db.attachments = Array.isArray(db.attachments) ? db.attachments : [];
   db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
+  db.executions = Array.isArray(db.executions) ? db.executions : [];
   return db;
 }
 
@@ -1088,6 +1135,20 @@ function cleanText(value, maxLength) {
 
 function cleanChoice(value, choices, fallback) {
   return choices.includes(value) ? value : fallback;
+}
+
+function cleanInteger(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isInteger(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
+function cleanTextArray(value, maxItems, maxLength) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => cleanText(item, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
 }
 
 function cleanCategory(value) {
