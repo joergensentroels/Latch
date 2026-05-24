@@ -314,11 +314,15 @@ class Bridge:
                     f"{f' Operator note: {note}' if note else ''}",
                     task_id,
                 )
+                if approval.get("taskId"):
+                    self.patch_task(task_id, "paused", "Approval recorded. Execution is not enabled in text-only mode.")
             else:
                 self.report(
                     f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
                     task_id,
                 )
+                if approval.get("taskId"):
+                    self.patch_task(task_id, "failed", "Approval denied by operator.")
             seen.add(approval_id)
             self.state["seen_approval_decisions"] = sorted(seen)[-500:]
 
