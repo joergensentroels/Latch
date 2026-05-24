@@ -26,9 +26,15 @@ const taskDetails = document.querySelector("#taskDetails");
 const taskPriority = document.querySelector("#taskPriority");
 const contextNoteForm = document.querySelector("#contextNoteForm");
 const contextTitle = document.querySelector("#contextTitle");
+const contextCategory = document.querySelector("#contextCategory");
+const contextTags = document.querySelector("#contextTags");
 const contextText = document.querySelector("#contextText");
+const contextShare = document.querySelector("#contextShare");
 const contextFileForm = document.querySelector("#contextFileForm");
 const contextFileInput = document.querySelector("#contextFileInput");
+const contextFileCategory = document.querySelector("#contextFileCategory");
+const contextFileTags = document.querySelector("#contextFileTags");
+const contextFileShare = document.querySelector("#contextFileShare");
 const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
 const installButton = document.querySelector("#installButton");
@@ -113,10 +119,18 @@ contextNoteForm.addEventListener("submit", async (event) => {
   await withSubmitLock(contextNoteForm, async () => {
     await api("/api/context/notes", {
       method: "POST",
-      body: JSON.stringify({ title, text })
+      body: JSON.stringify({
+        title,
+        text,
+        category: contextCategory.value,
+        tags: tagsFromInput(contextTags.value),
+        shareWithAgent: contextShare.checked
+      })
     });
     contextTitle.value = "";
+    contextTags.value = "";
     contextText.value = "";
+    contextShare.checked = true;
     await refresh();
   });
 });
@@ -138,10 +152,15 @@ contextFileForm.addEventListener("submit", async (event) => {
         name: file.name,
         type: file.type || "application/octet-stream",
         size: file.size,
+        category: contextFileCategory.value,
+        tags: tagsFromInput(contextFileTags.value),
+        shareWithAgent: contextFileShare.checked,
         contentBase64
       })
     });
     contextFileInput.value = "";
+    contextFileTags.value = "";
+    contextFileShare.checked = false;
     await refresh();
   });
 });
@@ -335,7 +354,9 @@ function maybeNotify() {
       .map((item) => ({
         id: item.id,
         title: "Latch needs attention",
-        body: item.type === "human_verification" ? "Human help is needed. Open Latch to review." : "Approval requested. Open Latch to review.",
+        body: item.type === "human_verification" || item.type === "context_question"
+          ? "Human input is needed. Open Latch to review."
+          : "Approval requested. Open Latch to review.",
         url: "/?tab=approvals"
       })),
     ...(state.data?.messages || [])
@@ -441,7 +462,7 @@ function renderApprovals() {
     ? allApprovals.filter((approval) => approval.status === "pending")
     : allApprovals;
   renderList(lists.approvals, approvals, (approval) => `
-    <article class="item ${approval.type === "human_verification" ? "human-request" : ""}">
+    <article class="item ${["human_verification", "context_question"].includes(approval.type) ? "human-request" : ""}">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(approval.title)}</h2>
         <span class="badge ${escapeHtml(approval.status)}">${escapeHtml(approval.status)}</span>
@@ -457,8 +478,8 @@ function renderApprovals() {
       ${approval.responseNote ? `<p class="help-note"><strong>Operator note:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
       ${approval.status === "pending" ? `
         <div class="approval-actions">
-          <button class="secondary-button" data-approval="${approval.id}" data-status="approved">${approval.type === "human_verification" ? "Mark done" : "Approve"}</button>
-          <button class="danger-button" data-approval="${approval.id}" data-status="denied">${approval.type === "human_verification" ? "Cannot help" : "Deny"}</button>
+          <button class="secondary-button" data-approval="${approval.id}" data-status="approved">${approvalActionLabel(approval, "approved")}</button>
+          <button class="danger-button" data-approval="${approval.id}" data-status="denied">${approvalActionLabel(approval, "denied")}</button>
         </div>
       ` : ""}
     </article>
@@ -480,22 +501,43 @@ function renderContext() {
         <span class="badge">${escapeHtml(item.kind || "note")}</span>
       </div>
       <div class="meta-row">
+        <span class="type-pill">${formatContextCategory(item.category)}</span>
+        ${(item.tags || []).map((tag) => `<span class="type-pill neutral">${escapeHtml(tag)}</span>`).join("")}
+        ${item.shareWithAgent ? `<span class="type-pill shared">Shared</span>` : `<span class="type-pill neutral">Private</span>`}
         <span class="item-meta">${escapeHtml(item.source || "operator")}</span>
         <span class="item-meta">${formatTime(item.createdAt)}</span>
         ${item.kind === "file" ? `<span class="item-meta">${escapeHtml(formatBytes(item.size || 0))}</span>` : ""}
       </div>
       ${item.kind === "file" ? `
         <p class="item-body">${escapeHtml(item.name || "")}</p>
+        ${item.shareStatus ? `<p class="help-note">${escapeHtml(item.shareStatus)}</p>` : ""}
         <div class="approval-actions">
           <button class="secondary-button" data-context-download="${escapeHtml(item.id)}" type="button">Download</button>
+          <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Share"}</button>
         </div>
-      ` : `<p class="item-body">${escapeHtml(item.text || item.preview || "")}</p>`}
+      ` : `
+        <p class="item-body">${escapeHtml(item.text || item.preview || "")}</p>
+        <div class="approval-actions">
+          <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Share"}</button>
+        </div>
+      `}
     </article>
   `);
 
   lists.context.querySelectorAll("[data-context-download]").forEach((button) => {
     button.addEventListener("click", () => downloadContextFile(button.dataset.contextDownload));
   });
+  lists.context.querySelectorAll("[data-context-share]").forEach((button) => {
+    button.addEventListener("click", () => updateContextShare(button.dataset.contextShare, button.dataset.contextShareValue === "true"));
+  });
+}
+
+async function updateContextShare(id, shareWithAgent) {
+  await api(`/api/context/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ shareWithAgent })
+  });
+  await refresh();
 }
 
 async function downloadContextFile(id) {
@@ -524,8 +566,8 @@ function openApprovalDialog(approvalId, status) {
   const isApproved = status === "approved";
   approvalDialogEyebrow.textContent = formatApprovalType(approval.type);
   approvalDialogTitle.textContent = isApproved
-    ? (approval.type === "human_verification" ? "Mark Done" : "Approve Request")
-    : (approval.type === "human_verification" ? "Cannot Help" : "Deny Request");
+    ? (approval.type === "context_question" ? "Save Answer" : (approval.type === "human_verification" ? "Mark Done" : "Approve Request"))
+    : (approval.type === "context_question" ? "Skip Question" : (approval.type === "human_verification" ? "Cannot Help" : "Deny Request"));
   approvalDialogSummary.textContent = approval.title;
   approvalDecisionNote.value = "";
   approvalDecisionNote.placeholder = approvalPlaceholder(approval, status);
@@ -565,6 +607,7 @@ async function submitApprovalDecision(event) {
 
 function approvalPlaceholder(approval, status) {
   if (status === "denied") return "Reason or safer alternative";
+  if (approval.type === "context_question") return "Your answer will be saved into Context and shared with the worker";
   if (approval.type === "human_verification") return "Verification completed, or short result";
   if (approval.type === "credential") return "Minimum non-secret result, never a password";
   if (approval.type === "command") return "Reviewed scope or manual result";
@@ -576,12 +619,19 @@ function formatApprovalType(value) {
   const labels = {
     command: "Command",
     human_verification: "Human verification",
+    context_question: "Context question",
     account_setup: "Account setup",
     purchase: "Purchase",
     credential: "Credential",
     other: "Other"
   };
   return labels[value] || "Other";
+}
+
+function approvalActionLabel(approval, status) {
+  if (approval.type === "context_question") return status === "approved" ? "Save answer" : "Skip";
+  if (approval.type === "human_verification") return status === "approved" ? "Mark done" : "Cannot help";
+  return status === "approved" ? "Approve" : "Deny";
 }
 
 function renderEvents() {
@@ -668,6 +718,27 @@ function formatBytes(value) {
   if (number < 1024) return `${number} B`;
   if (number < 1024 * 1024) return `${Math.round(number / 1024)} KB`;
   return `${(number / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatContextCategory(value) {
+  const labels = {
+    goals: "Goals",
+    personality: "Personality",
+    security: "Security",
+    project: "Project",
+    memory: "Memory",
+    reference: "Reference",
+    other: "Other"
+  };
+  return labels[value] || "Memory";
+}
+
+function tagsFromInput(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 async function fileToBase64(file) {

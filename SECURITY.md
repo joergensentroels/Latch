@@ -54,7 +54,15 @@ data/db.json
 data/context-files/
 ```
 
-Treat this as private data. It can contain goals, notes, uploaded documents, and other sensitive context. Agents currently receive context metadata and note previews, not uploaded file bytes, through their poll endpoint.
+Treat this as private data. It can contain goals, notes, uploaded documents, and other sensitive context.
+
+Agents receive:
+
+- metadata for recent context items
+- full note text only when the item is marked `shareWithAgent`
+- text-like uploaded file contents only when explicitly shared and no larger than 200 KB
+
+Keep secrets, recovery codes, payment data, and long-lived credentials out of shared context.
 
 To rotate keys:
 
@@ -65,11 +73,13 @@ To rotate keys:
 
 ## Current Bridge Safety
 
-`openclaw-agent-bridge.ps1` does not execute tasks. It only:
+`worker/latch-agent-bridge.py` does not execute tasks. It only:
 
 - connects to Latch
 - polls queued work
-- reports that it observed queued tasks
+- sends safe text-only prompts through the Latch LLM gateway
+- uses explicitly shared context as a briefing
+- creates approval cards for risky actions and context questions
 
 Execution should be added only after approval handling and command allowlists are designed.
 

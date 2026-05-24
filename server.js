@@ -15,6 +15,8 @@ const notificationConfigPath = path.join(dataDir, "notifications.json");
 const contextFilesDir = path.join(dataDir, "context-files");
 const maxUploadBytes = 2_000_000;
 const maxUploadBodyBytes = 3_000_000;
+const maxSharedFileBytes = 200_000;
+const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
 const hosts = (process.env.HOSTS || process.env.HOST || "127.0.0.1")
   .split(",")
   .map((value) => value.trim())
@@ -245,11 +247,13 @@ async function handleApi(req, res, url) {
     const db = await readDb();
     const approval = {
       id: newId("approval"),
-      type: cleanChoice(body.type || body.kind, ["command", "human_verification", "account_setup", "purchase", "credential", "other"], "other"),
+      type: cleanChoice(body.type || body.kind, ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "other"], "other"),
       title: cleanText(body.title || "Approval requested", 160),
       details: cleanText(body.details || "", 6000),
       command: cleanText(body.command || "", 4000),
       expectedResponse: cleanText(body.expectedResponse || body.resultNeeded || "", 1000),
+      contextCategory: cleanCategory(body.contextCategory || body.category || "memory"),
+      contextTags: cleanTags(body.contextTags || body.tags),
       taskId: cleanText(body.taskId || "", 120),
       messageId: cleanText(body.messageId || "", 120),
       sensitive: Boolean(body.sensitive),
@@ -264,7 +268,9 @@ async function handleApi(req, res, url) {
     await sendNotification({
       type: "approval.requested",
       title: "Latch needs attention",
-      body: approval.type === "human_verification" ? "Human help is needed. Open Latch to review." : "Approval requested. Open Latch to review.",
+      body: approval.type === "human_verification" || approval.type === "context_question"
+        ? "Human input is needed. Open Latch to review."
+        : "Approval requested. Open Latch to review.",
       url: "/?tab=approvals"
     });
     sendJson(res, 201, approval);
@@ -288,6 +294,19 @@ async function handleApi(req, res, url) {
     approval.responseNote = cleanText(body.note || "", 2000);
     approval.updatedAt = new Date().toISOString();
     db.events.unshift(event(`approval.${approval.status}`, "operator", approval.id, approval.title));
+    if (approval.type === "context_question" && approval.status === "approved" && approval.responseNote) {
+      const contextItem = createContextNote({
+        title: approval.title,
+        text: approval.responseNote,
+        category: approval.contextCategory || "memory",
+        tags: approval.contextTags || ["operator-answer"],
+        shareWithAgent: true,
+        source: "operator",
+        originApprovalId: approval.id
+      });
+      db.contextItems.unshift(contextItem);
+      db.events.unshift(event("context.answer.saved", "operator", contextItem.id, contextItem.title));
+    }
     await writeDb(db);
     sendJson(res, 200, approval);
     return;
@@ -305,16 +324,14 @@ async function handleApi(req, res, url) {
     }
 
     const db = await readDb();
-    const item = {
-      id: newId("ctx"),
-      kind: "note",
-      title: cleanText(body.title || firstLine(text) || "Context note", 160),
+    const item = createContextNote({
+      title: body.title || firstLine(text) || "Context note",
       text,
-      preview: text.slice(0, 500),
-      source: "operator",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      category: body.category || "memory",
+      tags: body.tags,
+      shareWithAgent: cleanBoolean(body.shareWithAgent, true),
+      source: "operator"
+    });
     db.contextItems.unshift(item);
     db.events.unshift(event("context.note.created", "operator", item.id, item.title));
     await writeDb(db);
@@ -366,6 +383,10 @@ async function handleApi(req, res, url) {
       mimeType: cleanText(body.type || "application/octet-stream", 120),
       size: bytes.length,
       storedName,
+      category: cleanCategory(body.category || "reference"),
+      tags: cleanTags(body.tags),
+      shareWithAgent: cleanBoolean(body.shareWithAgent, false),
+      shareStatus: fileShareStatus(cleanText(body.type || "application/octet-stream", 120), bytes.length, name),
       source: "operator",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -409,6 +430,30 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (url.pathname.startsWith("/api/context/") && req.method === "PATCH") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const id = url.pathname.split("/").at(-1);
+    const db = await readDb();
+    const item = db.contextItems.find((entry) => entry.id === id);
+    if (!item) {
+      sendJson(res, 404, { error: "not_found" });
+      return;
+    }
+
+    if (body.category !== undefined) item.category = cleanCategory(body.category);
+    if (body.tags !== undefined) item.tags = cleanTags(body.tags);
+    if (body.shareWithAgent !== undefined) item.shareWithAgent = cleanBoolean(body.shareWithAgent, item.shareWithAgent);
+    if (item.kind === "file") item.shareStatus = fileShareStatus(item.mimeType || "", item.size || 0, item.name || "");
+    item.updatedAt = new Date().toISOString();
+    db.events.unshift(event("context.updated", "operator", item.id, item.title || item.name || "Context"));
+    await writeDb(db);
+    sendJson(res, 200, operatorContextItem(item));
+    return;
+  }
+
   if (url.pathname === "/api/agent/poll" && req.method === "GET") {
     requireAgent(role, res);
     if (res.writableEnded) return;
@@ -418,7 +463,7 @@ async function handleApi(req, res, url) {
       tasks: db.tasks.filter((task) => ["queued", "running", "waiting"].includes(task.status)),
       messages: db.messages.slice(0, 20),
       approvals: db.approvals.slice(0, 50),
-      contextItems: db.contextItems.slice(0, 50).map(publicContextItem)
+      contextItems: await agentContextItems(db.contextItems.slice(0, 50))
     });
     return;
   }
@@ -731,6 +776,9 @@ function publicContextItem(item) {
     id: item.id,
     kind: item.kind,
     title: item.title || item.name || "Context",
+    category: item.category || "memory",
+    tags: Array.isArray(item.tags) ? item.tags : [],
+    shareWithAgent: Boolean(item.shareWithAgent),
     source: item.source || "operator",
     createdAt: item.createdAt,
     updatedAt: item.updatedAt
@@ -740,7 +788,8 @@ function publicContextItem(item) {
       ...base,
       name: item.name,
       mimeType: item.mimeType,
-      size: item.size
+      size: item.size,
+      shareStatus: item.shareStatus || fileShareStatus(item.mimeType || "", item.size || 0, item.name || "")
     };
   }
   return {
@@ -753,10 +802,48 @@ function operatorContextItem(item) {
   if (item.kind === "note") {
     return {
       ...publicContextItem(item),
-      text: item.text || ""
+      text: item.text || "",
+      originApprovalId: item.originApprovalId || ""
     };
   }
-  return publicContextItem(item);
+  return {
+    ...publicContextItem(item),
+    originApprovalId: item.originApprovalId || ""
+  };
+}
+
+async function agentContextItems(items) {
+  const result = [];
+  for (const item of items) {
+    const visible = publicContextItem(item);
+    if (item.shareWithAgent) {
+      if (item.kind === "note") {
+        visible.text = cleanText(item.text, 4000);
+      } else if (item.kind === "file" && canShareFileContent(item)) {
+        visible.contentText = await readSharedFileText(item);
+      }
+    }
+    result.push(visible);
+  }
+  return result;
+}
+
+function createContextNote({ title, text, category, tags, shareWithAgent, source, originApprovalId = "" }) {
+  const cleanedText = cleanText(text, 12000);
+  return {
+    id: newId("ctx"),
+    kind: "note",
+    title: cleanText(title || firstLine(cleanedText) || "Context note", 160),
+    text: cleanedText,
+    preview: cleanedText.slice(0, 500),
+    category: cleanCategory(category || "memory"),
+    tags: cleanTags(tags),
+    shareWithAgent: Boolean(shareWithAgent),
+    source: cleanText(source || "operator", 80),
+    originApprovalId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function event(type, actor, targetId, summary) {
@@ -776,6 +863,19 @@ function cleanText(value, maxLength) {
 
 function cleanChoice(value, choices, fallback) {
   return choices.includes(value) ? value : fallback;
+}
+
+function cleanCategory(value) {
+  return cleanChoice(String(value || "memory").toLowerCase(), contextCategories, "memory");
+}
+
+function cleanTags(value) {
+  const raw = Array.isArray(value) ? value : String(value || "").split(",");
+  return raw
+    .map((item) => cleanText(item, 40).toLowerCase())
+    .map((item) => item.replace(/[^a-z0-9._ -]/g, "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 function firstLine(value) {
@@ -801,6 +901,38 @@ function formatBytes(value) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function isTextLike(mimeType, name = "") {
+  const type = String(mimeType || "").toLowerCase();
+  const ext = path.extname(String(name || "")).toLowerCase();
+  return type.startsWith("text/")
+    || ["application/json", "application/xml", "application/javascript"].includes(type)
+    || [".txt", ".md", ".json", ".csv", ".tsv", ".xml", ".yaml", ".yml", ".log"].includes(ext);
+}
+
+function fileShareStatus(mimeType, size, name = "") {
+  if (size > maxSharedFileBytes) return `Too large to share automatically (${formatBytes(maxSharedFileBytes)} max).`;
+  if (!isTextLike(mimeType, name)) return "Only text-like files can be shared with the worker.";
+  return "Ready to share when enabled.";
+}
+
+function canShareFileContent(item) {
+  return Boolean(item.shareWithAgent)
+    && item.kind === "file"
+    && Number(item.size || 0) <= maxSharedFileBytes
+    && isTextLike(item.mimeType, item.name);
+}
+
+async function readSharedFileText(item) {
+  try {
+    const storedPath = path.join(contextFilesDir, item.storedName || "");
+    if (!isInsideDirectory(storedPath, contextFilesDir)) return "";
+    const text = await readFile(storedPath, "utf8");
+    return cleanText(text, 8000);
+  } catch {
+    return "";
+  }
 }
 
 function cleanBoolean(value, fallback) {

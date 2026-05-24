@@ -182,7 +182,12 @@ Current limits:
 
 - file uploads are limited to 2 MB each
 - operators can see full note text and download files
-- agents receive only safe context metadata and note previews through `/api/agent/poll`
+- context items can be categorized as `goals`, `personality`, `security`, `project`, `memory`, `reference`, or `other`
+- notes can be shared with the worker as durable memory
+- file contents are private by default and are shared only when explicitly enabled
+- shared file contents are sent to the worker only for text-like files up to 200 KB
+
+For normal context, use the Latch browser/app upload flow. SSH is still fine for large files, VM administration, or one-off maintenance, but files copied directly over SSH are not automatically tracked in Latch Context unless you add a note or future import step.
 
 ## Agent API
 
@@ -202,7 +207,7 @@ Poll work:
 GET /api/agent/poll
 ```
 
-The poll response includes queued tasks, recent messages, approvals, and recent context metadata. File bytes are not returned by the agent poll endpoint.
+The poll response includes queued tasks, recent messages, approvals, and recent context. Only explicitly shared notes and small text-like file contents are included for the worker.
 
 Report status:
 
@@ -244,6 +249,24 @@ Content-Type: application/json
   "sensitive": true
 }
 ```
+
+Ask the operator a context question:
+
+```http
+POST /api/approvals
+Content-Type: application/json
+
+{
+  "type": "context_question",
+  "title": "Context question",
+  "details": "- What should the worker optimize for?",
+  "expectedResponse": "Answer this if you want it saved as worker context.",
+  "contextCategory": "personality",
+  "contextTags": ["operator-answer"]
+}
+```
+
+When the operator saves an answer, Latch stores it as a shared Context note.
 
 Supported approval types:
 
