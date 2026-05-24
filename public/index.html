@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101828">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Latch">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Latch</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icons/icon.svg">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="loginView" class="login-view">
+        <div class="login-panel">
+          <div class="brand-lockup">
+            <img src="/icons/icon.svg" alt="" class="brand-mark">
+            <div>
+              <p class="eyebrow">Private Agent Gateway</p>
+              <h1>Latch</h1>
+            </div>
+          </div>
+          <form id="loginForm" class="login-form">
+            <label for="tokenInput">Operator key</label>
+            <input id="tokenInput" name="token" type="password" autocomplete="current-password" required>
+            <button type="submit">Unlock</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="mainView" class="main-view hidden">
+        <header class="topbar">
+          <div class="brand-lockup">
+            <img src="/icons/icon.svg" alt="" class="brand-mark compact">
+            <div>
+              <p class="eyebrow">Private Agent Gateway</p>
+              <h1>Latch</h1>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <button id="installButton" class="icon-button hidden" title="Install app" aria-label="Install app">
+              <span aria-hidden="true">+</span>
+            </button>
+            <button id="notifyButton" class="icon-button" title="Enable notifications" aria-label="Enable notifications">
+              <span aria-hidden="true">!</span>
+            </button>
+            <button id="refreshButton" class="icon-button" title="Refresh" aria-label="Refresh">
+              <span aria-hidden="true">R</span>
+            </button>
+            <button id="lockButton" class="icon-button" title="Lock" aria-label="Lock">
+              <span aria-hidden="true">L</span>
+            </button>
+          </div>
+        </header>
+
+        <section class="status-strip" aria-live="polite">
+          <div>
+            <span class="status-dot" id="connectionDot"></span>
+            <span id="connectionText">Checking</span>
+          </div>
+          <div id="pendingSummary">0 approvals - 0 tasks</div>
+        </section>
+
+        <section id="installHint" class="install-hint hidden">
+          <div>
+            <strong>Install on phone</strong>
+            <p>Use the browser menu or Share sheet, then choose Add to Home Screen.</p>
+          </div>
+          <button id="dismissInstallHint" class="secondary-button" type="button">Dismiss</button>
+        </section>
+
+        <nav class="tabs" aria-label="Views">
+          <button class="tab active" data-tab="inbox">
+            <span aria-hidden="true">I</span>
+            <span>Inbox</span>
+          </button>
+          <button class="tab" data-tab="tasks">
+            <span aria-hidden="true">T</span>
+            <span>Tasks</span>
+          </button>
+          <button class="tab" data-tab="approvals">
+            <span aria-hidden="true">A</span>
+            <span>Approvals</span>
+          </button>
+          <button class="tab" data-tab="timeline">
+            <span aria-hidden="true">E</span>
+            <span>Timeline</span>
+          </button>
+        </nav>
+
+        <section id="inboxPanel" class="panel">
+          <form id="messageForm" class="composer">
+            <textarea id="messageText" rows="3" placeholder="Send an instruction or note"></textarea>
+            <button type="submit">Send</button>
+          </form>
+          <div id="messagesList" class="list"></div>
+        </section>
+
+        <section id="tasksPanel" class="panel hidden">
+          <form id="taskForm" class="task-form">
+            <input id="taskTitle" type="text" placeholder="Task title">
+            <textarea id="taskDetails" rows="3" placeholder="Details"></textarea>
+            <div class="form-row">
+              <select id="taskPriority">
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+                <option value="low">Low</option>
+              </select>
+              <button type="submit">Queue</button>
+            </div>
+          </form>
+          <div id="tasksList" class="list"></div>
+        </section>
+
+        <section id="approvalsPanel" class="panel hidden">
+          <div id="approvalsList" class="list"></div>
+        </section>
+
+        <section id="timelinePanel" class="panel hidden">
+          <div id="eventsList" class="list compact-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <template id="emptyTemplate">
+      <div class="empty-state">Nothing here yet.</div>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
