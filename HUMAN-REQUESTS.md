@@ -9,6 +9,8 @@ Agents can request human presence.
 Agents should not borrow human identity.
 ```
 
+The default VM bridge also creates approval requests automatically when a task or inbox instruction appears to need a command, credential, account setup, human verification, or purchase. Approval records are a control surface, not permission for the current text-only bridge to execute the action.
+
 ## Request Shape
 
 An agent can ask for help through the approval endpoint:
@@ -40,3 +42,5 @@ Content-Type: application/json
 - `pending`: waiting for the operator.
 - `approved`: human step is complete or permission is granted.
 - `denied`: operator declined or could not complete it.
+
+In the current safe text-only mode, approving a request records the decision and notifies the agent bridge, but it does not execute commands, use credentials, or perform purchases.

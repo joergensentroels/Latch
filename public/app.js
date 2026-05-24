@@ -350,6 +350,7 @@ function renderApprovals() {
       <p class="item-body">${escapeHtml(approval.details)}</p>
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
       ${approval.command ? `<pre class="item-body">${escapeHtml(approval.command)}</pre>` : ""}
+      ${approval.responseNote ? `<p class="help-note"><strong>Operator note:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
       ${approval.status === "pending" ? `
         <div class="approval-actions">
           <button class="secondary-button" data-approval="${approval.id}" data-status="approved">${approval.type === "human_verification" ? "Mark done" : "Approve"}</button>

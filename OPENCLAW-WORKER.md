@@ -20,7 +20,9 @@ Latch bridge service: latch-agent-bridge
 Bridge mode: safe text-only assistant
 ```
 
-The bridge has been installed as a systemd service and verified to report into Latch. It may answer Latch tasks and new inbox instructions by calling Latch's external LLM gateway, but it does not execute commands or receive provider API keys.
+The bridge has been installed as a systemd service and verified to report into Latch. It may answer Latch tasks and new inbox instructions by calling Latch's external LLM gateway. If a request looks like it needs a command, credential, account setup, human verification, or purchase, the bridge creates a Latch approval card instead of answering as if it can act.
+
+Approving a card records the operator decision and reports it back into Latch. In the current safe text-only mode, approval does not cause the bridge to execute commands, use credentials, control a browser, or make purchases.
 
 Reboot persistence:
 
