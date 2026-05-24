@@ -112,7 +112,7 @@ See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) and [MAILBOX-BROWSER.md](./MAILBO
 
 ## Web Research
 
-Agents should not scrape broadly or browse without a page and token budget. Latch supports `web_research` approval records for bounded research scopes, including allowed domains, maximum pages, and token budget. The current bridge does not browse; approval records scope only.
+Agents should not scrape broadly or browse without exact URLs, allowed domains, a page budget, and a token budget. Latch supports `web_research` approval records for bounded research scopes. After approval, the bridge may fetch exact approved public URLs and report compact source notes. It does not search, crawl, log in, download files, or fetch localhost/private network targets.
 
 ## Phone Install
 

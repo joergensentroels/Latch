@@ -103,6 +103,7 @@ try {
       details: "Research docs with budget",
       researchQuestion: "How should Latch add a browser sandbox?",
       allowedDomains: ["example.com", "docs.example.com"],
+      seedUrls: ["https://example.com/docs"],
       maxPages: 5,
       tokenBudget: 3000,
       riskLevel: "medium"
@@ -110,6 +111,7 @@ try {
   });
   assert(researchApproval.type === "web_research", "web research approval type should be accepted");
   assert(researchApproval.allowedDomains.length === 2, "research allowed domains should be stored");
+  assert(researchApproval.seedUrls[0] === "https://example.com/docs", "research seed urls should be stored");
   assert(researchApproval.maxPages === 5, "research page budget should be stored");
   assert(researchApproval.tokenBudget === 3000, "research token budget should be stored");
 
@@ -190,10 +192,44 @@ try {
   assert(execution.template === "bridge.status", "execution report should store template");
   assert(execution.stdout === "active", "execution report should store trimmed stdout");
 
+  await expectStatus("/api/agent/research-results", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: JSON.stringify({ question: "operator should not report research" })
+  }, 403);
+
+  const researchRun = await request("/api/agent/research-results", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      approvalId: researchApproval.id,
+      taskId: task.id,
+      question: "How should Latch add a browser sandbox?",
+      allowedDomains: ["example.com"],
+      seedUrls: ["https://example.com/docs"],
+      pagesFetched: 1,
+      tokenBudget: 3000,
+      status: "completed",
+      summary: "Use a bounded read-only browser sandbox.",
+      sources: [{
+        url: "https://example.com/docs",
+        title: "Docs",
+        status: 200,
+        summary: "A compact source note",
+        excerpt: "Short excerpt"
+      }],
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString()
+    }
+  });
+  assert(researchRun.status === "completed", "research result status should be stored");
+  assert(researchRun.sources[0].summary.includes("compact"), "research source summary should be stored");
+
   const visible = await request("/api/state", { headers: operatorHeaders });
   assert(visible.contextItems.some((item) => item.id === fileItem.id), "operator state should include context items");
   assert(visible.contextItems.some((item) => item.originApprovalId === contextQuestion.id), "approved context questions should save operator answers");
   assert(visible.executions.some((item) => item.id === execution.id), "operator state should include execution audits");
+  assert(visible.researchRuns.some((item) => item.id === researchRun.id), "operator state should include research run summaries");
 
   const about = await request("/api/about", { headers: operatorHeaders });
   assert(about.version, "about endpoint should expose version");

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
+import ipaddress
 import json
 import os
 import re
@@ -23,6 +25,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +60,7 @@ class ApprovalNeed:
     attachments: tuple[str, ...] = ()
     send_mode: str = "manual"
     allowed_domains: tuple[str, ...] = ()
+    seed_urls: tuple[str, ...] = ()
     max_pages: int = 0
     token_budget: int = 0
     research_question: str = ""
@@ -351,6 +355,7 @@ class Bridge:
                 "attachments": list(approval.attachments),
                 "sendMode": approval.send_mode,
                 "allowedDomains": list(approval.allowed_domains),
+                "seedUrls": list(approval.seed_urls),
                 "maxPages": approval.max_pages,
                 "tokenBudget": approval.token_budget,
                 "researchQuestion": approval.research_question,
@@ -491,13 +496,12 @@ class Bridge:
             return
 
         if approval_type == "web_research":
-            self.report(
-                f"Research scope reviewed: {title}\n\nThe bridge does not browse yet. Use the approved scope as planning context for a future bounded research run."
-                f"{f' Operator note: {note}' if note else ''}",
-                task_id,
-            )
+            result = perform_read_only_research(approval)
+            self.report_research(result)
+            self.report(format_research_report(result), task_id)
             if approval.get("taskId"):
-                self.patch_task(task_id, "paused", "Research scope reviewed. Browser execution is not enabled.")
+                status = "done" if result["status"] in {"completed", "partial"} else "failed"
+                self.patch_task(task_id, status, f"Read-only research {result['status']} with {result['pagesFetched']} fetched page(s).")
             return
 
         if is_sensitive:
@@ -595,6 +599,9 @@ class Bridge:
 
     def report_execution(self, result: dict) -> None:
         self.request_json("POST", "/api/agent/executions", result)
+
+    def report_research(self, result: dict) -> None:
+        self.request_json("POST", "/api/agent/research-results", result)
 
     def request_json(self, method: str, path: str, body: dict | None = None) -> dict | None:
         url = f"{self.args.base_url}{path}"
@@ -740,6 +747,7 @@ def detect_web_research(title: str, details: str) -> ApprovalNeed | None:
         sensitive=False,
         risk_level="medium",
         allowed_domains=extract_domains(raw),
+        seed_urls=extract_urls(raw),
         max_pages=5,
         token_budget=3000,
         research_question=raw,
@@ -785,6 +793,7 @@ def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> 
         attachments=approval.attachments,
         send_mode=approval.send_mode,
         allowed_domains=approval.allowed_domains,
+        seed_urls=approval.seed_urls,
         max_pages=approval.max_pages,
         token_budget=approval.token_budget,
         research_question=approval.research_question,
@@ -816,10 +825,19 @@ def extract_domains(text: str) -> tuple[str, ...]:
     matches = re.findall(r"https?://([^/\s)]+)", text)
     domains = []
     for match in matches:
-        domain = clean(match.lower().strip(".,;:"), 120)
+        domain = clean(match.lower().strip(".,;:").split("@")[-1].split(":")[0], 120)
         if domain and domain not in domains:
             domains.append(domain)
     return tuple(domains[:8])
+
+
+def extract_urls(text: str) -> tuple[str, ...]:
+    urls = []
+    for match in re.findall(r"https?://[^\s)>\]\"']+", text):
+        url = clean(match.rstrip(".,;:"), 500)
+        if url and url not in urls:
+            urls.append(url)
+    return tuple(urls[:12])
 
 
 def guess_subject(text: str) -> str:
@@ -829,6 +847,240 @@ def guess_subject(text: str) -> str:
     if "co-creator" in lowered or "cocreator" in lowered:
         return "Latch co-creator discussion"
     return ""
+
+
+def perform_read_only_research(approval: dict) -> dict:
+    started_at = utc_now()
+    question = clean(approval.get("researchQuestion") or approval.get("details") or "", 1000)
+    seed_urls = ordered_unique(
+        list(approval.get("seedUrls") or [])
+        + list(extract_urls(approval.get("details") or ""))
+        + list(extract_urls(approval.get("researchQuestion") or ""))
+        + list(extract_urls(approval.get("responseNote") or ""))
+    )[:12]
+    allowed_domains = ordered_unique(list(approval.get("allowedDomains") or []) + list(extract_domains(" ".join(seed_urls))))[:12]
+    max_pages = clamp_int(approval.get("maxPages"), 1, 5, 3)
+    token_budget = clamp_int(approval.get("tokenBudget"), 500, 4000, 3000)
+    char_budget = token_budget * 4
+    sources = []
+    errors = []
+
+    if not seed_urls:
+        errors.append("No exact seed URL was approved; no web request was made.")
+    if not allowed_domains:
+        errors.append("No allowed domain was approved; no web request was made.")
+
+    for url in seed_urls:
+        if len(sources) >= max_pages:
+            break
+        try:
+            validate_research_url(url, allowed_domains)
+            page = fetch_research_page(url)
+            validate_research_url(page["url"], allowed_domains)
+            text = extract_readable_text(page["body"], page["contentType"])
+            title = extract_title(page["body"]) or page["url"]
+            summary = summarize_text(text, question, max(500, min(1200, char_budget // max_pages)))
+            excerpt = clean(text, 1000)
+            sources.append({
+                "url": page["url"],
+                "title": title,
+                "status": page["status"],
+                "summary": summary,
+                "excerpt": excerpt,
+            })
+        except Exception as exc:  # noqa: BLE001 - capture per-source failure
+            errors.append(f"{url}: {exc}")
+
+    combined_summary = summarize_sources(question, sources, char_budget)
+    status = "completed" if sources and not errors else "partial" if sources else "failed"
+    return {
+        "approvalId": clean(approval.get("id") or "", 120),
+        "taskId": clean(approval.get("taskId") or "", 120),
+        "question": question,
+        "allowedDomains": allowed_domains,
+        "seedUrls": seed_urls,
+        "pagesFetched": len(sources),
+        "tokenBudget": token_budget,
+        "status": status,
+        "summary": combined_summary,
+        "sources": sources,
+        "errors": errors[:12],
+        "startedAt": started_at,
+        "finishedAt": utc_now(),
+    }
+
+
+def validate_research_url(url: str, allowed_domains: list[str]) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise RuntimeError("Only http/https URLs are allowed.")
+    if parsed.username or parsed.password:
+        raise RuntimeError("URLs with embedded credentials are not allowed.")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise RuntimeError("URL has no hostname.")
+    if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+        raise RuntimeError("Private or local hostnames are not allowed.")
+    normalized_allowed = [domain.lower().lstrip(".") for domain in allowed_domains if domain]
+    if not any(host == domain or host.endswith(f".{domain}") for domain in normalized_allowed):
+        raise RuntimeError(f"Host {host} is outside the approved domain list.")
+    reject_private_host(host)
+
+
+def reject_private_host(host: str) -> None:
+    try:
+        ip = ipaddress.ip_address(host)
+        if is_private_ip(ip):
+            raise RuntimeError("Private, local, multicast, or reserved IP targets are not allowed.")
+        return
+    except ValueError:
+        pass
+    for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(host, None):
+        ip = ipaddress.ip_address(sockaddr[0])
+        if is_private_ip(ip):
+            raise RuntimeError("Approved research URLs must not resolve to private or local IP addresses.")
+
+
+def is_private_ip(ip: ipaddress._BaseAddress) -> bool:
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def fetch_research_page(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "LatchReadOnlyResearch/0.1",
+            "Accept": "text/html,text/plain,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.2",
+            "Range": "bytes=0-500000",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        content_type = response.headers.get("content-type", "")
+        if not is_textual_content_type(content_type):
+            raise RuntimeError(f"Unsupported content type: {content_type or 'unknown'}")
+        body = response.read(500_000)
+        charset = response.headers.get_content_charset() or "utf-8"
+        return {
+            "url": response.geturl(),
+            "status": response.status,
+            "contentType": content_type,
+            "body": body.decode(charset, errors="replace"),
+        }
+
+
+def is_textual_content_type(content_type: str) -> bool:
+    lowered = content_type.lower()
+    return (
+        lowered.startswith("text/")
+        or "html" in lowered
+        or "xml" in lowered
+        or "json" in lowered
+    )
+
+
+def extract_title(raw: str) -> str:
+    match = re.search(r"<title[^>]*>(.*?)</title>", raw, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    return clean(collapse_whitespace(html.unescape(strip_tags(match.group(1)))), 240)
+
+
+def extract_readable_text(raw: str, content_type: str) -> str:
+    if "html" not in content_type.lower() and "<html" not in raw[:1000].lower():
+        return clean(collapse_whitespace(raw), 12000)
+    text = re.sub(r"(?is)<(script|style|noscript|svg|nav|header|footer|form|aside)[^>]*>.*?</\1>", " ", raw)
+    text = re.sub(r"(?is)<!--.*?-->", " ", text)
+    text = re.sub(r"(?i)</(p|div|section|article|h[1-6]|li|tr)>", ". ", text)
+    text = strip_tags(text)
+    text = html.unescape(text)
+    return clean(collapse_whitespace(text), 12000)
+
+
+def strip_tags(value: str) -> str:
+    return re.sub(r"(?s)<[^>]+>", " ", value)
+
+
+def collapse_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def summarize_text(text: str, question: str, limit: int) -> str:
+    sentences = split_sentences(text)
+    if not sentences:
+        return clean(text, limit)
+    terms = significant_terms(question)
+    scored = []
+    for index, sentence in enumerate(sentences[:80]):
+        lowered = sentence.lower()
+        score = sum(1 for term in terms if term in lowered)
+        if score:
+            scored.append((score, -index, sentence))
+    selected = [item[2] for item in sorted(scored, reverse=True)[:6]]
+    if not selected:
+        selected = sentences[:5]
+    return clean(" ".join(selected), limit)
+
+
+def summarize_sources(question: str, sources: list[dict], char_budget: int) -> str:
+    if not sources:
+        return "No approved public pages were fetched."
+    parts = [f"Question: {question or '(not specified)'}", "", "Source notes:"]
+    for source in sources:
+        parts.append(f"- {source['title']} ({source['url']}): {source['summary']}")
+    return clean("\n".join(parts), min(6000, char_budget))
+
+
+def split_sentences(text: str) -> list[str]:
+    return [clean(part, 500) for part in re.split(r"(?<=[.!?])\s+", text) if clean(part, 500)]
+
+
+def significant_terms(text: str) -> list[str]:
+    stop = {"the", "and", "for", "with", "that", "this", "from", "what", "how", "why", "can", "should", "would", "about", "please", "research", "browse", "summarize"}
+    terms = []
+    for term in re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{2,}", text.lower()):
+        if term not in stop and term not in terms:
+            terms.append(term)
+    return terms[:20]
+
+
+def format_research_report(result: dict) -> str:
+    lines = [
+        "Read-only research completed.",
+        "",
+        f"Status: {result['status']}",
+        f"Pages fetched: {result['pagesFetched']}",
+        f"Token budget: {result['tokenBudget']}",
+        "",
+        result.get("summary") or "(no summary)",
+    ]
+    if result.get("errors"):
+        lines.extend(["", "Errors:", *[f"- {error}" for error in result["errors"]]])
+    return clean("\n".join(lines), 6000)
+
+
+def ordered_unique(values: list[str]) -> list[str]:
+    result = []
+    for value in values:
+        cleaned = clean(value, 500)
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return result
+
+
+def clamp_int(value: object, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, min(maximum, number))
 
 
 def command_template(template_id: str, args: argparse.Namespace) -> list[dict]:
