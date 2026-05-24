@@ -667,6 +667,17 @@ button[type="submit"]:hover,
   overflow-wrap: anywhere;
 }
 
+.approval-advice {
+  margin: 10px 0 0;
+  padding: 10px;
+  border: 1px solid #fedf89;
+  border-radius: 6px;
+  background: #fffaeb;
+  color: #7a4f01;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

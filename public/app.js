@@ -607,6 +607,7 @@ function renderApprovals() {
         <span class="item-meta">Requested by ${escapeHtml(approval.requestedBy || "agent")}</span>
       </div>
       <p class="item-body">${escapeHtml(approval.details)}</p>
+      ${approvalAdvice(approval) ? `<p class="approval-advice">${escapeHtml(approvalAdvice(approval))}</p>` : ""}
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
       ${approval.command ? `<pre class="item-body">${escapeHtml(approval.command)}</pre>` : ""}
       ${approval.responseNote ? `<p class="help-note"><strong>Operator note:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
@@ -760,6 +761,19 @@ function approvalPlaceholder(approval, status) {
   if (approval.type === "command") return "Reviewed scope or manual result";
   if (approval.type === "purchase") return "Budget/vendor check or manual purchase result";
   return "Decision note";
+}
+
+function approvalAdvice(approval) {
+  if (approval.type === "command" && !approval.command) {
+    return "No exact command is attached. Deny this unless you are only recording a boundary or manual result.";
+  }
+  if (approval.sensitive) {
+    return "Sensitive request. Do not paste passwords, recovery codes, payment details, or long-lived tokens back to the agent.";
+  }
+  if (approval.type === "purchase") {
+    return "Purchase request. Approve only after checking cost, vendor, and the exact manual action.";
+  }
+  return "";
 }
 
 function formatApprovalType(value) {
