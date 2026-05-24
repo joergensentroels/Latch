@@ -173,3 +173,31 @@ tailscale ip -4
 - Do not give OpenClaw Revolut, banking, payment, password manager, or browser profile access.
 - Human verification, account creation, purchases, and credentials should become Latch approval requests.
 - Ask before changing `docker-compose.yml`, `.env`, firewall rules, Tailscale ACLs, or `~/.openclaw/openclaw.json`.
+
+## Read-Only Latch Source Checkout
+
+The OpenClaw VM may inspect the Latch source through a GitHub deploy key with read-only access to this single repo.
+
+Confirmed layout:
+
+```text
+Repo checkout: ~/code/latch-readonly
+SSH alias: github-latch-readonly
+Deploy key file: ~/.ssh/latch_repo_readonly_ed25519
+Remote: git@github-latch-readonly:joergensentroels/Latch.git
+```
+
+GitHub deploy key settings:
+
+```text
+Title: OpenClaw-Readonly
+Allow write access: off
+```
+
+After cloning or updating, the checkout is made read-only at the filesystem level. To fast-forward it:
+
+```bash
+~/update-latch-readonly.sh
+```
+
+This temporarily unlocks the checkout, runs a fast-forward pull, then relocks the files. The deploy key itself still cannot push to GitHub.
