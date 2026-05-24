@@ -503,16 +503,27 @@ def clean(value: object, limit: int) -> str:
 def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     text = f"{title}\n{details}".lower()
     for approval_type, keywords, request_title, reason, expected, sensitive in RISK_RULES:
-        if any(keyword in text for keyword in keywords):
+        matched = [keyword for keyword in keywords if keyword in text]
+        if matched:
+            command = extract_command(f"{title}\n{details}") if approval_type == "command" else ""
+            if approval_type == "command" and is_generic_command_boundary(matched, command):
+                continue
             return ApprovalNeed(
                 type=approval_type,
                 title=request_title,
                 details=f"{reason}\n\nOriginal request:\n{clean((title + chr(10) + details), 1800)}",
                 expected_response=expected,
                 sensitive=sensitive,
-                command=extract_command(details if approval_type == "command" else ""),
+                command=command,
             )
     return None
+
+
+def is_generic_command_boundary(matched_keywords: list[str], command: str) -> bool:
+    if command:
+        return False
+    generic = {"run command", "execute", "terminal", "shell"}
+    return set(matched_keywords).issubset(generic)
 
 
 def extract_command(text: str) -> str:
