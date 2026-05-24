@@ -11,6 +11,7 @@ OpenClaw agents should interact with a deployed Latch instance through authentic
 - `POST /api/approvals`
 - `POST /api/llm/chat` if external LLM fallback is enabled
 - human verification requests through `POST /api/approvals` with `type: "human_verification"`
+- approval requests for commands, credentials, account setup, purchases, and other sensitive actions
 
 ## Keep Away From Agents
 
@@ -45,3 +46,4 @@ Run OpenClaw with:
 - network access limited to what the task needs
 - human approval for commands, purchases, infrastructure changes, and credential changes
 - human presence for CAPTCHA, account creation, and email verification steps
+- text-only bridge mode until explicit execution capabilities are added and reviewed

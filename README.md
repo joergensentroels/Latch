@@ -162,6 +162,8 @@ Plain HTTP is useful for quick testing, but phone app installation usually requi
 
 Use the agent key as a bearer token:
 
+The default worker bridge is safe text-only. It can answer tasks through Latch's LLM gateway and can request operator approvals for risky work, but it does not execute commands, use credentials, control a browser, make purchases, or receive provider API keys.
+
 ```http
 Authorization: Bearer agent_...
 ```

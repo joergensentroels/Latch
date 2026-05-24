@@ -244,6 +244,8 @@ async function handleApi(req, res, url) {
       details: cleanText(body.details || "", 6000),
       command: cleanText(body.command || "", 4000),
       expectedResponse: cleanText(body.expectedResponse || body.resultNeeded || "", 1000),
+      taskId: cleanText(body.taskId || "", 120),
+      messageId: cleanText(body.messageId || "", 120),
       sensitive: Boolean(body.sensitive),
       status: "pending",
       requestedBy: role,
@@ -293,7 +295,7 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       tasks: db.tasks.filter((task) => ["queued", "running", "waiting"].includes(task.status)),
       messages: db.messages.slice(0, 20),
-      approvals: db.approvals.filter((approval) => approval.status === "pending")
+      approvals: db.approvals.slice(0, 50)
     });
     return;
   }

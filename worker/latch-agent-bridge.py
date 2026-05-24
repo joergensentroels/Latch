@@ -20,6 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -29,6 +30,60 @@ You may help with planning, explanation, coding advice, and next-step suggestion
 You cannot run shell commands, browse, use credentials, create accounts, make purchases, access payment tools, or perform actions outside this chat.
 If a request needs a real-world action, credential, purchase, account setup, CAPTCHA, or command execution, say what you would need and ask the operator to approve or perform that step manually.
 Keep replies concise and practical."""
+
+
+@dataclass(frozen=True)
+class ApprovalNeed:
+    type: str
+    title: str
+    details: str
+    expected_response: str
+    sensitive: bool
+    command: str = ""
+
+
+RISK_RULES = [
+    (
+        "purchase",
+        ("buy", "purchase", "order", "checkout", "payment", "pay ", "invoice", "subscribe", "subscription"),
+        "Purchase approval needed",
+        "The request appears to involve payment, purchase, checkout, subscription, or spending.",
+        "Approve only after reviewing cost, vendor, and exact action. The text-only bridge will not perform the purchase.",
+        True,
+    ),
+    (
+        "credential",
+        ("password", "credential", "api key", "token", "secret", "2fa", "mfa", "recovery code", "login", "sign in"),
+        "Credential help needed",
+        "The request appears to involve credentials, login, tokens, MFA, or sensitive account access.",
+        "Provide only the minimum non-secret result needed, or deny if credentials should not be shared.",
+        True,
+    ),
+    (
+        "account_setup",
+        ("create account", "new account", "register", "sign up", "proton", "email account", "verify email"),
+        "Account setup help needed",
+        "The request appears to involve creating or verifying an account.",
+        "Complete the account step manually if appropriate, then add a short note with the result.",
+        True,
+    ),
+    (
+        "human_verification",
+        ("captcha", "verification", "verify you are human", "human check", "email code", "sms code"),
+        "Human verification needed",
+        "The request appears to require a CAPTCHA, verification code, or other human-presence step.",
+        "Complete the verification manually, or paste only the short non-sensitive code if one is required.",
+        True,
+    ),
+    (
+        "command",
+        ("run command", "execute", "powershell", "terminal", "shell", "sudo", "docker", "systemctl", "ssh ", "scp ", "install "),
+        "Command approval needed",
+        "The request appears to require executing a command or changing a system.",
+        "Review the command/action. Approval is recorded, but the text-only bridge will not execute it yet.",
+        False,
+    ),
+]
 
 
 def main() -> int:
@@ -80,7 +135,7 @@ class Bridge:
         if not payload:
             return
 
-        self.report_new_items("approvals", payload.get("approvals", []), "Approval visible")
+        self.process_approval_decisions(payload.get("approvals", []))
         self.process_tasks(payload.get("tasks", []))
         self.process_messages(payload.get("messages", []))
         self.save_state()
@@ -102,6 +157,8 @@ class Bridge:
             item_id = str(item.get("id", ""))
             if not item_id or item_id in seen:
                 continue
+            if bucket == "approvals" and item.get("status") != "pending":
+                continue
             title = str(item.get("title") or item.get("text") or item_id)[:180]
             status = str(item.get("status", ""))
             self.report(f"{prefix}: {title} {f'[{status}]' if status else ''}".strip(), item_id)
@@ -119,6 +176,15 @@ class Bridge:
             title = clean(task.get("title") or "Untitled task", 180)
             details = clean(task.get("details") or "", 6000)
             try:
+                approval = detect_approval_need(title, details)
+                if approval:
+                    self.patch_task(task_id, "waiting", "Waiting for operator approval or human help.")
+                    created = self.create_approval(approval, task_id=task_id)
+                    suffix = f" ({created.get('id')})" if created else ""
+                    self.report(f"Approval requested for task: {title}{suffix}", task_id)
+                    self.remember("processed_tasks", task_id)
+                    continue
+
                 self.patch_task(task_id, "running", f"{self.args.worker_name} is drafting a text-only response.")
                 answer = self.ask_llm(
                     [
@@ -166,6 +232,14 @@ class Bridge:
             message_id = str(message.get("id", ""))
             text = clean(message.get("text") or "", 6000)
             try:
+                approval = detect_approval_need("Inbox instruction", text)
+                if approval:
+                    created = self.create_approval(approval, message_id=message_id)
+                    suffix = f" ({created.get('id')})" if created else ""
+                    self.report(f"Approval requested for inbox instruction{suffix}.", message_id)
+                    self.remember("processed_messages", message_id)
+                    continue
+
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
@@ -203,6 +277,50 @@ class Bridge:
         if not text:
             raise RuntimeError("Latch LLM gateway returned an empty response.")
         return text
+
+    def create_approval(self, approval: ApprovalNeed, task_id: str = "", message_id: str = "") -> dict:
+        response = self.request_json(
+            "POST",
+            "/api/approvals",
+            {
+                "type": approval.type,
+                "title": approval.title,
+                "details": approval.details,
+                "command": approval.command,
+                "expectedResponse": approval.expected_response,
+                "sensitive": approval.sensitive,
+                "taskId": task_id,
+                "messageId": message_id,
+            },
+        )
+        if not response:
+            raise RuntimeError("Latch did not create the approval request.")
+        return response
+
+    def process_approval_decisions(self, approvals: list[dict]) -> None:
+        seen = set(self.state.setdefault("seen_approval_decisions", []))
+        for approval in reversed(approvals):
+            approval_id = str(approval.get("id", ""))
+            status = str(approval.get("status", ""))
+            if not approval_id or approval_id in seen or status not in {"approved", "denied"}:
+                continue
+
+            title = clean(approval.get("title") or approval_id, 180)
+            note = clean(approval.get("responseNote") or "", 1000)
+            task_id = clean(approval.get("taskId") or approval.get("messageId") or approval_id, 120)
+            if status == "approved":
+                self.report(
+                    f"Approval recorded: {title}\n\nThe text-only bridge will not execute commands or handle secrets yet."
+                    f"{f' Operator note: {note}' if note else ''}",
+                    task_id,
+                )
+            else:
+                self.report(
+                    f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
+                    task_id,
+                )
+            seen.add(approval_id)
+            self.state["seen_approval_decisions"] = sorted(seen)[-500:]
 
     def patch_task(self, task_id: str, status: str, note: str = "") -> None:
         self.request_json("PATCH", f"/api/tasks/{task_id}", {"status": status, "note": note})
@@ -246,6 +364,30 @@ class Bridge:
 
 def clean(value: object, limit: int) -> str:
     return str(value or "").strip()[:limit]
+
+
+def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
+    text = f"{title}\n{details}".lower()
+    for approval_type, keywords, request_title, reason, expected, sensitive in RISK_RULES:
+        if any(keyword in text for keyword in keywords):
+            return ApprovalNeed(
+                type=approval_type,
+                title=request_title,
+                details=f"{reason}\n\nOriginal request:\n{clean((title + chr(10) + details), 1800)}",
+                expected_response=expected,
+                sensitive=sensitive,
+                command=extract_command(details if approval_type == "command" else ""),
+            )
+    return None
+
+
+def extract_command(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    command_lines = [
+        line for line in lines
+        if line.startswith(("`", "$", ">", "sudo ", "docker ", "systemctl ", "ssh ", "scp ", "powershell"))
+    ]
+    return clean("\n".join(command_lines).replace("`", ""), 4000)
 
 
 def env_bool(name: str, default: bool) -> bool:
