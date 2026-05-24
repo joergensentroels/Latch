@@ -286,9 +286,14 @@ button[type="submit"]:hover,
   font-size: 0.76rem;
 }
 
-.tab span[aria-hidden="true"] {
-  font-size: 1.05rem;
-  line-height: 1;
+.tab-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tab.active {
