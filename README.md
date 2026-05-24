@@ -93,6 +93,14 @@ powershell -ExecutionPolicy Bypass -File .\Serve-Over-Tailscale.ps1
 
 Open the HTTPS Tailscale URL shown by the script or by `Status-Latch.ps1` on your phone. The script records it in `data\local-settings.json` as `privateHttpsUrl` when Tailscale reports the device DNS name.
 
+If the script says HTTPS certificates are not enabled yet, enable them once in the Tailscale admin console under DNS:
+
+```text
+https://login.tailscale.com/admin/dns
+```
+
+Do not use Tailscale Funnel for Latch.
+
 - Android Chrome: open the site, then choose `Install app` or `Add to Home screen`.
 - iPhone Safari: open the site, tap Share, then choose `Add to Home Screen`.
 
