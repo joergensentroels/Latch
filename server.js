@@ -12,6 +12,9 @@ const dbPath = path.join(dataDir, "db.json");
 const authPath = path.join(dataDir, "auth.json");
 const llmConfigPath = path.join(dataDir, "llm-provider.json");
 const notificationConfigPath = path.join(dataDir, "notifications.json");
+const contextFilesDir = path.join(dataDir, "context-files");
+const maxUploadBytes = 2_000_000;
+const maxUploadBodyBytes = 3_000_000;
 const hosts = (process.env.HOSTS || process.env.HOST || "127.0.0.1")
   .split(",")
   .map((value) => value.trim())
@@ -40,10 +43,12 @@ const emptyDb = {
   tasks: [],
   approvals: [],
   events: [],
-  attachments: []
+  attachments: [],
+  contextItems: []
 };
 
 await mkdir(dataDir, { recursive: true });
+await mkdir(contextFilesDir, { recursive: true });
 const auth = await loadAuth();
 
 function createServer() {
@@ -98,7 +103,7 @@ async function readDb() {
     if (!db.meta.name || db.meta.name === "OpenClaw Command Center") {
       db.meta.name = "Latch";
     }
-    return db;
+    return normalizeDb(db);
   } catch {
     await writeFile(dbPath, JSON.stringify(emptyDb, null, 2));
     return structuredClone(emptyDb);
@@ -106,6 +111,7 @@ async function readDb() {
 }
 
 async function writeDb(db) {
+  normalizeDb(db);
   db.meta.updatedAt = new Date().toISOString();
   await writeFile(dbPath, JSON.stringify(db, null, 2));
 }
@@ -287,6 +293,122 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (url.pathname === "/api/context/notes" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const text = cleanText(body.text, 12000);
+    if (!text) {
+      sendJson(res, 400, { error: "context_text_required" });
+      return;
+    }
+
+    const db = await readDb();
+    const item = {
+      id: newId("ctx"),
+      kind: "note",
+      title: cleanText(body.title || firstLine(text) || "Context note", 160),
+      text,
+      preview: text.slice(0, 500),
+      source: "operator",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    db.contextItems.unshift(item);
+    db.events.unshift(event("context.note.created", "operator", item.id, item.title));
+    await writeDb(db);
+    sendJson(res, 201, item);
+    return;
+  }
+
+  if (url.pathname === "/api/context/files" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req, maxUploadBodyBytes);
+    const name = safeFileName(body.name || "context-file");
+    const contentBase64 = cleanText(body.contentBase64, maxUploadBodyBytes);
+    if (!contentBase64) {
+      sendJson(res, 400, { error: "file_content_required" });
+      return;
+    }
+
+    let bytes;
+    try {
+      bytes = Buffer.from(contentBase64, "base64");
+    } catch {
+      sendJson(res, 400, { error: "invalid_base64" });
+      return;
+    }
+
+    if (!bytes.length || bytes.length > maxUploadBytes) {
+      sendJson(res, 413, { error: "file_too_large", maxBytes: maxUploadBytes });
+      return;
+    }
+
+    await mkdir(contextFilesDir, { recursive: true });
+    const db = await readDb();
+    const id = newId("ctx");
+    const storedName = `${id}-${name}`;
+    const storedPath = path.join(contextFilesDir, storedName);
+    if (!isInsideDirectory(storedPath, contextFilesDir)) {
+      sendJson(res, 400, { error: "invalid_file_name" });
+      return;
+    }
+
+    await writeFile(storedPath, bytes);
+    const item = {
+      id,
+      kind: "file",
+      title: name,
+      name,
+      mimeType: cleanText(body.type || "application/octet-stream", 120),
+      size: bytes.length,
+      storedName,
+      source: "operator",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    db.contextItems.unshift(item);
+    db.events.unshift(event("context.file.uploaded", "operator", item.id, `${item.name} (${formatBytes(item.size)})`));
+    await writeDb(db);
+    sendJson(res, 201, publicContextItem(item));
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/context/files/") && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const id = url.pathname.split("/").at(-1);
+    const db = await readDb();
+    const item = db.contextItems.find((entry) => entry.id === id && entry.kind === "file");
+    if (!item?.storedName) {
+      sendJson(res, 404, { error: "not_found" });
+      return;
+    }
+
+    const storedPath = path.join(contextFilesDir, item.storedName);
+    if (!isInsideDirectory(storedPath, contextFilesDir)) {
+      sendJson(res, 403, { error: "forbidden" });
+      return;
+    }
+
+    try {
+      await stat(storedPath);
+      res.writeHead(200, {
+        "content-type": item.mimeType || "application/octet-stream",
+        "content-disposition": `attachment; filename="${downloadFileName(item.name)}"`,
+        "cache-control": "no-store"
+      });
+      createReadStream(storedPath).pipe(res);
+    } catch {
+      sendJson(res, 404, { error: "file_missing" });
+    }
+    return;
+  }
+
   if (url.pathname === "/api/agent/poll" && req.method === "GET") {
     requireAgent(role, res);
     if (res.writableEnded) return;
@@ -295,7 +417,8 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       tasks: db.tasks.filter((task) => ["queued", "running", "waiting"].includes(task.status)),
       messages: db.messages.slice(0, 20),
-      approvals: db.approvals.slice(0, 50)
+      approvals: db.approvals.slice(0, 50),
+      contextItems: db.contextItems.slice(0, 50).map(publicContextItem)
     });
     return;
   }
@@ -587,8 +710,53 @@ function visibleState(db) {
     messages: db.messages.slice(0, 100),
     tasks: db.tasks.slice(0, 100),
     approvals: db.approvals.slice(0, 100),
-    events: db.events.slice(0, 100)
+    events: db.events.slice(0, 100),
+    contextItems: db.contextItems.slice(0, 100).map(operatorContextItem)
   };
+}
+
+function normalizeDb(db) {
+  db.meta = db.meta || {};
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
+  db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
+  db.approvals = Array.isArray(db.approvals) ? db.approvals : [];
+  db.events = Array.isArray(db.events) ? db.events : [];
+  db.attachments = Array.isArray(db.attachments) ? db.attachments : [];
+  db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
+  return db;
+}
+
+function publicContextItem(item) {
+  const base = {
+    id: item.id,
+    kind: item.kind,
+    title: item.title || item.name || "Context",
+    source: item.source || "operator",
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt
+  };
+  if (item.kind === "file") {
+    return {
+      ...base,
+      name: item.name,
+      mimeType: item.mimeType,
+      size: item.size
+    };
+  }
+  return {
+    ...base,
+    preview: item.preview || cleanText(item.text, 500)
+  };
+}
+
+function operatorContextItem(item) {
+  if (item.kind === "note") {
+    return {
+      ...publicContextItem(item),
+      text: item.text || ""
+    };
+  }
+  return publicContextItem(item);
 }
 
 function event(type, actor, targetId, summary) {
@@ -610,6 +778,31 @@ function cleanChoice(value, choices, fallback) {
   return choices.includes(value) ? value : fallback;
 }
 
+function firstLine(value) {
+  return String(value || "").split(/\r?\n/).find((line) => line.trim())?.trim() || "";
+}
+
+function safeFileName(value) {
+  const name = path.basename(String(value || "context-file"));
+  const safe = name.replace(/[^a-zA-Z0-9._ -]/g, "_").replace(/\s+/g, " ").trim();
+  return safe.slice(0, 120) || "context-file";
+}
+
+function downloadFileName(value) {
+  return safeFileName(value).replaceAll('"', "");
+}
+
+function isInsideDirectory(targetPath, parentPath) {
+  const relative = path.relative(parentPath, targetPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function formatBytes(value) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function cleanBoolean(value, fallback) {
   if (value === undefined || value === null || value === "") return Boolean(fallback);
   if (typeof value === "boolean") return value;
@@ -625,12 +818,16 @@ function newId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
-async function readJsonBody(req) {
+async function readJsonBody(req, maxBytes = 1_000_000) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1_000_000) throw new Error("Request body too large");
+    if (size > maxBytes) {
+      const error = new Error("Request body too large");
+      error.statusCode = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
   if (!chunks.length) return {};

@@ -166,6 +166,24 @@ http://<host-tailscale-ip>:8787
 
 Plain HTTP is useful for quick testing, but phone app installation usually requires HTTPS. Tailscale Serve provides HTTPS privately inside your tailnet. Do not expose this app with router port forwarding. Use Tailscale private networking, and avoid Tailscale Funnel unless you intentionally want public internet exposure.
 
+## Context Library
+
+The Context tab is for operator-provided memory: goals, boundaries, personality notes, background, and small supporting files.
+
+Context notes and uploaded files are stored under:
+
+```text
+data\
+```
+
+Uploaded files are stored in `data\context-files\`. The whole `data\` folder is ignored by Git, because it may contain private context, keys, logs, and local settings.
+
+Current limits:
+
+- file uploads are limited to 2 MB each
+- operators can see full note text and download files
+- agents receive only safe context metadata and note previews through `/api/agent/poll`
+
 ## Agent API
 
 Use the agent key as a bearer token:
@@ -183,6 +201,8 @@ Poll work:
 ```http
 GET /api/agent/poll
 ```
+
+The poll response includes queued tasks, recent messages, approvals, and recent context metadata. File bytes are not returned by the agent poll endpoint.
 
 Report status:
 
