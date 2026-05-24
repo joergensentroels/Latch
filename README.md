@@ -261,6 +261,17 @@ The default worker bridge is safe text-only. It can answer tasks through Latch's
 
 Non-sensitive approval notes can be used for follow-up answers. Sensitive approval notes stay inside Latch and are not forwarded to the external LLM.
 
+The first execution-capable bridge mode is limited to approved read-only diagnostics. It never runs raw command text from Latch. Instead, approvals may reference one of these fixed templates:
+
+- `bridge.status`
+- `bridge.logs`
+- `openclaw.gateway.health`
+- `docker.status`
+- `tailscale.status`
+- `repo.status`
+
+Latch shows the template summary first and keeps exact commands behind an expandable details section. Execution results are stored as concise audit summaries under Timeline > Operations.
+
 ```http
 Authorization: Bearer agent_...
 ```
@@ -296,6 +307,24 @@ Content-Type: application/json
   "title": "Run command",
   "details": "OpenClaw wants to run a command.",
   "command": "example command"
+}
+```
+
+Request a read-only diagnostic approval:
+
+```http
+POST /api/approvals
+Content-Type: application/json
+
+{
+  "type": "command",
+  "title": "Read-only diagnostic approval needed",
+  "details": "Check whether the bridge is active.",
+  "riskLevel": "low",
+  "actionTemplate": "bridge.status",
+  "actionPreview": "Check Latch bridge service status",
+  "renderedCommands": ["systemctl is-active latch-agent-bridge"],
+  "executionMode": "read_only_status"
 }
 ```
 
