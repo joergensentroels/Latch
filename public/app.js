@@ -4,6 +4,7 @@ const state = {
   token: localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
   tab: ["inbox", "tasks", "approvals", "timeline"].includes(initialTab) ? initialTab : "inbox",
   data: null,
+  taskFilter: localStorage.getItem("latchTaskFilter") || "open",
   approvalsFilter: localStorage.getItem("latchApprovalsFilter") || "pending",
   seenNotificationIds: new Set(JSON.parse(localStorage.getItem("latchSeenNotificationIds") || "[]")),
   notificationBaselineReady: false,
@@ -39,6 +40,7 @@ const approvalDecisionNote = document.querySelector("#approvalDecisionNote");
 const approvalDecisionSubmit = document.querySelector("#approvalDecisionSubmit");
 const approvalDialogClose = document.querySelector("#approvalDialogClose");
 const approvalDecisionCancel = document.querySelector("#approvalDecisionCancel");
+const taskFilterButtons = document.querySelectorAll("[data-task-filter]");
 const approvalFilterButtons = document.querySelectorAll("[data-approval-filter]");
 
 const lists = {
@@ -147,6 +149,14 @@ approvalFilterButtons.forEach((button) => {
     state.approvalsFilter = button.dataset.approvalFilter;
     localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
     renderApprovals();
+  });
+});
+
+taskFilterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.taskFilter = button.dataset.taskFilter;
+    localStorage.setItem("latchTaskFilter", state.taskFilter);
+    renderTasks();
   });
 });
 
@@ -350,7 +360,14 @@ function renderMessages() {
 }
 
 function renderTasks() {
-  const tasks = state.data?.tasks || [];
+  taskFilterButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.taskFilter === state.taskFilter);
+  });
+
+  const allTasks = state.data?.tasks || [];
+  const tasks = state.taskFilter === "open"
+    ? allTasks.filter((task) => ["queued", "running", "waiting"].includes(task.status))
+    : allTasks;
   renderList(lists.tasks, tasks, (task) => `
     <article class="item">
       <div class="item-header">
