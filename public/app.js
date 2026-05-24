@@ -47,6 +47,7 @@ const lists = {
   approvals: document.querySelector("#approvalsList"),
   events: document.querySelector("#eventsList")
 };
+const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -224,6 +225,7 @@ function render() {
   renderMessages();
   renderTasks();
   renderApprovals();
+  renderDiagnostics();
   renderEvents();
 }
 
@@ -480,6 +482,48 @@ function renderEvents() {
       <p class="item-body">${escapeHtml(item.summary || "")}</p>
     </article>
   `);
+}
+
+function renderDiagnostics() {
+  const messages = state.data?.messages || [];
+  const tasks = state.data?.tasks || [];
+  const approvals = state.data?.approvals || [];
+  const latestAgentMessage = messages.find((message) => message.direction === "agent_to_operator");
+  const openTasks = tasks.filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
+  const pendingApprovals = approvals.filter((item) => item.status === "pending").length;
+  const llmReady = Boolean(state.llmConfig?.enabled);
+
+  const cards = [
+    {
+      label: "Latch",
+      value: connectionText.textContent || "Checking",
+      status: connectionDot.classList.contains("online") ? "ok" : "bad"
+    },
+    {
+      label: "LLM",
+      value: llmReady ? state.llmConfig.model : "Not configured",
+      status: llmReady ? "ok" : "warn"
+    },
+    {
+      label: "Open Work",
+      value: `${pendingApprovals} approvals / ${openTasks} tasks`,
+      status: pendingApprovals ? "warn" : "ok"
+    },
+    {
+      label: "Worker",
+      value: latestAgentMessage ? formatTime(latestAgentMessage.createdAt) : "No update",
+      status: latestAgentMessage ? "ok" : "warn",
+      note: latestAgentMessage ? latestAgentMessage.text.slice(0, 140) : ""
+    }
+  ];
+
+  diagnosticsGrid.innerHTML = cards.map((card) => `
+    <article class="status-card ${card.status}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      ${card.note ? `<p>${escapeHtml(card.note)}</p>` : ""}
+    </article>
+  `).join("");
 }
 
 function renderList(target, items, template) {
