@@ -47,3 +47,5 @@ Run OpenClaw with:
 - human approval for commands, purchases, infrastructure changes, and credential changes
 - human presence for CAPTCHA, account creation, and email verification steps
 - text-only bridge mode until explicit execution capabilities are added and reviewed
+
+If OpenClaw needs project source context, give it a VM-local read-only checkout. Do not let it use the trusted Windows working tree or a write-capable GitHub credential.

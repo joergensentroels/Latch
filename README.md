@@ -8,6 +8,8 @@ If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](.
 
 For the Ubuntu OpenClaw worker VM, see [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md).
 
+OpenClaw should inspect this project from its own VM-local read-only checkout, not from the trusted Windows working tree.
+
 ## Start locally
 
 ```powershell
