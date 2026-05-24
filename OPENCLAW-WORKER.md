@@ -153,7 +153,7 @@ sudo env $(sudo grep -v '^#' /etc/latch-agent-bridge.env | xargs) \
 
 ## Context And Memory
 
-Use the Latch Context tab for normal operator-provided memory: goals, personality, boundaries, project notes, and small supporting files. The bridge receives a compact context briefing with explicitly shared notes and selected small text files.
+Use the Latch Context tab for normal operator-provided memory: goals, personality, boundaries, project notes, and small supporting files. The Agent Profile section is sent first as structured identity/direction when shared. The bridge receives a compact context briefing with the shared profile, explicitly shared notes, and selected small text files.
 
 The worker may ask for missing durable context by creating a `context_question` approval. When the operator answers that card, Latch saves the answer as shared Context for future responses.
 

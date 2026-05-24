@@ -24,6 +24,14 @@ const taskForm = document.querySelector("#taskForm");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
 const taskPriority = document.querySelector("#taskPriority");
+const profileForm = document.querySelector("#profileForm");
+const profileName = document.querySelector("#profileName");
+const profilePurpose = document.querySelector("#profilePurpose");
+const profileGoals = document.querySelector("#profileGoals");
+const profileBoundaries = document.querySelector("#profileBoundaries");
+const profileCommunicationStyle = document.querySelector("#profileCommunicationStyle");
+const profileShare = document.querySelector("#profileShare");
+const profileStatus = document.querySelector("#profileStatus");
 const contextNoteForm = document.querySelector("#contextNoteForm");
 const contextTitle = document.querySelector("#contextTitle");
 const contextCategory = document.querySelector("#contextCategory");
@@ -128,6 +136,25 @@ taskForm.addEventListener("submit", async (event) => {
     taskTitle.value = "";
     taskDetails.value = "";
     taskPriority.value = "normal";
+    await refresh();
+  });
+});
+
+profileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await withSubmitLock(profileForm, async () => {
+    await api("/api/profile", {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: profileName.value.trim(),
+        purpose: profilePurpose.value.trim(),
+        goals: profileGoals.value.trim(),
+        boundaries: profileBoundaries.value.trim(),
+        communicationStyle: profileCommunicationStyle.value.trim(),
+        shareWithAgent: profileShare.checked
+      })
+    });
+    setFormStatus(profileStatus, "Profile saved.", "success");
     await refresh();
   });
 });
@@ -380,11 +407,24 @@ function render() {
   renderMessages();
   renderTasks();
   renderApprovals();
+  renderProfile();
   renderContext();
   renderDiagnostics();
   renderSecurityChecklist();
   renderArchives();
   renderEvents();
+}
+
+function renderProfile() {
+  const profile = state.data?.profile || {};
+  if (profileForm.contains(document.activeElement)) return;
+
+  profileName.value = profile.name || "";
+  profilePurpose.value = profile.purpose || "";
+  profileGoals.value = profile.goals || "";
+  profileBoundaries.value = profile.boundaries || "";
+  profileCommunicationStyle.value = profile.communicationStyle || "";
+  profileShare.checked = profile.shareWithAgent !== false;
 }
 
 function renderRouteWarning() {

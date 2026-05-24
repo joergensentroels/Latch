@@ -422,6 +422,16 @@ button[type="submit"]:hover,
   margin: 0;
 }
 
+.compact-check {
+  min-height: 34px;
+  justify-content: flex-end;
+  font-size: 0.88rem;
+}
+
+.profile-form {
+  margin-bottom: 12px;
+}
+
 .form-status {
   min-height: 20px;
   margin: 0;

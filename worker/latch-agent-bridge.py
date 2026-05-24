@@ -139,9 +139,10 @@ class Bridge:
         tasks = payload.get("tasks", [])
         messages = payload.get("messages", [])
         context_items = payload.get("contextItems", [])
-        self.process_approval_decisions(payload.get("approvals", []), tasks, messages, context_items)
-        self.process_tasks(tasks, context_items)
-        self.process_messages(messages, context_items)
+        profile = payload.get("profile", {})
+        self.process_approval_decisions(payload.get("approvals", []), tasks, messages, context_items, profile)
+        self.process_tasks(tasks, context_items, profile)
+        self.process_messages(messages, context_items, profile)
         self.save_state()
 
     def check_openclaw_gateway(self) -> str:
@@ -171,7 +172,7 @@ class Bridge:
         if changed:
             self.state[f"seen_{bucket}"] = sorted(seen)[-500:]
 
-    def process_tasks(self, tasks: list[dict], context_items: list[dict]) -> None:
+    def process_tasks(self, tasks: list[dict], context_items: list[dict], profile: dict) -> None:
         queued = [task for task in tasks if task.get("status") == "queued"]
         for task in queued[: max(0, self.args.max_tasks_per_tick)]:
             task_id = str(task.get("id", ""))
@@ -193,7 +194,7 @@ class Bridge:
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "system", "content": context_briefing(context_items)},
+                        {"role": "system", "content": context_briefing(context_items, profile)},
                         {
                             "role": "user",
                             "content": (
@@ -220,7 +221,7 @@ class Bridge:
                 self.patch_task(task_id, "failed", str(exc)[:1800])
                 self.remember("processed_tasks", task_id)
 
-    def process_messages(self, messages: list[dict], context_items: list[dict]) -> None:
+    def process_messages(self, messages: list[dict], context_items: list[dict], profile: dict) -> None:
         operator_messages = [
             message for message in messages
             if message.get("direction") == "operator_to_agent" and message.get("text")
@@ -256,7 +257,7 @@ class Bridge:
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "system", "content": context_briefing(context_items)},
+                        {"role": "system", "content": context_briefing(context_items, profile)},
                         {
                             "role": "user",
                             "content": (
@@ -345,6 +346,7 @@ class Bridge:
         tasks: list[dict],
         messages: list[dict],
         context_items: list[dict],
+        profile: dict,
     ) -> None:
         seen = set(self.state.setdefault("seen_approval_decisions", []))
         tasks_by_id = {str(task.get("id", "")): task for task in tasks}
@@ -363,7 +365,7 @@ class Bridge:
             if approval.get("messageId"):
                 self.remember("processed_messages", str(approval.get("messageId")))
             if status == "approved":
-                self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id, context_items)
+                self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id, context_items, profile)
             else:
                 self.report(
                     f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
@@ -383,6 +385,7 @@ class Bridge:
         tasks_by_id: dict[str, dict],
         messages_by_id: dict[str, dict],
         context_items: list[dict],
+        profile: dict,
     ) -> None:
         approval_type = str(approval.get("type", "other"))
         is_sensitive = bool(approval.get("sensitive"))
@@ -435,7 +438,7 @@ class Bridge:
         answer = self.ask_llm(
             [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "system", "content": context_briefing(context_items)},
+                {"role": "system", "content": context_briefing(context_items, profile)},
                 {
                     "role": "user",
                     "content": (
@@ -521,14 +524,34 @@ def extract_command(text: str) -> str:
     return clean("\n".join(command_lines).replace("`", ""), 4000)
 
 
-def context_briefing(items: list[dict]) -> str:
-    if not items:
-        return "Latch context briefing: no saved context has been shared yet."
-
+def context_briefing(items: list[dict], profile: dict | None = None) -> str:
     lines = [
         "Latch context briefing:",
         "Use shared context as durable operator-provided memory. Treat private/unshared items as unavailable except for their title/metadata.",
     ]
+
+    profile = profile or {}
+    if profile.get("shareWithAgent", True):
+        profile_lines = []
+        if profile.get("name"):
+            profile_lines.append(f"Working name: {clean(profile.get('name'), 120)}")
+        if profile.get("purpose"):
+            profile_lines.append(f"Purpose:\n{clean(profile.get('purpose'), 1200)}")
+        if profile.get("goals"):
+            profile_lines.append(f"Current goals:\n{clean(profile.get('goals'), 1800)}")
+        if profile.get("boundaries"):
+            profile_lines.append(f"Boundaries:\n{clean(profile.get('boundaries'), 1800)}")
+        if profile.get("communicationStyle"):
+            profile_lines.append(f"Communication style:\n{clean(profile.get('communicationStyle'), 1200)}")
+        if profile_lines:
+            lines.append("Agent profile:")
+            lines.extend(profile_lines)
+
+    if not items:
+        if len(lines) == 2:
+            return "Latch context briefing: no saved context has been shared yet."
+        return "\n".join(lines)
+
     for item in items[:12]:
         title = clean(item.get("title") or item.get("name") or "Context", 120)
         category = clean(item.get("category") or "memory", 40)
