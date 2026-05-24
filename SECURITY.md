@@ -102,6 +102,12 @@ Agents may request human help with CAPTCHA, email confirmation, account setup, o
 
 The operator should complete those steps only on a trusted device and return the minimum useful result. Do not give the agent your main account, password manager, 2FA seed, recovery email, banking session, or long-lived personal credentials.
 
+## External Contact
+
+Agents should not receive a mailbox, SMTP credential, social account, or unrestricted browser session by default. If an agent needs to contact a collaborator or security reviewer, the first version should be a supervised draft-and-approve workflow: the agent drafts the message in Latch, the operator reviews recipient and content, and the operator sends manually or through a narrow future connector.
+
+See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) for the proposed external-contact model and public security-review checklist.
+
 ## Phone Install
 
 For phone installation, prefer the HTTPS URL created by Tailscale Serve. Some mobile browsers limit PWA installation on plain HTTP.
