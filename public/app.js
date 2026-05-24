@@ -30,11 +30,13 @@ const contextCategory = document.querySelector("#contextCategory");
 const contextTags = document.querySelector("#contextTags");
 const contextText = document.querySelector("#contextText");
 const contextShare = document.querySelector("#contextShare");
+const contextNoteStatus = document.querySelector("#contextNoteStatus");
 const contextFileForm = document.querySelector("#contextFileForm");
 const contextFileInput = document.querySelector("#contextFileInput");
 const contextFileCategory = document.querySelector("#contextFileCategory");
 const contextFileTags = document.querySelector("#contextFileTags");
 const contextFileShare = document.querySelector("#contextFileShare");
+const contextFileStatus = document.querySelector("#contextFileStatus");
 const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
 const installButton = document.querySelector("#installButton");
@@ -114,55 +116,72 @@ contextNoteForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const title = contextTitle.value.trim();
   const text = contextText.value.trim();
-  if (!text) return;
+  if (!text) {
+    setFormStatus(contextNoteStatus, "Add a note before saving.", "error");
+    contextText.focus();
+    return;
+  }
 
-  await withSubmitLock(contextNoteForm, async () => {
-    await api("/api/context/notes", {
-      method: "POST",
-      body: JSON.stringify({
-        title,
-        text,
-        category: contextCategory.value,
-        tags: tagsFromInput(contextTags.value),
-        shareWithAgent: contextShare.checked
-      })
+  try {
+    await withSubmitLock(contextNoteForm, async () => {
+      await api("/api/context/notes", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          text,
+          category: contextCategory.value,
+          tags: tagsFromInput(contextTags.value),
+          shareWithAgent: contextShare.checked
+        })
+      });
+      contextTitle.value = "";
+      contextTags.value = "";
+      contextText.value = "";
+      contextShare.checked = true;
+      setFormStatus(contextNoteStatus, "Saved to Context.", "success");
+      await refresh();
     });
-    contextTitle.value = "";
-    contextTags.value = "";
-    contextText.value = "";
-    contextShare.checked = true;
-    await refresh();
-  });
+  } catch (error) {
+    setFormStatus(contextNoteStatus, `Could not save: ${error.message}`, "error");
+  }
 });
 
 contextFileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const file = contextFileInput.files?.[0];
-  if (!file) return;
+  if (!file) {
+    setFormStatus(contextFileStatus, "Choose a file before uploading.", "error");
+    return;
+  }
   if (file.size > maxContextUploadBytes) {
-    window.alert(`Files are limited to ${formatBytes(maxContextUploadBytes)} for now.`);
+    setFormStatus(contextFileStatus, `Files are limited to ${formatBytes(maxContextUploadBytes)} for now.`, "error");
     return;
   }
 
-  await withSubmitLock(contextFileForm, async () => {
-    const contentBase64 = await fileToBase64(file);
-    await api("/api/context/files", {
-      method: "POST",
-      body: JSON.stringify({
-        name: file.name,
-        type: file.type || "application/octet-stream",
-        size: file.size,
-        category: contextFileCategory.value,
-        tags: tagsFromInput(contextFileTags.value),
-        shareWithAgent: contextFileShare.checked,
-        contentBase64
-      })
+  try {
+    await withSubmitLock(contextFileForm, async () => {
+      const contentBase64 = await fileToBase64(file);
+      await api("/api/context/files", {
+        method: "POST",
+        body: JSON.stringify({
+          name: file.name,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+          category: contextFileCategory.value,
+          tags: tagsFromInput(contextFileTags.value),
+          shareWithAgent: contextFileShare.checked,
+          contentBase64
+        })
+      });
+      contextFileInput.value = "";
+      contextFileTags.value = "";
+      contextFileShare.checked = false;
+      setFormStatus(contextFileStatus, "Uploaded to Context.", "success");
+      await refresh();
     });
-    contextFileInput.value = "";
-    contextFileTags.value = "";
-    contextFileShare.checked = false;
-    await refresh();
-  });
+  } catch (error) {
+    setFormStatus(contextFileStatus, `Could not upload: ${error.message}`, "error");
+  }
 });
 
 refreshButton.addEventListener("click", refresh);
@@ -749,6 +768,13 @@ async function fileToBase64(file) {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
   return btoa(binary);
+}
+
+function setFormStatus(target, message, type = "") {
+  if (!target) return;
+  target.textContent = message;
+  target.classList.toggle("success", type === "success");
+  target.classList.toggle("error", type === "error");
 }
 
 function escapeHtml(value) {
