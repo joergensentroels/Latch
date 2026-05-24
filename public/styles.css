@@ -312,6 +312,30 @@ button[type="submit"]:hover,
   justify-content: flex-end;
 }
 
+.split-toolbar {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.02rem;
+  line-height: 1.25;
+}
+
+.ops-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
 .segmented-control {
   display: inline-grid;
   grid-auto-flow: column;

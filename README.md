@@ -132,6 +132,8 @@ powershell -ExecutionPolicy Bypass -File .\Status-Latch.ps1
 powershell -ExecutionPolicy Bypass -File .\Stop-Latch.ps1
 ```
 
+`Start-Latch-Tailscale.ps1` now restarts existing Latch Node listeners by default before launching. This prevents stale server code from surviving an app update. Use `-NoRestartExisting` only when you intentionally want a no-op if Latch is already healthy.
+
 Optional Windows logon auto-start:
 
 ```powershell
@@ -188,6 +190,13 @@ Current limits:
 - shared file contents are sent to the worker only for text-like files up to 200 KB
 
 For normal context, use the Latch browser/app upload flow. SSH is still fine for large files, VM administration, or one-off maintenance, but files copied directly over SSH are not automatically tracked in Latch Context unless you add a note or future import step.
+
+Use the Timeline tab for local operations:
+
+- `Backup` writes a timestamped copy of `data\db.json` to `data\backups\`
+- `Export Context` downloads the current Context library as JSON
+- Archive buttons remove test items from active views without deleting them
+- Archived items can be restored or permanently deleted from Timeline
 
 ## Agent API
 

@@ -41,6 +41,9 @@ const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
 const installButton = document.querySelector("#installButton");
 const notifyButton = document.querySelector("#notifyButton");
+const backupButton = document.querySelector("#backupButton");
+const exportContextButton = document.querySelector("#exportContextButton");
+const backupStatus = document.querySelector("#backupStatus");
 const installHint = document.querySelector("#installHint");
 const dismissInstallHint = document.querySelector("#dismissInstallHint");
 const connectionDot = document.querySelector("#connectionDot");
@@ -63,6 +66,7 @@ const lists = {
   tasks: document.querySelector("#tasksList"),
   approvals: document.querySelector("#approvalsList"),
   context: document.querySelector("#contextList"),
+  archives: document.querySelector("#archivesList"),
   events: document.querySelector("#eventsList")
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
@@ -186,6 +190,8 @@ contextFileForm.addEventListener("submit", async (event) => {
 
 refreshButton.addEventListener("click", refresh);
 notifyButton.addEventListener("click", enableNotifications);
+backupButton.addEventListener("click", createBackup);
+exportContextButton.addEventListener("click", exportContext);
 installButton.addEventListener("click", async () => {
   if (!state.deferredInstallPrompt) return;
   state.deferredInstallPrompt.prompt();
@@ -277,12 +283,14 @@ function showLogin() {
 
 async function refresh() {
   try {
-    const [appState, llmConfig] = await Promise.all([
+    const [appState, llmConfig, about] = await Promise.all([
       api("/api/state"),
-      api("/api/llm/config")
+      api("/api/llm/config"),
+      api("/api/about")
     ]);
     state.data = appState;
     state.llmConfig = llmConfig;
+    state.about = about;
     markConnection(true);
     render();
   } catch (error) {
@@ -325,6 +333,7 @@ function render() {
   renderApprovals();
   renderContext();
   renderDiagnostics();
+  renderArchives();
   renderEvents();
 }
 
@@ -446,8 +455,12 @@ function renderMessages() {
         <span class="item-meta">${formatTime(message.createdAt)}</span>
       </div>
       <p class="item-body">${escapeHtml(message.text)}</p>
+      <div class="approval-actions">
+        <button class="secondary-button" data-archive-kind="messages" data-archive-id="${escapeHtml(message.id)}" type="button">Archive</button>
+      </div>
     </article>
   `);
+  bindArchiveButtons(lists.messages);
 }
 
 function renderTasks() {
@@ -467,8 +480,12 @@ function renderTasks() {
       </div>
       <p class="item-body">${escapeHtml(task.details || task.note || "")}</p>
       <p class="item-meta">${escapeHtml(task.priority)} - ${formatTime(task.updatedAt || task.createdAt)}</p>
+      <div class="approval-actions">
+        <button class="secondary-button" data-archive-kind="tasks" data-archive-id="${escapeHtml(task.id)}" type="button">Archive</button>
+      </div>
     </article>
   `);
+  bindArchiveButtons(lists.tasks);
 }
 
 function renderApprovals() {
@@ -499,8 +516,13 @@ function renderApprovals() {
         <div class="approval-actions">
           <button class="secondary-button" data-approval="${approval.id}" data-status="approved">${approvalActionLabel(approval, "approved")}</button>
           <button class="danger-button" data-approval="${approval.id}" data-status="denied">${approvalActionLabel(approval, "denied")}</button>
+          <button class="secondary-button" data-archive-kind="approvals" data-archive-id="${escapeHtml(approval.id)}" type="button">Archive</button>
         </div>
-      ` : ""}
+      ` : `
+        <div class="approval-actions">
+          <button class="secondary-button" data-archive-kind="approvals" data-archive-id="${escapeHtml(approval.id)}" type="button">Archive</button>
+        </div>
+      `}
     </article>
   `);
 
@@ -509,6 +531,7 @@ function renderApprovals() {
       openApprovalDialog(button.dataset.approval, button.dataset.status);
     });
   });
+  bindArchiveButtons(lists.approvals);
 }
 
 function renderContext() {
@@ -533,11 +556,13 @@ function renderContext() {
         <div class="approval-actions">
           <button class="secondary-button" data-context-download="${escapeHtml(item.id)}" type="button">Download</button>
           <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Share"}</button>
+          <button class="secondary-button" data-archive-kind="context" data-archive-id="${escapeHtml(item.id)}" type="button">Archive</button>
         </div>
       ` : `
         <p class="item-body">${escapeHtml(item.text || item.preview || "")}</p>
         <div class="approval-actions">
           <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Share"}</button>
+          <button class="secondary-button" data-archive-kind="context" data-archive-id="${escapeHtml(item.id)}" type="button">Archive</button>
         </div>
       `}
     </article>
@@ -549,6 +574,7 @@ function renderContext() {
   lists.context.querySelectorAll("[data-context-share]").forEach((button) => {
     button.addEventListener("click", () => updateContextShare(button.dataset.contextShare, button.dataset.contextShareValue === "true"));
   });
+  bindArchiveButtons(lists.context);
 }
 
 async function updateContextShare(id, shareWithAgent) {
@@ -567,10 +593,14 @@ async function downloadContextFile(id) {
 
   const blob = await response.blob();
   const item = (state.data?.contextItems || []).find((entry) => entry.id === id);
+  downloadBlob(blob, item?.name || "context-file");
+}
+
+function downloadBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = item?.name || "context-file";
+  link.download = fileName;
   document.body.append(link);
   link.click();
   link.remove();
@@ -674,6 +704,8 @@ function renderDiagnostics() {
   const openTasks = tasks.filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const pendingApprovals = approvals.filter((item) => item.status === "pending").length;
   const llmReady = Boolean(state.llmConfig?.enabled);
+  const about = state.about || {};
+  const uptime = about.uptimeSeconds ? `${Math.floor(about.uptimeSeconds / 60)}m ${about.uptimeSeconds % 60}s` : "Unknown";
 
   const cards = [
     {
@@ -696,6 +728,18 @@ function renderDiagnostics() {
       value: latestAgentMessage ? formatTime(latestAgentMessage.createdAt) : "No update",
       status: latestAgentMessage ? "ok" : "warn",
       note: latestAgentMessage ? latestAgentMessage.text.slice(0, 140) : ""
+    },
+    {
+      label: "Server",
+      value: `v${about.version || "dev"} / PID ${about.pid || "?"}`,
+      status: "ok",
+      note: `Started ${formatTime(about.startedAt)} / uptime ${uptime}`
+    },
+    {
+      label: "Storage",
+      value: `${about.counts?.contextItems || 0} context / ${about.counts?.archived || 0} archived`,
+      status: about.counts?.archived ? "warn" : "ok",
+      note: about.dataDir || ""
     }
   ];
 
@@ -708,12 +752,97 @@ function renderDiagnostics() {
   `).join("");
 }
 
+function renderArchives() {
+  const archives = state.data?.archives || {};
+  const items = [
+    ...(archives.messages || []).map((item) => ({ kind: "messages", label: item.author || "Message", title: item.text || item.id, archivedAt: item.archivedAt, id: item.id })),
+    ...(archives.tasks || []).map((item) => ({ kind: "tasks", label: "Task", title: item.title || item.id, archivedAt: item.archivedAt, id: item.id })),
+    ...(archives.approvals || []).map((item) => ({ kind: "approvals", label: "Approval", title: item.title || item.id, archivedAt: item.archivedAt, id: item.id })),
+    ...(archives.contextItems || []).map((item) => ({ kind: "context", label: "Context", title: item.title || item.name || item.id, archivedAt: item.archivedAt, id: item.id }))
+  ];
+
+  renderList(lists.archives, items, (item) => `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(item.label)}</h2>
+        <span class="item-meta">${formatTime(item.archivedAt)}</span>
+      </div>
+      <p class="item-body">${escapeHtml(String(item.title || "").slice(0, 280))}</p>
+      <div class="approval-actions">
+        <button class="secondary-button" data-unarchive-kind="${escapeHtml(item.kind)}" data-unarchive-id="${escapeHtml(item.id)}" type="button">Restore</button>
+        <button class="danger-button" data-delete-kind="${escapeHtml(item.kind)}" data-delete-id="${escapeHtml(item.id)}" type="button">Delete</button>
+      </div>
+    </article>
+  `);
+
+  lists.archives.querySelectorAll("[data-unarchive-kind]").forEach((button) => {
+    button.addEventListener("click", () => archiveItem(button.dataset.unarchiveKind, button.dataset.unarchiveId, false));
+  });
+  lists.archives.querySelectorAll("[data-delete-kind]").forEach((button) => {
+    button.addEventListener("click", () => deleteItem(button.dataset.deleteKind, button.dataset.deleteId));
+  });
+}
+
 function renderList(target, items, template) {
   if (!items.length) {
     target.innerHTML = document.querySelector("#emptyTemplate").innerHTML;
     return;
   }
   target.innerHTML = items.map(template).join("");
+}
+
+function bindArchiveButtons(target) {
+  target.querySelectorAll("[data-archive-kind]").forEach((button) => {
+    button.addEventListener("click", () => archiveItem(button.dataset.archiveKind, button.dataset.archiveId, true));
+  });
+}
+
+async function archiveItem(kind, id, archived) {
+  await api(`${collectionPath(kind)}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived })
+  });
+  await refresh();
+}
+
+async function deleteItem(kind, id) {
+  if (!window.confirm("Delete this archived item permanently?")) return;
+  await api(`${collectionPath(kind)}/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await refresh();
+}
+
+function collectionPath(kind) {
+  const paths = {
+    messages: "/api/messages",
+    tasks: "/api/tasks",
+    approvals: "/api/approvals",
+    context: "/api/context"
+  };
+  return paths[kind] || "/api/messages";
+}
+
+async function createBackup() {
+  try {
+    const result = await api("/api/backups", { method: "POST", body: JSON.stringify({}) });
+    setFormStatus(backupStatus, `Backup created: ${result.fileName}`, "success");
+    await refresh();
+  } catch (error) {
+    setFormStatus(backupStatus, `Backup failed: ${error.message}`, "error");
+  }
+}
+
+async function exportContext() {
+  try {
+    const response = await fetch("/api/context/export", {
+      headers: { authorization: `Bearer ${state.token}` }
+    });
+    if (!response.ok) throw new Error(`Export failed: ${response.status}`);
+    const blob = await response.blob();
+    downloadBlob(blob, `latch-context-${new Date().toISOString().replaceAll(":", "-")}.json`);
+    setFormStatus(backupStatus, "Context export downloaded.", "success");
+  } catch (error) {
+    setFormStatus(backupStatus, `Export failed: ${error.message}`, "error");
+  }
 }
 
 function markConnection(isOnline) {

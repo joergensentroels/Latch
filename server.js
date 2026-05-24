@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat, unlink } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -13,6 +13,7 @@ const authPath = path.join(dataDir, "auth.json");
 const llmConfigPath = path.join(dataDir, "llm-provider.json");
 const notificationConfigPath = path.join(dataDir, "notifications.json");
 const contextFilesDir = path.join(dataDir, "context-files");
+const backupsDir = path.join(dataDir, "backups");
 const maxUploadBytes = 2_000_000;
 const maxUploadBodyBytes = 3_000_000;
 const maxSharedFileBytes = 200_000;
@@ -22,6 +23,8 @@ const hosts = (process.env.HOSTS || process.env.HOST || "127.0.0.1")
   .map((value) => value.trim())
   .filter(Boolean);
 const port = Number(process.env.PORT || 8787);
+const startedAt = new Date().toISOString();
+const appVersion = "0.2.0";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -51,6 +54,7 @@ const emptyDb = {
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(contextFilesDir, { recursive: true });
+await mkdir(backupsDir, { recursive: true });
 const auth = await loadAuth();
 
 function createServer() {
@@ -137,6 +141,59 @@ async function handleApi(req, res, url) {
   if (url.pathname === "/api/state" && req.method === "GET") {
     const db = await readDb();
     sendJson(res, 200, visibleState(db));
+    return;
+  }
+
+  if (url.pathname === "/api/about" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const db = await readDb();
+    const llm = await loadLlmConfig();
+    const notifications = await loadNotificationConfig();
+    sendJson(res, 200, {
+      app: "latch",
+      version: appVersion,
+      pid: process.pid,
+      startedAt,
+      uptimeSeconds: Math.round(process.uptime()),
+      hosts,
+      port,
+      dataDir,
+      dbPath,
+      counts: {
+        messages: activeItems(db.messages).length,
+        tasks: activeItems(db.tasks).length,
+        approvals: activeItems(db.approvals).length,
+        contextItems: activeItems(db.contextItems).length,
+        archived: countArchived(db)
+      },
+      llm: publicLlmConfig(llm),
+      notifications: publicNotificationConfig(notifications)
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/context/export" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const db = await readDb();
+    sendDownloadJson(res, 200, `latch-context-${safeTimestamp()}.json`, {
+      exportedAt: new Date().toISOString(),
+      app: "latch",
+      version: appVersion,
+      contextItems: db.contextItems.map(operatorContextItem)
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/backups" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const backup = await createLocalBackup();
+    sendJson(res, 201, backup);
     return;
   }
 
@@ -235,10 +292,19 @@ async function handleApi(req, res, url) {
     const allowedStatuses = ["queued", "running", "waiting", "done", "failed", "paused"];
     if (body.status) task.status = cleanChoice(body.status, allowedStatuses, task.status);
     if (body.note) task.note = cleanText(body.note, 2000);
+    if (body.archived !== undefined) task.archivedAt = cleanBoolean(body.archived, false) ? new Date().toISOString() : "";
     task.updatedAt = new Date().toISOString();
     db.events.unshift(event("task.updated", role, task.id, `${task.title}: ${task.status}`));
     await writeDb(db);
     sendJson(res, 200, task);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/tasks/") && req.method === "DELETE") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    await removeDbItem(res, "tasks", url.pathname.split("/").at(-1), "task.deleted");
     return;
   }
 
@@ -290,11 +356,13 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    approval.status = cleanChoice(body.status, ["approved", "denied", "pending"], approval.status);
-    approval.responseNote = cleanText(body.note || "", 2000);
+    const previousStatus = approval.status;
+    if (body.status) approval.status = cleanChoice(body.status, ["approved", "denied", "pending"], approval.status);
+    if (body.archived !== undefined) approval.archivedAt = cleanBoolean(body.archived, false) ? new Date().toISOString() : "";
+    if (body.note !== undefined) approval.responseNote = cleanText(body.note || "", 2000);
     approval.updatedAt = new Date().toISOString();
     db.events.unshift(event(`approval.${approval.status}`, "operator", approval.id, approval.title));
-    if (approval.type === "context_question" && approval.status === "approved" && approval.responseNote) {
+    if (approval.type === "context_question" && previousStatus !== "approved" && approval.status === "approved" && approval.responseNote) {
       const contextItem = createContextNote({
         title: approval.title,
         text: approval.responseNote,
@@ -309,6 +377,14 @@ async function handleApi(req, res, url) {
     }
     await writeDb(db);
     sendJson(res, 200, approval);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/approvals/") && req.method === "DELETE") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    await removeDbItem(res, "approvals", url.pathname.split("/").at(-1), "approval.deleted");
     return;
   }
 
@@ -446,11 +522,47 @@ async function handleApi(req, res, url) {
     if (body.category !== undefined) item.category = cleanCategory(body.category);
     if (body.tags !== undefined) item.tags = cleanTags(body.tags);
     if (body.shareWithAgent !== undefined) item.shareWithAgent = cleanBoolean(body.shareWithAgent, item.shareWithAgent);
+    if (body.archived !== undefined) item.archivedAt = cleanBoolean(body.archived, false) ? new Date().toISOString() : "";
     if (item.kind === "file") item.shareStatus = fileShareStatus(item.mimeType || "", item.size || 0, item.name || "");
     item.updatedAt = new Date().toISOString();
     db.events.unshift(event("context.updated", "operator", item.id, item.title || item.name || "Context"));
     await writeDb(db);
     sendJson(res, 200, operatorContextItem(item));
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/context/") && req.method === "DELETE") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    await removeDbItem(res, "contextItems", url.pathname.split("/").at(-1), "context.deleted");
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/messages/") && req.method === "PATCH") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const id = url.pathname.split("/").at(-1);
+    const db = await readDb();
+    const message = db.messages.find((item) => item.id === id);
+    if (!message) {
+      sendJson(res, 404, { error: "not_found" });
+      return;
+    }
+    if (body.archived !== undefined) message.archivedAt = cleanBoolean(body.archived, false) ? new Date().toISOString() : "";
+    db.events.unshift(event("message.updated", "operator", message.id, message.text.slice(0, 120)));
+    await writeDb(db);
+    sendJson(res, 200, message);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/messages/") && req.method === "DELETE") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    await removeDbItem(res, "messages", url.pathname.split("/").at(-1), "message.deleted");
     return;
   }
 
@@ -460,10 +572,10 @@ async function handleApi(req, res, url) {
 
     const db = await readDb();
     sendJson(res, 200, {
-      tasks: db.tasks.filter((task) => ["queued", "running", "waiting"].includes(task.status)),
-      messages: db.messages.slice(0, 20),
-      approvals: db.approvals.slice(0, 50),
-      contextItems: await agentContextItems(db.contextItems.slice(0, 50))
+      tasks: activeItems(db.tasks).filter((task) => ["queued", "running", "waiting"].includes(task.status)),
+      messages: activeItems(db.messages).slice(0, 20),
+      approvals: activeItems(db.approvals).slice(0, 50),
+      contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50))
     });
     return;
   }
@@ -752,11 +864,17 @@ function requireAgent(role, res) {
 function visibleState(db) {
   return {
     meta: db.meta,
-    messages: db.messages.slice(0, 100),
-    tasks: db.tasks.slice(0, 100),
-    approvals: db.approvals.slice(0, 100),
+    messages: activeItems(db.messages).slice(0, 100),
+    tasks: activeItems(db.tasks).slice(0, 100),
+    approvals: activeItems(db.approvals).slice(0, 100),
     events: db.events.slice(0, 100),
-    contextItems: db.contextItems.slice(0, 100).map(operatorContextItem)
+    contextItems: activeItems(db.contextItems).slice(0, 100).map(operatorContextItem),
+    archives: {
+      messages: archivedItems(db.messages).slice(0, 100),
+      tasks: archivedItems(db.tasks).slice(0, 100),
+      approvals: archivedItems(db.approvals).slice(0, 100),
+      contextItems: archivedItems(db.contextItems).slice(0, 100).map(operatorContextItem)
+    }
   };
 }
 
@@ -810,6 +928,55 @@ function operatorContextItem(item) {
     ...publicContextItem(item),
     originApprovalId: item.originApprovalId || ""
   };
+}
+
+function activeItems(items) {
+  return (items || []).filter((item) => !item.archivedAt);
+}
+
+function archivedItems(items) {
+  return (items || []).filter((item) => item.archivedAt);
+}
+
+function countArchived(db) {
+  return ["messages", "tasks", "approvals", "contextItems"]
+    .reduce((total, key) => total + archivedItems(db[key]).length, 0);
+}
+
+async function createLocalBackup() {
+  await mkdir(backupsDir, { recursive: true });
+  const raw = await readFile(dbPath, "utf8");
+  const fileName = `db-${safeTimestamp()}.json`;
+  const target = path.join(backupsDir, fileName);
+  await writeFile(target, raw);
+  const info = await stat(target);
+  return {
+    ok: true,
+    fileName,
+    path: target,
+    size: info.size,
+    createdAt: new Date().toISOString()
+  };
+}
+
+async function removeDbItem(res, collection, id, eventType) {
+  const db = await readDb();
+  const items = db[collection] || [];
+  const index = items.findIndex((item) => item.id === id);
+  if (index === -1) {
+    sendJson(res, 404, { error: "not_found" });
+    return;
+  }
+  const [removed] = items.splice(index, 1);
+  if (collection === "contextItems" && removed.kind === "file" && removed.storedName) {
+    const storedPath = path.join(contextFilesDir, removed.storedName);
+    if (isInsideDirectory(storedPath, contextFilesDir)) {
+      await unlink(storedPath).catch(() => {});
+    }
+  }
+  db.events.unshift(event(eventType, "operator", id, removed.title || removed.text?.slice(0, 120) || id));
+  await writeDb(db);
+  sendJson(res, 200, { ok: true, removed: id });
 }
 
 async function agentContextItems(items) {
@@ -903,6 +1070,10 @@ function formatBytes(value) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function safeTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
 function isTextLike(mimeType, name = "") {
   const type = String(mimeType || "").toLowerCase();
   const ext = path.extname(String(name || "")).toLowerCase();
@@ -969,6 +1140,15 @@ async function readJsonBody(req, maxBytes = 1_000_000) {
 function sendJson(res, status, value) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(value));
+}
+
+function sendDownloadJson(res, status, fileName, value) {
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-disposition": `attachment; filename="${downloadFileName(fileName)}"`,
+    "cache-control": "no-store"
+  });
+  res.end(JSON.stringify(value, null, 2));
 }
 
 function sendText(res, status, value) {
