@@ -1,0 +1,7 @@
+{
+  "provider": "openai-compatible",
+  "baseUrl": "https://api.openai.com/v1",
+  "model": "replace-with-model-name",
+  "apiKey": "replace-with-api-key",
+  "timeoutMs": 60000
+}

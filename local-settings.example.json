@@ -1,0 +1,5 @@
+{
+  "windowsTailscaleIp": "100.x.y.z",
+  "openclawTailscaleIp": "100.a.b.c",
+  "port": 8787
+}

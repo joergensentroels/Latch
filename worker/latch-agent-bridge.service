@@ -1,0 +1,21 @@
+[Unit]
+Description=Latch safe text-only bridge for OpenClaw worker
+After=network-online.target tailscaled.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/latch-agent-bridge.env
+ExecStart=/usr/local/bin/latch-agent-bridge.py --state-path /var/lib/latch-agent-bridge/state.json
+Restart=always
+RestartSec=10
+DynamicUser=true
+StateDirectory=latch-agent-bridge
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/latch-agent-bridge
+
+[Install]
+WantedBy=multi-user.target
