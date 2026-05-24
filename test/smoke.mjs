@@ -65,6 +65,7 @@ try {
     }
   });
   assert(approval.requestedBy === "agent", "approval should record agent requester");
+  assert(approval.taskId === task.id, "approval should keep source task id");
 
   const poll = await request("/api/agent/poll", { headers: agentHeaders });
   assert(poll.tasks.some((item) => item.id === task.id), "agent poll should include queued task");

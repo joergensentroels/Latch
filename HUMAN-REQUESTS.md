@@ -44,3 +44,5 @@ Content-Type: application/json
 - `denied`: operator declined or could not complete it.
 
 In the current safe text-only mode, approving a request records the decision and notifies the agent bridge, but it does not execute commands, use credentials, or perform purchases.
+
+For non-sensitive approvals with an operator note, the bridge may use the note to draft a follow-up answer through the LLM gateway. Sensitive approval notes are not forwarded to the external LLM.
