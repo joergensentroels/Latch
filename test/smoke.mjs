@@ -75,6 +75,44 @@ try {
   assert(approval.executionMode === "read_only_status", "approval should store execution mode");
   assert(approval.renderedCommands[0].includes("systemctl"), "approval should store rendered commands");
 
+  const contactApproval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "external_contact",
+      title: "External contact",
+      details: "Draft contact request",
+      recipient: "reviewer@example.com",
+      subject: "Security review request",
+      bodyPreview: "Could you review Latch?",
+      sendMode: "manual",
+      riskLevel: "medium",
+      sensitive: true
+    }
+  });
+  assert(contactApproval.type === "external_contact", "external contact approval type should be accepted");
+  assert(contactApproval.recipient === "reviewer@example.com", "external contact recipient should be stored");
+  assert(contactApproval.bodyPreview.includes("review"), "external contact draft preview should be stored");
+
+  const researchApproval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "web_research",
+      title: "Bounded research",
+      details: "Research docs with budget",
+      researchQuestion: "How should Latch add a browser sandbox?",
+      allowedDomains: ["example.com", "docs.example.com"],
+      maxPages: 5,
+      tokenBudget: 3000,
+      riskLevel: "medium"
+    }
+  });
+  assert(researchApproval.type === "web_research", "web research approval type should be accepted");
+  assert(researchApproval.allowedDomains.length === 2, "research allowed domains should be stored");
+  assert(researchApproval.maxPages === 5, "research page budget should be stored");
+  assert(researchApproval.tokenBudget === 3000, "research token budget should be stored");
+
   const note = await request("/api/context/notes", {
     method: "POST",
     headers: operatorHeaders,

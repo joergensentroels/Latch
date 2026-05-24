@@ -106,7 +106,13 @@ The operator should complete those steps only on a trusted device and return the
 
 Agents should not receive a mailbox, SMTP credential, social account, or unrestricted browser session by default. If an agent needs to contact a collaborator or security reviewer, the first version should be a supervised draft-and-approve workflow: the agent drafts the message in Latch, the operator reviews recipient and content, and the operator sends manually or through a narrow future connector.
 
-See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) for the proposed external-contact model and public security-review checklist.
+Latch supports `external_contact` approval records for this draft-only workflow. Approval does not send the message.
+
+See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) and [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md) for the proposed external-contact model and public security-review checklist.
+
+## Web Research
+
+Agents should not scrape broadly or browse without a page and token budget. Latch supports `web_research` approval records for bounded research scopes, including allowed domains, maximum pages, and token budget. The current bridge does not browse; approval records scope only.
 
 ## Phone Install
 

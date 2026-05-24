@@ -651,9 +651,15 @@ button[type="submit"]:hover,
 
 .type-pill.purchase,
 .type-pill.credential,
+.type-pill.external_contact,
 .type-pill.sensitive {
   background: #fff1f3;
   color: #c01048;
+}
+
+.type-pill.web_research {
+  background: #eff8ff;
+  color: #175cd3;
 }
 
 .help-note {
@@ -688,6 +694,25 @@ button[type="submit"]:hover,
   color: var(--muted);
   font-size: 0.84rem;
   line-height: 1.4;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  gap: 5px 10px;
+  margin: 2px 0 0;
+  font-size: 0.84rem;
+}
+
+.detail-grid dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.detail-grid dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .approval-advice {

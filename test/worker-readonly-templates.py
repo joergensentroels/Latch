@@ -55,4 +55,21 @@ approval = bridge.enrich_status_template(
 assert approval.rendered_commands
 assert approval.command
 
+contact = bridge.detect_approval_need(
+    "Contact security reviewer",
+    "Please send an email to reviewer@example.com asking for a security review.",
+)
+assert contact.type == "external_contact"
+assert contact.recipient == "reviewer@example.com"
+assert contact.send_mode == "manual"
+
+research = bridge.detect_approval_need(
+    "Research docs",
+    "Please browse https://example.com/docs and summarize the install path without scraping too much.",
+)
+assert research.type == "web_research"
+assert research.allowed_domains == ("example.com",)
+assert research.max_pages == 5
+assert research.token_budget == 3000
+
 print("Worker read-only template tests passed.")

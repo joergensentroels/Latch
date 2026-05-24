@@ -16,6 +16,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -30,8 +31,9 @@ from pathlib import Path
 DEFAULT_STATE_PATH = Path.home() / ".local" / "state" / "latch-agent-bridge" / "state.json"
 SYSTEM_PROMPT = """You are the text-only Latch worker for a private OpenClaw setup.
 You may help with planning, explanation, coding advice, and next-step suggestions.
-You cannot run shell commands, browse, use credentials, create accounts, make purchases, access payment tools, or perform actions outside this chat.
-If a request needs a real-world action, credential, purchase, account setup, CAPTCHA, or command execution, say what you would need and ask the operator to approve or perform that step manually.
+You cannot run shell commands, browse, scrape websites, send emails/messages, use credentials, create accounts, make purchases, access payment tools, or perform actions outside this chat.
+If a request needs a real-world action, outbound contact, web research, credential, purchase, account setup, CAPTCHA, or command execution, say what you would need and ask the operator to approve or perform that step manually.
+For any future web/research workflow, prefer token-efficient summaries, narrow source lists, small page budgets, and reusable source notes instead of dumping raw pages.
 If you need durable context from the operator before giving a good answer, include one to three lines that start exactly with CONTEXT_QUESTION: followed by a concrete question.
 Keep replies concise and practical."""
 
@@ -49,6 +51,15 @@ class ApprovalNeed:
     action_preview: str = ""
     rendered_commands: tuple[str, ...] = ()
     execution_mode: str = "none"
+    recipient: str = ""
+    subject: str = ""
+    body_preview: str = ""
+    attachments: tuple[str, ...] = ()
+    send_mode: str = "manual"
+    allowed_domains: tuple[str, ...] = ()
+    max_pages: int = 0
+    token_budget: int = 0
+    research_question: str = ""
 
 
 READ_ONLY_TEMPLATE_LABELS = {
@@ -334,6 +345,15 @@ class Bridge:
                 "expectedResponse": approval.expected_response,
                 "sensitive": approval.sensitive,
                 "riskLevel": approval.risk_level,
+                "recipient": approval.recipient,
+                "subject": approval.subject,
+                "bodyPreview": approval.body_preview,
+                "attachments": list(approval.attachments),
+                "sendMode": approval.send_mode,
+                "allowedDomains": list(approval.allowed_domains),
+                "maxPages": approval.max_pages,
+                "tokenBudget": approval.token_budget,
+                "researchQuestion": approval.research_question,
                 "actionTemplate": approval.action_template,
                 "actionPreview": approval.action_preview,
                 "renderedCommands": list(approval.rendered_commands),
@@ -458,6 +478,26 @@ class Bridge:
             )
             if approval.get("taskId"):
                 self.patch_task(task_id, "paused", "Approval recorded. Execution is not enabled in text-only mode.")
+            return
+
+        if approval_type == "external_contact":
+            self.report(
+                f"External contact reviewed: {title}\n\nLatch has not sent any email or message. Use the operator note as the manual send result, edits, or boundary."
+                f"{f' Operator note: {note}' if note else ''}",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "paused", "External contact draft reviewed. No message was sent by the bridge.")
+            return
+
+        if approval_type == "web_research":
+            self.report(
+                f"Research scope reviewed: {title}\n\nThe bridge does not browse yet. Use the approved scope as planning context for a future bounded research run."
+                f"{f' Operator note: {note}' if note else ''}",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "paused", "Research scope reviewed. Browser execution is not enabled.")
             return
 
         if is_sensitive:
@@ -608,6 +648,14 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
             execution_mode="read_only_status",
         )
 
+    contact = detect_external_contact(title, details)
+    if contact:
+        return contact
+
+    research = detect_web_research(title, details)
+    if research:
+        return research
+
     for approval_type, keywords, request_title, reason, expected, sensitive in RISK_RULES:
         matched = [keyword for keyword in keywords if keyword in text]
         if matched:
@@ -623,6 +671,79 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
                 command=command,
             )
     return None
+
+
+def detect_external_contact(title: str, details: str) -> ApprovalNeed | None:
+    raw = clean(f"{title}\n{details}", 2500)
+    text = raw.lower()
+    phrases = (
+        "send email",
+        "send an email",
+        "write an email",
+        "email my",
+        "email the",
+        "contact my",
+        "contact the",
+        "message my",
+        "message the",
+        "co-creator",
+        "cocreator",
+        "security specialist",
+        "security reviewer",
+        "external contact",
+    )
+    if not any(phrase in text for phrase in phrases):
+        return None
+    return ApprovalNeed(
+        type="external_contact",
+        title="External contact approval needed",
+        details=(
+            "The request appears to involve contacting someone outside Latch.\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Review the draft/scope. Send manually if appropriate, or return edits/boundaries.",
+        sensitive=True,
+        risk_level="medium",
+        recipient=extract_email(raw),
+        subject=guess_subject(raw),
+        body_preview=raw,
+        send_mode="manual",
+    )
+
+
+def detect_web_research(title: str, details: str) -> ApprovalNeed | None:
+    raw = clean(f"{title}\n{details}", 2500)
+    text = raw.lower()
+    phrases = (
+        "browse",
+        "web research",
+        "internet research",
+        "look up",
+        "search the web",
+        "google",
+        "scrape",
+        "crawl",
+        "read the docs",
+        "read website",
+        "check website",
+    )
+    if not any(phrase in text for phrase in phrases):
+        return None
+    return ApprovalNeed(
+        type="web_research",
+        title="Bounded web research approval needed",
+        details=(
+            "The request appears to need web access or scraping. Browser/research execution is not enabled yet.\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Approve a narrow source list/page budget, or deny and provide manual sources.",
+        sensitive=False,
+        risk_level="medium",
+        allowed_domains=extract_domains(raw),
+        max_pages=5,
+        token_budget=3000,
+        research_question=raw,
+    )
 
 
 def detect_status_template(text: str) -> str:
@@ -658,6 +779,15 @@ def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> 
         action_preview=approval.action_preview,
         rendered_commands=rendered,
         execution_mode=approval.execution_mode,
+        recipient=approval.recipient,
+        subject=approval.subject,
+        body_preview=approval.body_preview,
+        attachments=approval.attachments,
+        send_mode=approval.send_mode,
+        allowed_domains=approval.allowed_domains,
+        max_pages=approval.max_pages,
+        token_budget=approval.token_budget,
+        research_question=approval.research_question,
     )
 
 
@@ -675,6 +805,30 @@ def extract_command(text: str) -> str:
         if line.startswith(("`", "$", ">", "sudo ", "docker ", "systemctl ", "ssh ", "scp ", "powershell"))
     ]
     return clean("\n".join(command_lines).replace("`", ""), 4000)
+
+
+def extract_email(text: str) -> str:
+    match = re.search(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", text)
+    return clean(match.group(0), 300) if match else ""
+
+
+def extract_domains(text: str) -> tuple[str, ...]:
+    matches = re.findall(r"https?://([^/\s)]+)", text)
+    domains = []
+    for match in matches:
+        domain = clean(match.lower().strip(".,;:"), 120)
+        if domain and domain not in domains:
+            domains.append(domain)
+    return tuple(domains[:8])
+
+
+def guess_subject(text: str) -> str:
+    lowered = text.lower()
+    if "security" in lowered and "review" in lowered:
+        return "Security review request for Latch"
+    if "co-creator" in lowered or "cocreator" in lowered:
+        return "Latch co-creator discussion"
+    return ""
 
 
 def command_template(template_id: str, args: argparse.Namespace) -> list[dict]:

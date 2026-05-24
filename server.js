@@ -19,8 +19,10 @@ const maxUploadBytes = 2_000_000;
 const maxUploadBodyBytes = 3_000_000;
 const maxSharedFileBytes = 200_000;
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "other"];
 const executionModes = ["none", "read_only_status"];
 const riskLevels = ["low", "medium", "high"];
+const contactSendModes = ["manual", "approved_connector"];
 const actionTemplates = [
   "bridge.status",
   "bridge.logs",
@@ -351,7 +353,7 @@ async function handleApi(req, res, url) {
     const db = await readDb();
     const approval = {
       id: newId("approval"),
-      type: cleanChoice(body.type || body.kind, ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "other"], "other"),
+      type: cleanChoice(body.type || body.kind, approvalTypes, "other"),
       title: cleanText(body.title || "Approval requested", 160),
       details: cleanText(body.details || "", 6000),
       command: cleanText(body.command || "", 4000),
@@ -362,6 +364,15 @@ async function handleApi(req, res, url) {
       messageId: cleanText(body.messageId || "", 120),
       sensitive: Boolean(body.sensitive),
       riskLevel: cleanChoice(body.riskLevel, riskLevels, body.sensitive ? "high" : "medium"),
+      recipient: cleanText(body.recipient || "", 300),
+      subject: cleanText(body.subject || "", 300),
+      bodyPreview: cleanText(body.bodyPreview || "", 2000),
+      attachments: cleanTextArray(body.attachments, 8, 240),
+      sendMode: cleanChoice(body.sendMode, contactSendModes, "manual"),
+      allowedDomains: cleanTextArray(body.allowedDomains, 12, 120),
+      maxPages: cleanInteger(body.maxPages, 0, 25, 0),
+      tokenBudget: cleanInteger(body.tokenBudget, 0, 20000, 0),
+      researchQuestion: cleanText(body.researchQuestion || "", 1000),
       actionTemplate: cleanChoice(body.actionTemplate, actionTemplates, ""),
       actionPreview: cleanText(body.actionPreview || "", 500),
       renderedCommands: cleanTextArray(body.renderedCommands, 8, 500),
