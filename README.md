@@ -4,11 +4,23 @@ Latch is a private agent gateway for sending instructions, status updates, model
 
 Read [SECURITY.md](./SECURITY.md) before exposing it beyond localhost.
 
-If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), and [NOTIFICATIONS.md](./NOTIFICATIONS.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
+If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [SECURITY-REVIEW-PACKET.md](./SECURITY-REVIEW-PACKET.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), and [NOTIFICATIONS.md](./NOTIFICATIONS.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
 
 For the Ubuntu OpenClaw worker VM, see [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md).
 
 OpenClaw should inspect this project from its own VM-local read-only checkout, not from the trusted Windows working tree.
+
+## Current Powers
+
+| Capability | Status |
+| --- | --- |
+| Text responses through Latch | Enabled |
+| Read-only VM diagnostics | Approval-gated |
+| Exact-URL web research | Approval-gated |
+| External contact drafts | Manual send only |
+| Email sending | Not enabled |
+| Interactive browser automation | Not enabled |
+| Write/system commands | Not enabled |
 
 ## Start locally
 

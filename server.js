@@ -368,6 +368,7 @@ async function handleApi(req, res, url) {
       riskLevel: cleanChoice(body.riskLevel, riskLevels, body.sensitive ? "high" : "medium"),
       recipient: cleanText(body.recipient || "", 300),
       subject: cleanText(body.subject || "", 300),
+      contactPurpose: cleanText(body.contactPurpose || body.purpose || "", 1000),
       bodyPreview: cleanText(body.bodyPreview || "", 2000),
       attachments: cleanTextArray(body.attachments, 8, 240),
       sendMode: cleanChoice(body.sendMode, contactSendModes, "manual"),
@@ -376,6 +377,7 @@ async function handleApi(req, res, url) {
       maxPages: cleanInteger(body.maxPages, 0, 25, 0),
       tokenBudget: cleanInteger(body.tokenBudget, 0, 20000, 0),
       researchQuestion: cleanText(body.researchQuestion || "", 1000),
+      refreshResearch: cleanBoolean(body.refreshResearch, false),
       actionTemplate: cleanChoice(body.actionTemplate, actionTemplates, ""),
       actionPreview: cleanText(body.actionPreview || "", 500),
       renderedCommands: cleanTextArray(body.renderedCommands, 8, 500),
@@ -1201,11 +1203,15 @@ function cleanTextArray(value, maxItems, maxLength) {
 function cleanResearchSources(value) {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 12).map((source) => ({
+    requestedUrl: cleanText(source?.requestedUrl || "", 500),
+    finalUrl: cleanText(source?.finalUrl || source?.url || "", 500),
     url: cleanText(source?.url || "", 500),
     title: cleanText(source?.title || "", 240),
     status: cleanInteger(source?.status, 0, 599, 0),
     summary: cleanText(source?.summary || "", 1500),
-    excerpt: cleanText(source?.excerpt || "", 1000)
+    excerpt: cleanText(source?.excerpt || "", 1000),
+    fetchedAt: cleanText(source?.fetchedAt || "", 80),
+    cached: Boolean(source?.cached)
   })).filter((source) => source.url);
 }
 

@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ args = argparse.Namespace(
     openclaw_health_url="http://127.0.0.1:18789/healthz",
     openclaw_compose_dir=str(Path.home() / "openclaw"),
     latch_repo_dir=str(Path.home() / "code" / "latch-readonly"),
+    source_cache_path=str(Path(tempfile.gettempdir()) / "latch-test-source-notes.json"),
 )
 
 
@@ -62,6 +64,7 @@ contact = bridge.detect_approval_need(
 assert contact.type == "external_contact"
 assert contact.recipient == "reviewer@example.com"
 assert contact.send_mode == "manual"
+assert "security review" in contact.contact_purpose.lower()
 
 research = bridge.detect_approval_need(
     "Research docs",
@@ -93,5 +96,48 @@ summary = bridge.summarize_text(
     120,
 )
 assert "scraping" in summary.lower()
+
+missing_seed = bridge.perform_read_only_research(
+    {
+        "id": "approval_missing_seed",
+        "researchQuestion": "Search the web generally",
+        "allowedDomains": ["example.com"],
+        "maxPages": 5,
+        "tokenBudget": 3000,
+    },
+    args,
+)
+assert missing_seed["status"] == "failed"
+assert missing_seed["pagesFetched"] == 0
+assert any("No exact seed URL" in error for error in missing_seed["errors"])
+
+cache_path = Path(args.source_cache_path)
+cache_path.unlink(missing_ok=True)
+cache_entry = {
+    bridge.normalized_url_key("https://93.184.216.34/docs"): {
+        "requestedUrl": "https://93.184.216.34/docs",
+        "finalUrl": "https://93.184.216.34/docs",
+        "url": "https://93.184.216.34/docs",
+        "title": "Cached docs",
+        "status": 200,
+        "summary": "Cached source note",
+        "excerpt": "Cached excerpt",
+        "fetchedAt": "2026-05-24T00:00:00Z",
+    }
+}
+bridge.save_source_cache(cache_path, cache_entry)
+cached_run = bridge.perform_read_only_research(
+    {
+        "id": "approval_cached",
+        "researchQuestion": "Read cached docs",
+        "seedUrls": ["https://93.184.216.34/docs"],
+        "allowedDomains": ["93.184.216.34"],
+        "maxPages": 1,
+        "tokenBudget": 1000,
+    },
+    args,
+)
+assert cached_run["status"] == "completed"
+assert cached_run["sources"][0]["cached"] is True
 
 print("Worker read-only template tests passed.")
