@@ -1,10 +1,17 @@
 const initialTab = new URLSearchParams(location.search).get("tab");
 const tabs = ["inbox", "tasks", "approvals", "context", "timeline"];
 const maxContextUploadBytes = 2_000_000;
+const channels = [
+  { id: "compass", label: "Compass", description: "Direct conversation" },
+  { id: "general", label: "General", description: "Loose notes" },
+  { id: "operations", label: "Operations", description: "Status and diagnostics" },
+  { id: "research", label: "Research", description: "Source notes" }
+];
 
 const state = {
   token: localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
   tab: tabs.includes(initialTab) ? initialTab : "inbox",
+  activeChannel: localStorage.getItem("latchActiveChannel") || "compass",
   data: null,
   taskFilter: localStorage.getItem("latchTaskFilter") || "open",
   approvalsFilter: localStorage.getItem("latchApprovalsFilter") || "pending",
@@ -21,6 +28,10 @@ const tokenInput = document.querySelector("#tokenInput");
 const toggleTokenVisibility = document.querySelector("#toggleTokenVisibility");
 const messageForm = document.querySelector("#messageForm");
 const messageText = document.querySelector("#messageText");
+const channelList = document.querySelector("#channelList");
+const chatEyebrow = document.querySelector("#chatEyebrow");
+const chatTitle = document.querySelector("#chatTitle");
+const chatCount = document.querySelector("#chatCount");
 const taskForm = document.querySelector("#taskForm");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
@@ -127,7 +138,7 @@ messageForm.addEventListener("submit", async (event) => {
   await withSubmitLock(messageForm, async () => {
     await api("/api/messages", {
       method: "POST",
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, channel: state.activeChannel })
     });
     messageText.value = "";
     await refresh();
@@ -456,6 +467,7 @@ function render() {
   renderRouteWarning();
   renderNotificationButton();
   maybeNotify();
+  renderChannels();
   renderMessages();
   renderTasks();
   renderApprovals();
@@ -598,19 +610,76 @@ function renderTabs() {
 
 function renderMessages() {
   const messages = state.data?.messages || [];
-  renderList(lists.messages, messages, (message) => `
-    <article class="item">
-      <div class="item-header">
-        <h2 class="item-title">${escapeHtml(message.author)}</h2>
-        <span class="item-meta">${formatTime(message.createdAt)}</span>
-      </div>
-      <p class="item-body">${escapeHtml(message.text)}</p>
-      <div class="approval-actions">
-        <button class="secondary-button" data-archive-kind="messages" data-archive-id="${escapeHtml(message.id)}" type="button">Archive</button>
+  const active = activeChannel();
+  const channelMessages = messages
+    .filter((message) => messageChannel(message) === active.id)
+    .slice()
+    .reverse();
+  chatEyebrow.textContent = active.label;
+  chatTitle.textContent = active.description;
+  chatCount.textContent = `${channelMessages.length} message${channelMessages.length === 1 ? "" : "s"}`;
+  messageText.placeholder = `Message ${active.label}`;
+
+  renderList(lists.messages, channelMessages, (message) => `
+    <article class="chat-message ${message.direction === "operator_to_agent" ? "from-operator" : "from-agent"}">
+      <div class="message-bubble">
+        <div class="message-meta">
+          <strong>${escapeHtml(message.direction === "operator_to_agent" ? "You" : agentDisplayName())}</strong>
+          <span>${formatTime(message.createdAt)}</span>
+        </div>
+        <p>${escapeHtml(message.text)}</p>
+        <button class="message-archive" data-archive-kind="messages" data-archive-id="${escapeHtml(message.id)}" type="button">Archive</button>
       </div>
     </article>
   `);
   bindArchiveButtons(lists.messages);
+  requestAnimationFrame(() => {
+    lists.messages.scrollTop = lists.messages.scrollHeight;
+  });
+}
+
+function renderChannels() {
+  const messages = state.data?.messages || [];
+  channelList.innerHTML = channels.map((channel) => {
+    const count = messages.filter((message) => messageChannel(message) === channel.id).length;
+    const latest = messages.find((message) => messageChannel(message) === channel.id);
+    return `
+      <button class="channel-button ${channel.id === state.activeChannel ? "active" : ""}" type="button" data-channel="${escapeHtml(channel.id)}">
+        <span class="channel-symbol" aria-hidden="true">#</span>
+        <span>
+          <strong>${escapeHtml(channel.label)}</strong>
+          <small>${escapeHtml(latest ? latest.text.slice(0, 48) : channel.description)}</small>
+        </span>
+        <em>${count}</em>
+      </button>
+    `;
+  }).join("");
+  channelList.querySelectorAll("[data-channel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.activeChannel = button.dataset.channel;
+      localStorage.setItem("latchActiveChannel", state.activeChannel);
+      renderChannels();
+      renderMessages();
+    });
+  });
+}
+
+function activeChannel() {
+  return channels.find((channel) => channel.id === state.activeChannel) || channels[0];
+}
+
+function messageChannel(message) {
+  if (channels.some((channel) => channel.id === message.channel)) return message.channel;
+  if (message.direction === "agent_to_operator") {
+    const lowered = String(message.text || "").toLowerCase();
+    if (lowered.includes("read-only research") || lowered.includes("source notes")) return "research";
+    if (lowered.includes("diagnostic") || lowered.includes("gateway") || lowered.includes("bridge status")) return "operations";
+  }
+  return "compass";
+}
+
+function agentDisplayName() {
+  return state.data?.profile?.name || "Compass";
 }
 
 function renderTasks() {

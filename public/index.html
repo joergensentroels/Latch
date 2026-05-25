@@ -126,11 +126,26 @@
         </nav>
 
         <section id="inboxPanel" class="panel">
-          <form id="messageForm" class="composer">
-            <textarea id="messageText" rows="3" placeholder="Send an instruction or note"></textarea>
-            <button type="submit">Send</button>
-          </form>
-          <div id="messagesList" class="list"></div>
+          <div class="chat-shell">
+            <aside class="channel-rail" aria-label="Inbox channels">
+              <div class="channel-heading">Channels</div>
+              <div id="channelList" class="channel-list"></div>
+            </aside>
+            <section class="chat-pane" aria-label="Conversation">
+              <div class="chat-header">
+                <div>
+                  <p class="eyebrow" id="chatEyebrow">Compass</p>
+                  <h2 id="chatTitle" class="section-title">Conversation</h2>
+                </div>
+                <span id="chatCount" class="item-meta">0 messages</span>
+              </div>
+              <div id="messagesList" class="chat-list"></div>
+              <form id="messageForm" class="composer chat-composer">
+                <textarea id="messageText" rows="1" placeholder="Message Compass"></textarea>
+                <button type="submit">Send</button>
+              </form>
+            </section>
+          </div>
         </section>
 
         <section id="tasksPanel" class="panel hidden">
