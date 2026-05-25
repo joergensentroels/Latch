@@ -178,6 +178,26 @@ textarea {
   resize: vertical;
 }
 
+.task-brief {
+  min-height: 104px;
+}
+
+.optional-instructions {
+  display: grid;
+  gap: 10px;
+}
+
+.optional-instructions summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.optional-instructions[open] summary {
+  margin-bottom: 10px;
+}
+
 button[type="submit"],
 .action-button {
   min-height: 42px;
@@ -376,20 +396,31 @@ button[type="submit"]:hover,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+  align-content: start;
+}
+
+.channel-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
 }
 
 .channel-button {
   min-width: 0;
+  width: 100%;
+  height: 54px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  min-height: 48px;
   padding: 8px;
   border-radius: 6px;
   background: transparent;
   color: #d8e0ee;
   text-align: left;
+  overflow: hidden;
 }
 
 .channel-button:hover,
@@ -401,6 +432,10 @@ button[type="submit"]:hover,
 .channel-symbol {
   color: #7dd3c7;
   font-weight: 900;
+}
+
+.channel-copy {
+  min-width: 0;
 }
 
 .channel-button strong,
@@ -430,6 +465,59 @@ button[type="submit"]:hover,
   color: #f8fafc;
   font-size: 0.72rem;
   font-style: normal;
+  font-weight: 900;
+}
+
+.channel-button em.unread {
+  background: #7dd3c7;
+  color: #10202a;
+}
+
+.channel-archive {
+  width: 28px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #aeb9cb;
+  font-weight: 900;
+}
+
+.channel-archive:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #ffffff;
+}
+
+.channel-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.channel-form input:first-child {
+  grid-column: 1 / -1;
+}
+
+.channel-form input {
+  min-width: 0;
+  height: 36px;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+}
+
+.channel-form input::placeholder {
+  color: #aeb9cb;
+}
+
+.channel-form button {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: #7dd3c7;
+  color: #10202a;
+  font-size: 1.1rem;
   font-weight: 900;
 }
 
@@ -496,6 +584,7 @@ button[type="submit"]:hover,
 
 .message-meta {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   color: var(--muted);
@@ -524,6 +613,35 @@ button[type="submit"]:hover,
 }
 
 .message-archive:hover {
+  color: var(--text);
+}
+
+.message-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.message-actions select {
+  width: auto;
+  min-height: 28px;
+  padding: 2px 24px 2px 8px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+}
+
+.link-button {
+  min-height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.link-button:hover {
   color: var(--text);
 }
 
@@ -611,6 +729,26 @@ button[type="submit"]:hover,
   gap: 12px;
 }
 
+.context-view {
+  display: grid;
+  gap: 12px;
+}
+
+.context-side {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+}
+
+.context-note-form textarea {
+  min-height: 240px;
+}
+
+.context-view-toolbar {
+  flex-wrap: wrap;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -642,7 +780,7 @@ button[type="submit"]:hover,
 }
 
 .profile-form {
-  margin-bottom: 12px;
+  width: min(760px, 100%);
 }
 
 .form-status {
@@ -714,6 +852,75 @@ button[type="submit"]:hover,
 
 .status-card.bad {
   border-color: #fecdca;
+}
+
+.capability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.capability-card,
+.linked-message {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.capability-card div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.capability-card strong {
+  font-size: 0.9rem;
+}
+
+.capability-card span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.capability-card p,
+.linked-message p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.capability-card.ok {
+  border-color: #99d6cd;
+}
+
+.capability-card.warn {
+  border-color: #fedf89;
+}
+
+.capability-card.bad {
+  border-color: #fecdca;
+}
+
+.test-console {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.linked-message {
+  margin-top: 10px;
+  background: var(--surface-2);
+}
+
+.linked-message button {
+  justify-self: start;
 }
 
 .security-checklist {
@@ -925,6 +1132,10 @@ button[type="submit"]:hover,
   margin-top: 10px;
 }
 
+.task-instructions {
+  padding-top: 2px;
+}
+
 .command-details summary {
   cursor: pointer;
   color: var(--text);
@@ -1103,9 +1314,19 @@ pre.item-body {
   }
 
   #approvalsPanel,
+  #contextPanel,
   #inboxPanel,
   #timelinePanel {
     grid-template-columns: 1fr;
+  }
+
+  #contextMainSection {
+    grid-template-columns: minmax(440px, 1.45fr) minmax(320px, 0.85fr);
+    align-items: start;
+  }
+
+  .context-note-form textarea {
+    min-height: 340px;
   }
 
   .chat-shell {

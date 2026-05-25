@@ -40,20 +40,73 @@ try {
   const operatorHeaders = authHeaders(operatorToken);
   const agentHeaders = authHeaders(agentToken);
 
+  const initialState = await request("/api/state", { headers: operatorHeaders });
+  assert(initialState.channels.some((channel) => channel.id === "compass"), "state should expose default channels");
+
+  await expectStatus("/api/channels", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...agentHeaders
+    },
+    body: JSON.stringify({ label: "Should fail" })
+  }, 403);
+
+  const customChannel = await request("/api/channels", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { label: "Experiments", description: "Trial conversations" }
+  });
+  assert(customChannel.id === "experiments", "custom channel should use a stable slug");
+  assert(!customChannel.builtIn, "custom channel should not be built in");
+
   const message = await request("/api/messages", {
     method: "POST",
     headers: operatorHeaders,
-    body: { text: "hello worker", channel: "compass" }
+    body: { text: "hello worker", channel: customChannel.id }
   });
   assert(message.direction === "operator_to_agent", "operator message should be stored");
-  assert(message.channel === "compass", "operator message should keep channel");
+  assert(message.channel === customChannel.id, "operator message should keep custom channel");
+
+  const movedMessage = await request(`/api/messages/${message.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { channel: "operations" }
+  });
+  assert(movedMessage.channel === "operations", "operator should move messages between channels");
+
+  const archivedChannel = await request(`/api/channels/${customChannel.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { archived: true }
+  });
+  assert(archivedChannel.archivedAt, "custom channel archive should set archivedAt");
+  const afterChannelArchive = await request("/api/state", { headers: operatorHeaders });
+  assert(!afterChannelArchive.channels.some((channel) => channel.id === customChannel.id), "archived channel should leave active state");
+  assert(afterChannelArchive.archives.channels.some((channel) => channel.id === customChannel.id), "archived channel should appear in archives");
+  await expectStatus(`/api/channels/compass`, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      ...operatorHeaders
+    },
+    body: JSON.stringify({ archived: true })
+  }, 400);
 
   const task = await request("/api/tasks", {
     method: "POST",
     headers: operatorHeaders,
-    body: { title: "Smoke task", details: "test details", priority: "low" }
+    body: {
+      title: "Smoke task",
+      goal: "Smoke task",
+      instructions: "Keep the smoke test bounded.",
+      details: "test details",
+      priority: "low"
+    }
   });
   assert(task.status === "queued", "task should start queued");
+  assert(task.goal === "Smoke task", "task should store goal");
+  assert(task.instructions.includes("bounded"), "task should store optional instructions");
 
   const approval = await request("/api/approvals", {
     method: "POST",
@@ -167,6 +220,7 @@ try {
 
   const poll = await request("/api/agent/poll", { headers: agentHeaders });
   assert(poll.tasks.some((item) => item.id === task.id), "agent poll should include queued task");
+  assert(poll.channels.some((item) => item.id === "operations"), "agent poll should include active channels");
   assert(poll.approvals.some((item) => item.id === approval.id), "agent poll should include approval");
   assert(poll.contextItems.some((item) => item.id === note.id), "agent poll should include context metadata");
   assert(poll.contextItems.find((item) => item.id === note.id).text.includes("bounded"), "shared notes should be included in agent context");

@@ -19,7 +19,12 @@ const maxUploadBytes = 2_000_000;
 const maxUploadBodyBytes = 3_000_000;
 const maxSharedFileBytes = 200_000;
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
-const messageChannels = ["compass", "general", "operations", "research"];
+const defaultMessageChannels = [
+  { id: "compass", label: "Compass", description: "Direct conversation", builtIn: true },
+  { id: "general", label: "General", description: "Loose notes", builtIn: true },
+  { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
+  { id: "research", label: "Research", description: "Source notes", builtIn: true }
+];
 const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "other"];
 const executionModes = ["none", "read_only_status"];
 const riskLevels = ["low", "medium", "high"];
@@ -66,7 +71,12 @@ const emptyDb = {
   attachments: [],
   contextItems: [],
   executions: [],
-  researchRuns: []
+  researchRuns: [],
+  channels: defaultMessageChannels.map((channel) => ({
+    ...channel,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }))
 };
 
 await mkdir(dataDir, { recursive: true });
@@ -182,6 +192,7 @@ async function handleApi(req, res, url) {
       dbPath,
       counts: {
         messages: activeItems(db.messages).length,
+        channels: activeItems(db.channels).length,
         tasks: activeItems(db.tasks).length,
         approvals: activeItems(db.approvals).length,
         contextItems: activeItems(db.contextItems).length,
@@ -291,7 +302,7 @@ async function handleApi(req, res, url) {
       direction: "operator_to_agent",
       author: "operator",
       text: cleanText(body.text, 6000),
-      channel: cleanChannel(body.channel || "compass"),
+      channel: cleanChannel(body.channel || "compass", db),
       createdAt: new Date().toISOString()
     };
     db.messages.unshift(message);
@@ -301,16 +312,73 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (url.pathname === "/api/channels" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    const label = cleanText(body.label || body.name || "", 80);
+    if (!label) {
+      sendJson(res, 400, { error: "channel_label_required" });
+      return;
+    }
+    const channel = createChannel(db, {
+      label,
+      description: cleanText(body.description || "Custom conversation", 160)
+    });
+    db.channels.unshift(channel);
+    db.events.unshift(event("channel.created", "operator", channel.id, channel.label));
+    await writeDb(db);
+    sendJson(res, 201, publicChannel(channel));
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/channels/") && req.method === "PATCH") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const id = url.pathname.split("/").at(-1);
+    const db = await readDb();
+    const channel = db.channels.find((item) => item.id === id);
+    if (!channel) {
+      sendJson(res, 404, { error: "not_found" });
+      return;
+    }
+    if (body.archived !== undefined) {
+      if (channel.builtIn) {
+        sendJson(res, 400, { error: "built_in_channel" });
+        return;
+      }
+      channel.archivedAt = cleanBoolean(body.archived, false) ? new Date().toISOString() : "";
+    }
+    if (!channel.builtIn) {
+      if (body.label !== undefined) channel.label = cleanText(body.label, 80) || channel.label;
+      if (body.description !== undefined) channel.description = cleanText(body.description, 160);
+    }
+    channel.updatedAt = new Date().toISOString();
+    db.events.unshift(event("channel.updated", "operator", channel.id, channel.label));
+    await writeDb(db);
+    sendJson(res, 200, publicChannel(channel));
+    return;
+  }
+
   if (url.pathname === "/api/tasks" && req.method === "POST") {
     requireOperator(role, res);
     if (res.writableEnded) return;
 
     const body = await readJsonBody(req);
     const db = await readDb();
+    const goal = cleanText(body.goal || body.task || body.text || body.title || "", 6000);
+    const instructions = cleanText(body.instructions || "", 4000);
+    const details = cleanText(body.details || composeTaskDetails(goal, instructions) || body.text || "", 6000);
     const task = {
       id: newId("task"),
-      title: cleanText(body.title || body.text || "Untitled task", 160),
-      details: cleanText(body.details || body.text || "", 6000),
+      title: cleanText(body.title || goal || body.text || "Untitled task", 160),
+      goal,
+      instructions,
+      details,
       status: "queued",
       priority: cleanChoice(body.priority, ["normal", "high", "low"], "normal"),
       createdAt: new Date().toISOString(),
@@ -613,6 +681,7 @@ async function handleApi(req, res, url) {
       return;
     }
     if (body.archived !== undefined) message.archivedAt = cleanBoolean(body.archived, false) ? new Date().toISOString() : "";
+    if (body.channel !== undefined) message.channel = cleanChannel(body.channel, db);
     db.events.unshift(event("message.updated", "operator", message.id, message.text.slice(0, 120)));
     await writeDb(db);
     sendJson(res, 200, message);
@@ -635,6 +704,7 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       tasks: activeItems(db.tasks).filter((task) => ["queued", "running", "waiting"].includes(task.status)),
       messages: activeItems(db.messages).slice(0, 20),
+      channels: activeItems(db.channels).slice(0, 100).map(publicChannel),
       approvals: activeItems(db.approvals).slice(0, 50),
       profile: publicAgentProfile(db.meta.agentProfile),
       contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50)),
@@ -713,7 +783,7 @@ async function handleApi(req, res, url) {
       author: "openclaw",
       text: cleanText(body.text || "", 6000),
       taskId: cleanText(body.taskId || "", 120),
-      channel: cleanChannel(body.channel || inferAgentChannel(body.text || "")),
+      channel: cleanChannel(body.channel || inferAgentChannel(body.text || ""), db),
       createdAt: new Date().toISOString()
     };
     db.messages.unshift(message);
@@ -1005,6 +1075,7 @@ function visibleState(db) {
     meta: db.meta,
     profile: publicAgentProfile(db.meta.agentProfile),
     messages: activeItems(db.messages).slice(0, 100),
+    channels: activeItems(db.channels).slice(0, 100).map(publicChannel),
     tasks: activeItems(db.tasks).slice(0, 100),
     approvals: activeItems(db.approvals).slice(0, 100),
     executions: activeItems(db.executions).slice(0, 100),
@@ -1013,6 +1084,7 @@ function visibleState(db) {
     contextItems: activeItems(db.contextItems).slice(0, 100).map(operatorContextItem),
     archives: {
       messages: archivedItems(db.messages).slice(0, 100),
+      channels: archivedItems(db.channels).slice(0, 100).map(publicChannel),
       tasks: archivedItems(db.tasks).slice(0, 100),
       approvals: archivedItems(db.approvals).slice(0, 100),
       contextItems: archivedItems(db.contextItems).slice(0, 100).map(operatorContextItem)
@@ -1031,7 +1103,55 @@ function normalizeDb(db) {
   db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
   db.executions = Array.isArray(db.executions) ? db.executions : [];
   db.researchRuns = Array.isArray(db.researchRuns) ? db.researchRuns : [];
+  db.channels = normalizeChannels(db.channels);
   return db;
+}
+
+function normalizeChannels(channels) {
+  const now = new Date().toISOString();
+  const known = new Map();
+  for (const channel of Array.isArray(channels) ? channels : []) {
+    const id = cleanChannelId(channel.id || channel.label);
+    if (!id || known.has(id)) continue;
+    known.set(id, {
+      id,
+      label: cleanText(channel.label || channel.id || "Channel", 80),
+      description: cleanText(channel.description || "", 160),
+      builtIn: Boolean(channel.builtIn),
+      archivedAt: cleanText(channel.archivedAt || "", 80),
+      createdAt: cleanText(channel.createdAt || now, 80),
+      updatedAt: cleanText(channel.updatedAt || channel.createdAt || now, 80)
+    });
+  }
+  for (const builtin of defaultMessageChannels) {
+    const existing = known.get(builtin.id);
+    if (existing) {
+      existing.label = builtin.label;
+      existing.description = builtin.description;
+      existing.builtIn = true;
+      existing.archivedAt = "";
+    } else {
+      known.set(builtin.id, {
+        ...builtin,
+        archivedAt: "",
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+  }
+  return Array.from(known.values());
+}
+
+function publicChannel(channel) {
+  return {
+    id: channel.id,
+    label: channel.label,
+    description: channel.description,
+    builtIn: Boolean(channel.builtIn),
+    archivedAt: channel.archivedAt || "",
+    createdAt: channel.createdAt,
+    updatedAt: channel.updatedAt
+  };
 }
 
 function publicAgentProfile(profile = {}) {
@@ -1096,7 +1216,7 @@ function archivedItems(items) {
 }
 
 function countArchived(db) {
-  return ["messages", "tasks", "approvals", "contextItems"]
+  return ["messages", "channels", "tasks", "approvals", "contextItems"]
     .reduce((total, key) => total + archivedItems(db[key]).length, 0);
 }
 
@@ -1185,12 +1305,51 @@ function cleanText(value, maxLength) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
+function composeTaskDetails(goal, instructions) {
+  const parts = [];
+  if (goal) parts.push(`Task:\n${goal}`);
+  if (instructions) parts.push(`Instructions:\n${instructions}`);
+  return parts.join("\n\n");
+}
+
 function cleanChoice(value, choices, fallback) {
   return choices.includes(value) ? value : fallback;
 }
 
-function cleanChannel(value) {
-  return cleanChoice(String(value || "compass").toLowerCase(), messageChannels, "compass");
+function cleanChannel(value, db) {
+  const id = cleanChannelId(value || "compass");
+  const channels = activeItems(db?.channels || normalizeChannels([]));
+  return channels.some((channel) => channel.id === id) ? id : "compass";
+}
+
+function cleanChannelId(value) {
+  const cleaned = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return cleaned;
+}
+
+function createChannel(db, { label, description }) {
+  const now = new Date().toISOString();
+  const base = cleanChannelId(label) || "channel";
+  const existing = new Set((db.channels || []).map((channel) => channel.id));
+  let id = base;
+  let suffix = 2;
+  while (existing.has(id)) {
+    id = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return {
+    id,
+    label,
+    description,
+    builtIn: false,
+    archivedAt: "",
+    createdAt: now,
+    updatedAt: now
+  };
 }
 
 function inferAgentChannel(text) {

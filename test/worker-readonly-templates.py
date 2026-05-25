@@ -20,6 +20,16 @@ args = argparse.Namespace(
     source_cache_path=str(Path(tempfile.gettempdir()) / "latch-test-source-notes.json"),
 )
 
+channels = [
+    {"id": "compass", "label": "Compass"},
+    {"id": "operations", "label": "Operations"},
+    {"id": "research", "label": "Research"},
+]
+assert bridge.requested_latch_channel("Send a message in the operations channel", channels) == "operations"
+assert bridge.requested_latch_channel("Please reply to #research", channels) == "research"
+assert bridge.requested_latch_channel("Just answer normally", channels) == ""
+assert "Do not say you cannot write to Latch channels" in bridge.channel_briefing(channels, "operations")
+
 
 known = bridge.command_template("bridge.status", args)
 assert known, "bridge.status should expand to commands"

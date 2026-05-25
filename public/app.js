@@ -1,11 +1,11 @@
 const initialTab = new URLSearchParams(location.search).get("tab");
 const tabs = ["inbox", "tasks", "approvals", "context", "timeline"];
 const maxContextUploadBytes = 2_000_000;
-const channels = [
-  { id: "compass", label: "Compass", description: "Direct conversation" },
-  { id: "general", label: "General", description: "Loose notes" },
-  { id: "operations", label: "Operations", description: "Status and diagnostics" },
-  { id: "research", label: "Research", description: "Source notes" }
+const fallbackChannels = [
+  { id: "compass", label: "Compass", description: "Direct conversation", builtIn: true },
+  { id: "general", label: "General", description: "Loose notes", builtIn: true },
+  { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
+  { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
 
 const state = {
@@ -18,7 +18,8 @@ const state = {
   seenNotificationIds: new Set(JSON.parse(localStorage.getItem("latchSeenNotificationIds") || "[]")),
   notificationBaselineReady: false,
   deferredInstallPrompt: null,
-  approvalDecision: null
+  approvalDecision: null,
+  contextView: null
 };
 
 const loginView = document.querySelector("#loginView");
@@ -29,12 +30,16 @@ const toggleTokenVisibility = document.querySelector("#toggleTokenVisibility");
 const messageForm = document.querySelector("#messageForm");
 const messageText = document.querySelector("#messageText");
 const channelList = document.querySelector("#channelList");
+const channelForm = document.querySelector("#channelForm");
+const channelName = document.querySelector("#channelName");
+const channelDescription = document.querySelector("#channelDescription");
 const chatEyebrow = document.querySelector("#chatEyebrow");
 const chatTitle = document.querySelector("#chatTitle");
 const chatCount = document.querySelector("#chatCount");
 const taskForm = document.querySelector("#taskForm");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
+const taskInstructionDetails = document.querySelector("#taskInstructionDetails");
 const taskPriority = document.querySelector("#taskPriority");
 const contactDraftForm = document.querySelector("#contactDraftForm");
 const contactRecipient = document.querySelector("#contactRecipient");
@@ -51,6 +56,9 @@ const profileBoundaries = document.querySelector("#profileBoundaries");
 const profileCommunicationStyle = document.querySelector("#profileCommunicationStyle");
 const profileShare = document.querySelector("#profileShare");
 const profileStatus = document.querySelector("#profileStatus");
+const contextMainSection = document.querySelector("#contextMainSection");
+const profileSection = document.querySelector("#profileSection");
+const contextViewButtons = document.querySelectorAll("[data-context-view]");
 const contextNoteForm = document.querySelector("#contextNoteForm");
 const contextTitle = document.querySelector("#contextTitle");
 const contextCategory = document.querySelector("#contextCategory");
@@ -110,7 +118,10 @@ const lists = {
   events: document.querySelector("#eventsList")
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
+const capabilityGrid = document.querySelector("#capabilityGrid");
 const securityChecklist = document.querySelector("#securityChecklist");
+const testConsoleStatus = document.querySelector("#testConsoleStatus");
+const testActionButtons = document.querySelectorAll("[data-test-action]");
 let pinMode = "unlock";
 
 loginForm.addEventListener("submit", async (event) => {
@@ -145,23 +156,50 @@ messageForm.addEventListener("submit", async (event) => {
   });
 });
 
+channelForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const label = channelName.value.trim();
+  if (!label) return;
+
+  await withSubmitLock(channelForm, async () => {
+    const channel = await api("/api/channels", {
+      method: "POST",
+      body: JSON.stringify({
+        label,
+        description: channelDescription.value.trim() || "Custom conversation"
+      })
+    });
+    channelName.value = "";
+    channelDescription.value = "";
+    state.activeChannel = channel.id;
+    localStorage.setItem("latchActiveChannel", state.activeChannel);
+    await refresh();
+  });
+});
+
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const title = taskTitle.value.trim();
-  const details = taskDetails.value.trim();
-  if (!title && !details) return;
+  const goal = taskTitle.value.trim();
+  const instructions = taskDetails.value.trim();
+  if (!goal) {
+    taskTitle.focus();
+    return;
+  }
 
   await withSubmitLock(taskForm, async () => {
     await api("/api/tasks", {
       method: "POST",
       body: JSON.stringify({
-        title: title || details.slice(0, 80),
-        details,
+        title: titleFromBrief(goal),
+        goal,
+        instructions,
+        details: composeTaskDetails(goal, instructions),
         priority: taskPriority.value
       })
     });
     taskTitle.value = "";
     taskDetails.value = "";
+    taskInstructionDetails.open = false;
     taskPriority.value = "normal";
     await refresh();
   });
@@ -213,17 +251,12 @@ contactDraftForm.addEventListener("submit", async (event) => {
 profileForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await withSubmitLock(profileForm, async () => {
+    const profilePayload = currentProfilePayload();
     await api("/api/profile", {
       method: "PATCH",
-      body: JSON.stringify({
-        name: profileName.value.trim(),
-        purpose: profilePurpose.value.trim(),
-        goals: profileGoals.value.trim(),
-        boundaries: profileBoundaries.value.trim(),
-        communicationStyle: profileCommunicationStyle.value.trim(),
-        shareWithAgent: profileShare.checked
-      })
+      body: JSON.stringify(profilePayload)
     });
+    if (isProfileComplete(profilePayload)) state.contextView = "context";
     setFormStatus(profileStatus, "Profile saved.", "success");
     await refresh();
   });
@@ -361,9 +394,22 @@ if ("serviceWorker" in navigator) {
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
     state.tab = button.dataset.tab;
+    if (state.tab === "context") state.contextView = preferredContextView();
     history.replaceState(null, "", `?tab=${state.tab}`);
     renderTabs();
+    renderContextView();
   });
+});
+
+contextViewButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.contextView = button.dataset.contextView;
+    renderContextView();
+  });
+});
+
+testActionButtons.forEach((button) => {
+  button.addEventListener("click", () => runTestAction(button.dataset.testAction));
 });
 
 approvalFilterButtons.forEach((button) => {
@@ -472,8 +518,10 @@ function render() {
   renderTasks();
   renderApprovals();
   renderProfile();
+  renderContextView();
   renderContext();
   renderDiagnostics();
+  renderCapabilities();
   renderOperations();
   renderSecurityChecklist();
   renderArchives();
@@ -490,6 +538,36 @@ function renderProfile() {
   profileBoundaries.value = profile.boundaries || "";
   profileCommunicationStyle.value = profile.communicationStyle || "";
   profileShare.checked = profile.shareWithAgent !== false;
+}
+
+function currentProfilePayload() {
+  return {
+    name: profileName.value.trim(),
+    purpose: profilePurpose.value.trim(),
+    goals: profileGoals.value.trim(),
+    boundaries: profileBoundaries.value.trim(),
+    communicationStyle: profileCommunicationStyle.value.trim(),
+    shareWithAgent: profileShare.checked
+  };
+}
+
+function preferredContextView() {
+  return isProfileComplete(state.data?.profile || {}) ? "context" : "profile";
+}
+
+function isProfileComplete(profile = {}) {
+  return ["name", "purpose", "goals", "boundaries", "communicationStyle"]
+    .every((field) => String(profile[field] || "").trim());
+}
+
+function renderContextView() {
+  const activeView = state.contextView || preferredContextView();
+  state.contextView = activeView;
+  contextMainSection.classList.toggle("hidden", activeView !== "context");
+  profileSection.classList.toggle("hidden", activeView !== "profile");
+  contextViewButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.contextView === activeView);
+  });
 }
 
 function renderRouteWarning() {
@@ -615,6 +693,7 @@ function renderMessages() {
     .filter((message) => messageChannel(message) === active.id)
     .slice()
     .reverse();
+  markChannelSeen(active.id, channelMessages);
   chatEyebrow.textContent = active.label;
   chatTitle.textContent = active.description;
   chatCount.textContent = `${channelMessages.length} message${channelMessages.length === 1 ? "" : "s"}`;
@@ -626,13 +705,20 @@ function renderMessages() {
         <div class="message-meta">
           <strong>${escapeHtml(message.direction === "operator_to_agent" ? "You" : agentDisplayName())}</strong>
           <span>${formatTime(message.createdAt)}</span>
+          ${message.taskId ? `<button class="link-button" data-open-task="${escapeHtml(message.taskId)}" type="button">Task</button>` : ""}
         </div>
         <p>${escapeHtml(message.text)}</p>
-        <button class="message-archive" data-archive-kind="messages" data-archive-id="${escapeHtml(message.id)}" type="button">Archive</button>
+        <div class="message-actions">
+          <select data-move-message="${escapeHtml(message.id)}" aria-label="Move message to channel">
+            ${availableChannels().map((channel) => `<option value="${escapeHtml(channel.id)}" ${messageChannel(message) === channel.id ? "selected" : ""}>${escapeHtml(channel.label)}</option>`).join("")}
+          </select>
+          <button class="message-archive" data-archive-kind="messages" data-archive-id="${escapeHtml(message.id)}" type="button">Archive</button>
+        </div>
       </div>
     </article>
   `);
   bindArchiveButtons(lists.messages);
+  bindMessageTools(lists.messages);
   requestAnimationFrame(() => {
     lists.messages.scrollTop = lists.messages.scrollHeight;
   });
@@ -640,18 +726,29 @@ function renderMessages() {
 
 function renderChannels() {
   const messages = state.data?.messages || [];
+  const channels = availableChannels();
+  if (!channels.some((channel) => channel.id === state.activeChannel)) {
+    state.activeChannel = channels[0]?.id || "compass";
+    localStorage.setItem("latchActiveChannel", state.activeChannel);
+  }
   channelList.innerHTML = channels.map((channel) => {
     const count = messages.filter((message) => messageChannel(message) === channel.id).length;
+    const unread = unreadCount(channel.id, messages);
     const latest = messages.find((message) => messageChannel(message) === channel.id);
     return `
-      <button class="channel-button ${channel.id === state.activeChannel ? "active" : ""}" type="button" data-channel="${escapeHtml(channel.id)}">
-        <span class="channel-symbol" aria-hidden="true">#</span>
-        <span>
-          <strong>${escapeHtml(channel.label)}</strong>
-          <small>${escapeHtml(latest ? latest.text.slice(0, 48) : channel.description)}</small>
-        </span>
-        <em>${count}</em>
-      </button>
+      <div class="channel-row">
+        <button class="channel-button ${channel.id === state.activeChannel ? "active" : ""}" type="button" data-channel="${escapeHtml(channel.id)}">
+          <span class="channel-symbol" aria-hidden="true">#</span>
+          <span class="channel-copy">
+            <strong>${escapeHtml(channel.label)}</strong>
+            <small>${escapeHtml(latest ? latest.text.slice(0, 48) : channel.description)}</small>
+          </span>
+          <em class="${unread ? "unread" : ""}">${unread || count}</em>
+        </button>
+        ${channel.builtIn ? "" : `
+          <button class="channel-archive" type="button" data-archive-channel="${escapeHtml(channel.id)}" title="Archive channel" aria-label="Archive ${escapeHtml(channel.label)}">x</button>
+        `}
+      </div>
     `;
   }).join("");
   channelList.querySelectorAll("[data-channel]").forEach((button) => {
@@ -662,14 +759,28 @@ function renderChannels() {
       renderMessages();
     });
   });
+  channelList.querySelectorAll("[data-archive-channel]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await api(`/api/channels/${encodeURIComponent(button.dataset.archiveChannel)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ archived: true })
+      });
+      if (state.activeChannel === button.dataset.archiveChannel) {
+        state.activeChannel = "compass";
+        localStorage.setItem("latchActiveChannel", state.activeChannel);
+      }
+      await refresh();
+    });
+  });
 }
 
 function activeChannel() {
-  return channels.find((channel) => channel.id === state.activeChannel) || channels[0];
+  const channels = availableChannels();
+  return channels.find((channel) => channel.id === state.activeChannel) || channels[0] || fallbackChannels[0];
 }
 
 function messageChannel(message) {
-  if (channels.some((channel) => channel.id === message.channel)) return message.channel;
+  if (knownChannels().some((channel) => channel.id === message.channel)) return message.channel;
   if (message.direction === "agent_to_operator") {
     const lowered = String(message.text || "").toLowerCase();
     if (lowered.includes("read-only research") || lowered.includes("source notes")) return "research";
@@ -678,8 +789,89 @@ function messageChannel(message) {
   return "compass";
 }
 
+function availableChannels() {
+  const channels = Array.isArray(state.data?.channels) && state.data.channels.length
+    ? state.data.channels
+    : fallbackChannels;
+  return channels.filter((channel) => !channel.archivedAt);
+}
+
+function knownChannels() {
+  const active = Array.isArray(state.data?.channels) ? state.data.channels : [];
+  const archived = Array.isArray(state.data?.archives?.channels) ? state.data.archives.channels : [];
+  const channels = [...active, ...archived];
+  return channels.length ? channels : fallbackChannels;
+}
+
+function channelLabel(channelId) {
+  return knownChannels().find((channel) => channel.id === channelId)?.label || channelId || "Compass";
+}
+
+function channelSeenMap() {
+  try {
+    return JSON.parse(localStorage.getItem("latchChannelSeenAt") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveChannelSeenMap(value) {
+  localStorage.setItem("latchChannelSeenAt", JSON.stringify(value));
+}
+
+function markChannelSeen(channelId, messages) {
+  if (!channelId) return;
+  const latest = messages
+    .map((message) => message.createdAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1) || new Date().toISOString();
+  const seen = channelSeenMap();
+  if (String(seen[channelId] || "") < latest) {
+    seen[channelId] = latest;
+    saveChannelSeenMap(seen);
+  }
+}
+
+function unreadCount(channelId, messages) {
+  if (channelId === state.activeChannel) return 0;
+  const seenAt = channelSeenMap()[channelId] || "";
+  return messages.filter((message) =>
+    message.direction === "agent_to_operator"
+    && messageChannel(message) === channelId
+    && String(message.createdAt || "") > seenAt
+  ).length;
+}
+
 function agentDisplayName() {
   return state.data?.profile?.name || "Compass";
+}
+
+function titleFromBrief(value) {
+  const firstLine = String(value || "").split(/\r?\n/).find((line) => line.trim()) || "Untitled task";
+  return firstLine.trim().slice(0, 120);
+}
+
+function composeTaskDetails(goal, instructions) {
+  const parts = [`Task:\n${goal}`];
+  if (instructions) parts.push(`Instructions:\n${instructions}`);
+  return parts.join("\n\n");
+}
+
+function taskBodyMarkup(task) {
+  if (task.goal || task.instructions) {
+    return `
+      <p class="item-body">${escapeHtml(task.goal || task.title || "")}</p>
+      ${task.instructions ? `
+        <details class="command-details task-instructions">
+          <summary>Instructions</summary>
+          <p class="item-body">${escapeHtml(task.instructions)}</p>
+        </details>
+      ` : ""}
+      ${task.note ? `<p class="item-body">${escapeHtml(task.note)}</p>` : ""}
+    `;
+  }
+  return `<p class="item-body">${escapeHtml(task.details || task.note || "")}</p>`;
 }
 
 function renderTasks() {
@@ -691,20 +883,33 @@ function renderTasks() {
   const tasks = state.taskFilter === "open"
     ? allTasks.filter((task) => ["queued", "running", "waiting"].includes(task.status))
     : allTasks;
-  renderList(lists.tasks, tasks, (task) => `
-    <article class="item">
+  const messages = state.data?.messages || [];
+  renderList(lists.tasks, tasks, (task) => {
+    const linkedMessage = messages.find((message) => message.taskId === task.id);
+    const linkedChannel = linkedMessage ? messageChannel(linkedMessage) : "";
+    return `
+    <article class="item" data-task-card="${escapeHtml(task.id)}">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(task.title)}</h2>
         <span class="badge ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
       </div>
-      <p class="item-body">${escapeHtml(task.details || task.note || "")}</p>
+      ${taskBodyMarkup(task)}
+      ${linkedMessage ? `
+        <div class="linked-message">
+          <span class="type-pill shared">${escapeHtml(channelLabel(linkedChannel))}</span>
+          <p>${escapeHtml(linkedMessage.text.slice(0, 180))}</p>
+          <button class="secondary-button" data-open-message-channel="${escapeHtml(linkedChannel)}" type="button">Open Chat</button>
+        </div>
+      ` : ""}
       <p class="item-meta">${escapeHtml(task.priority)} - ${formatTime(task.updatedAt || task.createdAt)}</p>
       <div class="approval-actions">
         <button class="secondary-button" data-archive-kind="tasks" data-archive-id="${escapeHtml(task.id)}" type="button">Archive</button>
       </div>
     </article>
-  `);
+  `;
+  });
   bindArchiveButtons(lists.tasks);
+  bindTaskLinks(lists.tasks);
 }
 
 function renderApprovals() {
@@ -1119,6 +1324,74 @@ function renderDiagnostics() {
   `).join("");
 }
 
+function renderCapabilities() {
+  const capabilities = [
+    ["Internal Latch chat", "Enabled", "Compass can reply into Compass, Operations, Research, and custom channels.", "ok"],
+    ["Channel management", "Operator only", "You can create, archive, and move messages between channels.", "ok"],
+    ["Read-only diagnostics", "Approval-gated", "Bridge status, logs, Tailscale, Docker, gateway, and repo status use templates only.", "warn"],
+    ["Exact-URL research", "Approval-gated", "Public URLs only, no crawling, no login, cached source notes.", "warn"],
+    ["External contact", "Draft only", "Latch can prepare a draft, but it does not send email or messages.", "warn"],
+    ["Credentials/payments", "Disabled", "Compass should not receive secrets or control purchases/payment tools.", "bad"],
+    ["Browser automation", "Disabled", "No interactive browser control until after security review.", "bad"],
+    ["Write/system commands", "Disabled", "No sudo, installs, restarts, deletes, or arbitrary shell execution.", "bad"]
+  ];
+  capabilityGrid.innerHTML = capabilities.map(([label, value, note, status]) => `
+    <article class="capability-card ${status}">
+      <div>
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(value)}</span>
+      </div>
+      <p>${escapeHtml(note)}</p>
+    </article>
+  `).join("");
+}
+
+async function runTestAction(action) {
+  const active = activeChannel();
+  const operations = availableChannels().find((channel) => channel.id === "operations") || active;
+  const tests = {
+    "channel-route": {
+      title: "Test channel routing",
+      goal: "Reply in the operations channel with one short sentence confirming channel routing works.",
+      instructions: "This is an internal Latch channel test. Do not create an approval."
+    },
+    "bridge-status": {
+      title: "Test bridge status diagnostic",
+      goal: "Check bridge.status for the Latch bridge.",
+      instructions: "Request the read-only bridge.status diagnostic approval if needed."
+    },
+    "research-approval": {
+      title: "Test exact-URL research approval",
+      goal: "Read https://example.com/ as a bounded public exact-URL research test.",
+      instructions: "Use exact-URL research only. No search engine, crawling, login, or downloads."
+    },
+    "plain-task": {
+      title: "Test plain task",
+      goal: `Reply in ${active.label} with a short summary of what you can currently do in Latch.`,
+      instructions: "Keep it concise and do not request external actions."
+    }
+  };
+  const test = tests[action];
+  if (!test) return;
+  setFormStatus(testConsoleStatus, "Queuing test...", "");
+  try {
+    const task = await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title: test.title,
+        goal: test.goal,
+        instructions: `${test.instructions}\n\nPreferred channel: ${action === "channel-route" ? operations.id : active.id}`,
+        details: composeTaskDetails(test.goal, `${test.instructions}\n\nPreferred channel: ${action === "channel-route" ? operations.id : active.id}`),
+        priority: "low"
+      })
+    });
+    setFormStatus(testConsoleStatus, `Queued ${task.title}. Watch Tasks and Inbox for the result.`, "success");
+    await refresh();
+  } catch (error) {
+    setFormStatus(testConsoleStatus, `Test failed: ${error.message}`, "error");
+  }
+}
+
 function renderOperations() {
   const executions = state.data?.executions || [];
   const researchRuns = state.data?.researchRuns || [];
@@ -1242,6 +1515,7 @@ function renderArchives() {
   const archives = state.data?.archives || {};
   const items = [
     ...(archives.messages || []).map((item) => ({ kind: "messages", label: item.author || "Message", title: item.text || item.id, archivedAt: item.archivedAt, id: item.id })),
+    ...(archives.channels || []).map((item) => ({ kind: "channels", label: "Channel", title: item.label || item.id, archivedAt: item.archivedAt, id: item.id, keep: true })),
     ...(archives.tasks || []).map((item) => ({ kind: "tasks", label: "Task", title: item.title || item.id, archivedAt: item.archivedAt, id: item.id })),
     ...(archives.approvals || []).map((item) => ({ kind: "approvals", label: "Approval", title: item.title || item.id, archivedAt: item.archivedAt, id: item.id })),
     ...(archives.contextItems || []).map((item) => ({ kind: "context", label: "Context", title: item.title || item.name || item.id, archivedAt: item.archivedAt, id: item.id }))
@@ -1256,7 +1530,7 @@ function renderArchives() {
       <p class="item-body">${escapeHtml(String(item.title || "").slice(0, 280))}</p>
       <div class="approval-actions">
         <button class="secondary-button" data-unarchive-kind="${escapeHtml(item.kind)}" data-unarchive-id="${escapeHtml(item.id)}" type="button">Restore</button>
-        <button class="danger-button" data-delete-kind="${escapeHtml(item.kind)}" data-delete-id="${escapeHtml(item.id)}" type="button">Delete</button>
+        ${item.keep ? "" : `<button class="danger-button" data-delete-kind="${escapeHtml(item.kind)}" data-delete-id="${escapeHtml(item.id)}" type="button">Delete</button>`}
       </div>
     </article>
   `);
@@ -1283,6 +1557,44 @@ function bindArchiveButtons(target) {
   });
 }
 
+function bindMessageTools(target) {
+  target.querySelectorAll("[data-move-message]").forEach((select) => {
+    select.addEventListener("change", async () => {
+      await api(`/api/messages/${encodeURIComponent(select.dataset.moveMessage)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ channel: select.value })
+      });
+      await refresh();
+    });
+  });
+  target.querySelectorAll("[data-open-task]").forEach((button) => {
+    button.addEventListener("click", () => openTaskLink(button.dataset.openTask));
+  });
+}
+
+function bindTaskLinks(target) {
+  target.querySelectorAll("[data-open-message-channel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.activeChannel = button.dataset.openMessageChannel;
+      localStorage.setItem("latchActiveChannel", state.activeChannel);
+      state.tab = "inbox";
+      history.replaceState(null, "", "?tab=inbox");
+      render();
+    });
+  });
+}
+
+function openTaskLink(taskId) {
+  state.tab = "tasks";
+  state.taskFilter = "all";
+  localStorage.setItem("latchTaskFilter", state.taskFilter);
+  history.replaceState(null, "", "?tab=tasks");
+  render();
+  requestAnimationFrame(() => {
+    document.querySelector(`[data-task-card="${CSS.escape(taskId)}"]`)?.scrollIntoView({ block: "center" });
+  });
+}
+
 async function archiveItem(kind, id, archived) {
   await api(`${collectionPath(kind)}/${encodeURIComponent(id)}`, {
     method: "PATCH",
@@ -1300,6 +1612,7 @@ async function deleteItem(kind, id) {
 function collectionPath(kind) {
   const paths = {
     messages: "/api/messages",
+    channels: "/api/channels",
     tasks: "/api/tasks",
     approvals: "/api/approvals",
     context: "/api/context"

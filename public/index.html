@@ -130,6 +130,11 @@
             <aside class="channel-rail" aria-label="Inbox channels">
               <div class="channel-heading">Channels</div>
               <div id="channelList" class="channel-list"></div>
+              <form id="channelForm" class="channel-form" aria-label="Create channel">
+                <input id="channelName" type="text" maxlength="80" placeholder="New channel">
+                <input id="channelDescription" type="text" maxlength="160" placeholder="Description">
+                <button type="submit" title="Create channel" aria-label="Create channel">+</button>
+              </form>
             </aside>
             <section class="chat-pane" aria-label="Conversation">
               <div class="chat-header">
@@ -150,8 +155,17 @@
 
         <section id="tasksPanel" class="panel hidden">
           <form id="taskForm" class="task-form">
-            <input id="taskTitle" type="text" placeholder="Task title">
-            <textarea id="taskDetails" rows="3" placeholder="Details"></textarea>
+            <div>
+              <p class="eyebrow">Agent Brief</p>
+              <h2 class="section-title">Queue Work</h2>
+            </div>
+            <label for="taskTitle">Task</label>
+            <textarea id="taskTitle" class="task-brief" rows="3" placeholder="What should the agent accomplish?"></textarea>
+            <details id="taskInstructionDetails" class="optional-instructions">
+              <summary>Add instructions</summary>
+              <label for="taskDetails">Instructions</label>
+              <textarea id="taskDetails" rows="3" placeholder="Tools to use, files to avoid, style preferences, or how to verify it"></textarea>
+            </details>
             <div class="form-row">
               <select id="taskPriority">
                 <option value="normal">Normal</option>
@@ -207,34 +221,21 @@
         </section>
 
         <section id="contextPanel" class="panel hidden">
-          <form id="profileForm" class="context-form profile-form">
-            <div class="panel-toolbar split-toolbar">
-              <div>
-                <p class="eyebrow">Agent Profile</p>
-                <h2 class="section-title">Identity and Direction</h2>
-              </div>
-              <label class="check-row compact-check">
-                <input id="profileShare" type="checkbox" checked>
-                <span>Share with worker</span>
-              </label>
+          <div class="panel-toolbar split-toolbar context-view-toolbar">
+            <div>
+              <p class="eyebrow">Context</p>
+              <h2 class="section-title">Knowledge and Profile</h2>
             </div>
-            <label for="profileName">Working name</label>
-            <input id="profileName" type="text" placeholder="Let it emerge, or set one now">
-            <label for="profilePurpose">Purpose</label>
-            <textarea id="profilePurpose" rows="3" placeholder="What this agent is here to help you become or build"></textarea>
-            <label for="profileGoals">Current goals</label>
-            <textarea id="profileGoals" rows="4" placeholder="Near-term goals, projects, habits, questions"></textarea>
-            <label for="profileBoundaries">Boundaries</label>
-            <textarea id="profileBoundaries" rows="4" placeholder="Safety rules, privacy limits, things it must not do"></textarea>
-            <label for="profileCommunicationStyle">Communication style</label>
-            <textarea id="profileCommunicationStyle" rows="3" placeholder="How it should ask, challenge, summarize, and support you"></textarea>
-            <p id="profileStatus" class="form-status" aria-live="polite"></p>
-            <button type="submit">Save Profile</button>
-          </form>
-          <div class="context-forms">
-            <form id="contextNoteForm" class="context-form">
+            <div class="segmented-control" aria-label="Context view">
+              <button class="segment active" type="button" data-context-view="context">Context</button>
+              <button class="segment" type="button" data-context-view="profile">Profile</button>
+            </div>
+          </div>
+
+          <section id="contextMainSection" class="context-view">
+            <form id="contextNoteForm" class="context-form context-note-form" autocomplete="off">
               <label for="contextTitle">Context title</label>
-              <input id="contextTitle" type="text" placeholder="Goal, preference, background">
+              <input id="contextTitle" type="text" placeholder="Goal, preference, background" autocomplete="off">
               <div class="form-row">
                 <label>
                   Category
@@ -250,11 +251,11 @@
                 </label>
                 <label>
                   Tags
-                  <input id="contextTags" type="text" placeholder="comma, separated">
+                  <input id="contextTags" type="text" placeholder="comma, separated" autocomplete="off">
                 </label>
               </div>
               <label for="contextText">Context note</label>
-              <textarea id="contextText" rows="5" placeholder="Notes, goals, boundaries, preferences"></textarea>
+              <textarea id="contextText" rows="9" placeholder="Notes, goals, boundaries, preferences" autocomplete="off"></textarea>
               <label class="check-row">
                 <input id="contextShare" type="checkbox" checked>
                 <span>Share with worker</span>
@@ -263,36 +264,65 @@
               <button type="submit">Save Note</button>
             </form>
 
-            <form id="contextFileForm" class="context-form">
-              <label for="contextFileInput">Upload file</label>
-              <input id="contextFileInput" type="file">
-              <div class="form-row">
-                <label>
-                  Category
-                  <select id="contextFileCategory">
-                    <option value="reference">Reference</option>
-                    <option value="project">Project</option>
-                    <option value="goals">Goals</option>
-                    <option value="personality">Personality</option>
-                    <option value="security">Security</option>
-                    <option value="memory">Memory</option>
-                    <option value="other">Other</option>
-                  </select>
+            <div class="context-side">
+              <form id="contextFileForm" class="context-form" autocomplete="off">
+                <label for="contextFileInput">Upload file</label>
+                <input id="contextFileInput" type="file">
+                <div class="form-row">
+                  <label>
+                    Category
+                    <select id="contextFileCategory">
+                      <option value="reference">Reference</option>
+                      <option value="project">Project</option>
+                      <option value="goals">Goals</option>
+                      <option value="personality">Personality</option>
+                      <option value="security">Security</option>
+                      <option value="memory">Memory</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    Tags
+                    <input id="contextFileTags" type="text" placeholder="comma, separated" autocomplete="off">
+                  </label>
+                </div>
+                <label class="check-row">
+                  <input id="contextFileShare" type="checkbox">
+                  <span>Share text contents with worker</span>
                 </label>
-                <label>
-                  Tags
-                  <input id="contextFileTags" type="text" placeholder="comma, separated">
+                <p id="contextFileStatus" class="form-status" aria-live="polite"></p>
+                <button type="submit">Upload</button>
+              </form>
+              <div id="contextList" class="list"></div>
+            </div>
+          </section>
+
+          <section id="profileSection" class="context-view hidden">
+            <form id="profileForm" class="context-form profile-form" autocomplete="off">
+              <div class="panel-toolbar split-toolbar">
+                <div>
+                  <p class="eyebrow">Agent Profile</p>
+                  <h2 class="section-title">Identity and Direction</h2>
+                </div>
+                <label class="check-row compact-check">
+                  <input id="profileShare" type="checkbox" checked>
+                  <span>Share with worker</span>
                 </label>
               </div>
-              <label class="check-row">
-                <input id="contextFileShare" type="checkbox">
-                <span>Share text contents with worker</span>
-              </label>
-              <p id="contextFileStatus" class="form-status" aria-live="polite"></p>
-              <button type="submit">Upload</button>
+              <label for="profileName">Working name</label>
+              <input id="profileName" type="text" placeholder="Let it emerge, or set one now" autocomplete="off">
+              <label for="profilePurpose">Purpose</label>
+              <textarea id="profilePurpose" rows="3" placeholder="What this agent is here to help you become or build" autocomplete="off"></textarea>
+              <label for="profileGoals">Current goals</label>
+              <textarea id="profileGoals" rows="4" placeholder="Near-term goals, projects, habits, questions" autocomplete="off"></textarea>
+              <label for="profileBoundaries">Boundaries</label>
+              <textarea id="profileBoundaries" rows="4" placeholder="Safety rules, privacy limits, things it must not do" autocomplete="off"></textarea>
+              <label for="profileCommunicationStyle">Communication style</label>
+              <textarea id="profileCommunicationStyle" rows="3" placeholder="How it should ask, challenge, summarize, and support you" autocomplete="off"></textarea>
+              <p id="profileStatus" class="form-status" aria-live="polite"></p>
+              <button type="submit">Save Profile</button>
             </form>
-          </div>
-          <div id="contextList" class="list"></div>
+          </section>
         </section>
 
         <section id="timelinePanel" class="panel hidden">
@@ -310,6 +340,28 @@
             <p id="backupStatus" class="form-status" aria-live="polite"></p>
           </div>
           <div id="diagnosticsGrid" class="status-grid"></div>
+          <div class="ops-panel">
+            <div>
+              <p class="eyebrow">Compass</p>
+              <h2 class="section-title">Capabilities</h2>
+            </div>
+            <div id="capabilityGrid" class="capability-grid"></div>
+          </div>
+          <div class="ops-panel">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Acceptance</p>
+                <h2 class="section-title">Test Console</h2>
+              </div>
+            </div>
+            <div class="test-console">
+              <button class="secondary-button" data-test-action="channel-route" type="button">Channel Reply</button>
+              <button class="secondary-button" data-test-action="bridge-status" type="button">Bridge Status</button>
+              <button class="secondary-button" data-test-action="research-approval" type="button">Research Approval</button>
+              <button class="secondary-button" data-test-action="plain-task" type="button">Plain Task</button>
+            </div>
+            <p id="testConsoleStatus" class="form-status" aria-live="polite"></p>
+          </div>
           <div class="ops-panel">
             <div>
               <p class="eyebrow">Operations</p>
