@@ -35,7 +35,9 @@ DEFAULT_STATE_PATH = Path.home() / ".local" / "state" / "latch-agent-bridge" / "
 DEFAULT_SOURCE_CACHE_PATH = Path.home() / ".cache" / "latch-agent-bridge" / "source-notes.json"
 SYSTEM_PROMPT = """You are the text-only Latch worker for a private OpenClaw setup.
 You may help with planning, explanation, coding advice, and next-step suggestions.
-You cannot run shell commands, browse, scrape websites, send emails/messages, use credentials, create accounts, make purchases, access payment tools, or perform actions outside this chat.
+You may reply into Latch's own internal channels when the operator asks; the bridge will route your reply.
+Internal Latch channel replies are not external messaging.
+You cannot run shell commands, browse, scrape websites, send emails or external messages, use credentials, create accounts, make purchases, access payment tools, or perform actions outside Latch.
 If a request needs a real-world action, outbound contact, web research, credential, purchase, account setup, CAPTCHA, or command execution, say what you would need and ask the operator to approve or perform that step manually.
 For any future web/research workflow, prefer token-efficient summaries, narrow source lists, small page budgets, and reusable source notes instead of dumping raw pages.
 If you need durable context from the operator before giving a good answer, include one to three lines that start exactly with CONTEXT_QUESTION: followed by a concrete question.
@@ -177,11 +179,12 @@ class Bridge:
 
         tasks = payload.get("tasks", [])
         messages = payload.get("messages", [])
+        channels = payload.get("channels", [])
         context_items = payload.get("contextItems", [])
         profile = payload.get("profile", {})
         self.process_approval_decisions(payload.get("approvals", []), tasks, messages, context_items, profile)
-        self.process_tasks(tasks, context_items, profile)
-        self.process_messages(messages, context_items, profile)
+        self.process_tasks(tasks, context_items, profile, channels)
+        self.process_messages(messages, context_items, profile, channels)
         self.save_state()
 
     def check_openclaw_gateway(self) -> str:
@@ -211,7 +214,7 @@ class Bridge:
         if changed:
             self.state[f"seen_{bucket}"] = sorted(seen)[-500:]
 
-    def process_tasks(self, tasks: list[dict], context_items: list[dict], profile: dict) -> None:
+    def process_tasks(self, tasks: list[dict], context_items: list[dict], profile: dict, channels: list[dict]) -> None:
         queued = [task for task in tasks if task.get("status") == "queued"]
         for task in queued[: max(0, self.args.max_tasks_per_tick)]:
             task_id = str(task.get("id", ""))
@@ -219,6 +222,7 @@ class Bridge:
                 continue
             title = clean(task.get("title") or "Untitled task", 180)
             details = clean(task.get("details") or "", 6000)
+            response_channel = requested_latch_channel(f"{title}\n{details}", channels) or "compass"
             try:
                 approval = detect_approval_need(title, details)
                 if approval:
@@ -235,6 +239,7 @@ class Bridge:
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "system", "content": context_briefing(context_items, profile)},
+                        {"role": "system", "content": channel_briefing(channels, response_channel)},
                         {
                             "role": "user",
                             "content": (
@@ -253,15 +258,15 @@ class Bridge:
                     self.patch_task(task_id, "waiting", "Waiting for operator context answer.")
                     self.remember("processed_tasks", task_id)
                     continue
-                self.report(f"Task completed: {title}\n\n{answer}", task_id)
-                self.patch_task(task_id, "done", "Text-only response posted to inbox.")
+                self.report(f"Task completed: {title}\n\n{answer}", task_id, response_channel)
+                self.patch_task(task_id, "done", f"Text-only response posted to {response_channel}.")
                 self.remember("processed_tasks", task_id)
             except Exception as exc:  # noqa: BLE001 - keep bridge alive and report failure
-                self.report(f"Task failed: {title}\n\n{exc}", task_id)
+                self.report(f"Task failed: {title}\n\n{exc}", task_id, response_channel)
                 self.patch_task(task_id, "failed", str(exc)[:1800])
                 self.remember("processed_tasks", task_id)
 
-    def process_messages(self, messages: list[dict], context_items: list[dict], profile: dict) -> None:
+    def process_messages(self, messages: list[dict], context_items: list[dict], profile: dict, channels: list[dict]) -> None:
         operator_messages = [
             message for message in messages
             if message.get("direction") == "operator_to_agent" and message.get("text")
@@ -285,6 +290,7 @@ class Bridge:
         for message in new_messages[: max(0, self.args.max_messages_per_tick)]:
             message_id = str(message.get("id", ""))
             text = clean(message.get("text") or "", 6000)
+            response_channel = requested_latch_channel(text, channels) or clean_channel_id(message.get("channel") or "compass")
             try:
                 approval = detect_approval_need("Inbox instruction", text)
                 if approval:
@@ -299,6 +305,7 @@ class Bridge:
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "system", "content": context_briefing(context_items, profile)},
+                        {"role": "system", "content": channel_briefing(channels, response_channel)},
                         {
                             "role": "user",
                             "content": (
@@ -315,10 +322,10 @@ class Bridge:
                     self.report(f"Context question requested for inbox instruction{suffix}.", message_id)
                     self.remember("processed_messages", message_id)
                     continue
-                self.report(f"Reply to inbox instruction:\n\n{answer}", message_id)
+                self.report(f"Reply to inbox instruction:\n\n{answer}", message_id, response_channel)
                 self.remember("processed_messages", message_id)
             except Exception as exc:  # noqa: BLE001 - keep bridge alive and avoid hot loops
-                self.report(f"Could not answer inbox instruction yet: {exc}", message_id)
+                self.report(f"Could not answer inbox instruction yet: {exc}", message_id, response_channel)
                 self.remember("processed_messages", message_id)
 
     def ask_llm(self, messages: list[dict]) -> str:
@@ -558,8 +565,11 @@ class Bridge:
         seen.add(item_id)
         self.state[bucket] = sorted(seen)[-500:]
 
-    def report(self, text: str, task_id: str = "") -> None:
-        self.request_json("POST", "/api/agent/report", {"text": text, "taskId": task_id})
+    def report(self, text: str, task_id: str = "", channel: str = "") -> None:
+        body = {"text": text, "taskId": task_id}
+        if channel:
+            body["channel"] = clean_channel_id(channel)
+        self.request_json("POST", "/api/agent/report", body)
 
     def execute_read_only_template(self, approval: dict) -> dict:
         template_id = clean(approval.get("actionTemplate") or "", 80)
@@ -1214,6 +1224,57 @@ def render_command(command: dict) -> str:
 
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def clean_channel_id(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]+", "-", text)
+    return text.strip("-")[:48]
+
+
+def channel_briefing(channels: list[dict], response_channel: str) -> str:
+    if not channels:
+        return "Latch channels: reply in Compass unless the operator names another Latch channel."
+    names = []
+    for channel in channels[:20]:
+        channel_id = clean_channel_id(channel.get("id") or channel.get("label"))
+        label = clean(channel.get("label") or channel_id, 80)
+        if channel_id:
+            names.append(f"- {label} ({channel_id})")
+    target = clean_channel_id(response_channel or "compass")
+    return (
+        "Latch channel routing:\n"
+        "You may post your own Latch reply/status update into these internal channels. "
+        "This is allowed and is not external messaging. Do not say you cannot write to Latch channels.\n"
+        f"Target channel for this response: {target or 'compass'}\n"
+        f"Available channels:\n{chr(10).join(names) if names else '- Compass (compass)'}"
+    )
+
+
+def requested_latch_channel(text: str, channels: list[dict]) -> str:
+    lowered = f" {str(text or '').lower()} "
+    entries = []
+    for channel in channels:
+        channel_id = clean_channel_id(channel.get("id") or channel.get("label"))
+        label = clean(channel.get("label") or channel_id, 80).lower()
+        if channel_id:
+            entries.append((channel_id, channel_id.replace("-", " ")))
+        if label:
+            entries.append((channel_id, label))
+
+    for channel_id, name in sorted(set(entries), key=lambda item: len(item[1]), reverse=True):
+        if not channel_id or not name:
+            continue
+        escaped = re.escape(name)
+        patterns = (
+            rf"#\s*{escaped}\b",
+            rf"\b{escaped}\s+channel\b",
+            rf"\bchannel\s+{escaped}\b",
+            rf"\b(in|to|into|under)\s+(the\s+)?{escaped}\b",
+        )
+        if any(re.search(pattern, lowered) for pattern in patterns):
+            return channel_id
+    return ""
 
 
 def context_briefing(items: list[dict], profile: dict | None = None) -> str:

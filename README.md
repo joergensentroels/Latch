@@ -294,7 +294,7 @@ Poll work:
 GET /api/agent/poll
 ```
 
-The poll response includes queued tasks, recent messages, approvals, and recent context. Only explicitly shared notes and small text-like file contents are included for the worker.
+The poll response includes queued tasks, recent messages, approvals, active Latch channels, and recent context. Only explicitly shared notes and small text-like file contents are included for the worker.
 
 Report status:
 
@@ -304,7 +304,8 @@ Content-Type: application/json
 
 {
   "text": "Started task.",
-  "taskId": "task_..."
+  "taskId": "task_...",
+  "channel": "operations"
 }
 ```
 
@@ -402,3 +403,11 @@ powershell -ExecutionPolicy Bypass -File .\openclaw-agent-bridge.ps1 `
   -AgentKey "agent_..." `
   -Once
 ```
+
+Copy the latest worker bridge to the VM and print the manual sudo activation commands:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Deploy-Bridge-To-VM.ps1 -VmHost "<openclaw-vm-tailscale-ip>"
+```
+
+The deploy helper copies to `~/latch-agent-bridge.py.next`, verifies the current service, and leaves the privileged install/restart step for you to run manually on the VM.
