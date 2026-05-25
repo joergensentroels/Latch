@@ -43,9 +43,10 @@ try {
   const message = await request("/api/messages", {
     method: "POST",
     headers: operatorHeaders,
-    body: { text: "hello worker" }
+    body: { text: "hello worker", channel: "compass" }
   });
   assert(message.direction === "operator_to_agent", "operator message should be stored");
+  assert(message.channel === "compass", "operator message should keep channel");
 
   const task = await request("/api/tasks", {
     method: "POST",
@@ -275,9 +276,10 @@ try {
   const report = await request("/api/agent/report", {
     method: "POST",
     headers: agentHeaders,
-    body: { text: "report ok", taskId: task.id }
+    body: { text: "report ok", taskId: task.id, channel: "operations" }
   });
   assert(report.direction === "agent_to_operator", "agent report should be stored");
+  assert(report.channel === "operations", "agent report should keep channel");
 
   const patched = await request(`/api/tasks/${task.id}`, {
     method: "PATCH",

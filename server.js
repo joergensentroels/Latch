@@ -19,6 +19,7 @@ const maxUploadBytes = 2_000_000;
 const maxUploadBodyBytes = 3_000_000;
 const maxSharedFileBytes = 200_000;
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
+const messageChannels = ["compass", "general", "operations", "research"];
 const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "other"];
 const executionModes = ["none", "read_only_status"];
 const riskLevels = ["low", "medium", "high"];
@@ -290,6 +291,7 @@ async function handleApi(req, res, url) {
       direction: "operator_to_agent",
       author: "operator",
       text: cleanText(body.text, 6000),
+      channel: cleanChannel(body.channel || "compass"),
       createdAt: new Date().toISOString()
     };
     db.messages.unshift(message);
@@ -711,6 +713,7 @@ async function handleApi(req, res, url) {
       author: "openclaw",
       text: cleanText(body.text || "", 6000),
       taskId: cleanText(body.taskId || "", 120),
+      channel: cleanChannel(body.channel || inferAgentChannel(body.text || "")),
       createdAt: new Date().toISOString()
     };
     db.messages.unshift(message);
@@ -1184,6 +1187,24 @@ function cleanText(value, maxLength) {
 
 function cleanChoice(value, choices, fallback) {
   return choices.includes(value) ? value : fallback;
+}
+
+function cleanChannel(value) {
+  return cleanChoice(String(value || "compass").toLowerCase(), messageChannels, "compass");
+}
+
+function inferAgentChannel(text) {
+  const lowered = String(text || "").toLowerCase();
+  if (lowered.includes("read-only research") || lowered.includes("source notes")) return "research";
+  if (
+    lowered.includes("diagnostic")
+    || lowered.includes("gateway health")
+    || lowered.includes("bridge status")
+    || lowered.includes("openclaw gateway")
+  ) {
+    return "operations";
+  }
+  return "compass";
 }
 
 function cleanInteger(value, min, max, fallback) {
