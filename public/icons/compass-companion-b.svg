@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Compass Companion avatar concept B">
+  <rect width="512" height="512" rx="92" fill="#12233a"/>
+  <path d="M256 68c62 42 120 58 176 62v124c0 94-60 159-176 202C140 413 80 348 80 254V130c56-4 114-20 176-62Z" fill="#f8fafc"/>
+  <path d="M256 110c48 30 92 43 134 48v95c0 72-43 120-134 155-91-35-134-83-134-155v-95c42-5 86-18 134-48Z" fill="#d0d7e2"/>
+  <circle cx="256" cy="278" r="76" fill="#ffffff"/>
+  <circle cx="228" cy="270" r="12" fill="#101828"/>
+  <circle cx="284" cy="270" r="12" fill="#101828"/>
+  <path d="M228 311c18 15 38 15 56 0" fill="none" stroke="#101828" stroke-width="13" stroke-linecap="round"/>
+  <g transform="translate(256 188)">
+    <circle r="42" fill="#f8fafc" stroke="#101828" stroke-width="12"/>
+    <path d="M0-30 12 0H-12L0-30Z" fill="#14b8a6"/>
+    <path d="M0 30-12 0h24L0 30Z" fill="#101828"/>
+  </g>
+</svg>

@@ -12,11 +12,12 @@ Implemented now:
 - approved read-only research against exact seed URLs
 - compact source-note reporting back into Latch
 - VM-local source-note caching by URL
+- approved headless browser execution plans for operator and Pro-user Full access workflows
 - no automatic sending
-- no interactive browser automation
+- no personal browser profiles
 - no mailbox credentials on the OpenClaw VM
 
-The current bridge records approvals and reports back. After approval, it may fetch exact approved public URLs for `web_research`. It does not send email, operate a browser, search the web, crawl links, log in, download files, or bypass human verification.
+The bridge records approvals and reports back. After approval, it may fetch exact approved public URLs for `web_research`. If the separate executor is installed, approved `browser` execution plans use Playwright-managed Firefox in headless mode. It does not send email, use personal profiles, log in with stored credentials, or bypass human verification.
 
 ## External Contact Rule
 
@@ -113,7 +114,7 @@ Web research:
 - account creation without operator involvement
 - sending mail/messages without approval
 - using a personal browser profile
-- downloading unknown files
+- automatically opening or executing downloaded files
 - logging in to third-party sites
 - scraping large sites
 - accepting arbitrary URLs or domains from untrusted instructions without operator review

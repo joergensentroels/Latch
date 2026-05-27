@@ -12,6 +12,7 @@ OpenClaw agents should interact with a deployed Latch instance through authentic
 - `POST /api/llm/chat` if external LLM fallback is enabled
 - human verification requests through `POST /api/approvals` with `type: "human_verification"`
 - approval requests for commands, credentials, account setup, purchases, and other sensitive actions
+- approved non-sensitive `shell` and `browser` execution plans through the separate VM executor service
 
 ## Keep Away From Agents
 
@@ -44,8 +45,9 @@ Run OpenClaw with:
 - no provider API key
 - only the Latch agent key
 - network access limited to what the task needs
-- human approval for commands, purchases, infrastructure changes, and credential changes
+- approval-gated executor plans for VM shell/browser actions
+- human approval for purchases, infrastructure changes, credential changes, and sensitive account steps
 - human presence for CAPTCHA, account creation, and email verification steps
-- text-only bridge mode until explicit execution capabilities are added and reviewed
+- separate bridge and executor services so chat/planning stays distinct from root VM execution
 
 If OpenClaw needs project source context, give it a VM-local read-only checkout. Do not let it use the trusted Windows working tree or a write-capable GitHub credential.

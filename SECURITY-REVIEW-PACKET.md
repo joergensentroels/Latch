@@ -25,9 +25,9 @@ OpenClaw should inspect source through its VM-local read-only checkout. It shoul
 | Exact-URL web research | Approval-gated, public URLs only |
 | External contact | Draft/manual only |
 | Email sending | Disabled |
-| Browser automation | Disabled |
-| Arbitrary shell commands | Disabled |
-| Write/system commands | Disabled |
+| Browser automation | Full-access executor gated |
+| Arbitrary shell commands | Full-access executor gated |
+| Write/system commands | Full-access executor gated |
 
 ## API Key Locations
 
@@ -44,6 +44,7 @@ OpenClaw should inspect source through its VM-local read-only checkout. It shoul
 - `data/` is not tracked by Git.
 - Smoke test, worker tests, and secret scan pass.
 - Read-only diagnostic approval runs only a named template.
+- Full-access shell/browser approvals run only stored execution plans and record execution audits.
 - Exact-URL research rejects private IPs, localhost, embedded credentials, missing seed URLs, and unapproved domains.
 - Timeline Operations displays diagnostic and research summaries clearly.
 - External-contact drafts can be copied, but Latch does not send mail.
@@ -53,7 +54,7 @@ OpenClaw should inspect source through its VM-local read-only checkout. It shoul
 - Bearer keys are simple shared secrets, not signed sessions.
 - Local PIN/passkey is a browser/device gate, not server-side authentication.
 - Source-note summaries are heuristic and not a substitute for reviewer judgment.
-- Research fetches exact approved URLs only; no search, crawling, login, downloads, or interactive browser automation.
+- Research fetches exact approved URLs only; broader browser work requires an approved executor plan and does not use personal browser profiles.
 - Approval audit records are summaries, not immutable append-only logs.
 
 ## Pre-Public Checklist
@@ -62,4 +63,3 @@ OpenClaw should inspect source through its VM-local read-only checkout. It shoul
 - Remove or redact private Tailscale hostnames from public docs if needed.
 - Confirm no screenshots or logs contain secrets.
 - Keep the repo private until the reviewer has checked auth, approval transitions, file boundaries, notification privacy, research URL validation, and read-only deploy-key setup.
-

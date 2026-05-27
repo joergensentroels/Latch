@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 720" role="img" aria-label="Compass Companion avatar concept sheet">
+  <rect width="1120" height="720" fill="#eef1f4"/>
+  <text x="56" y="72" fill="#101828" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="800">Compass Companion icon directions</text>
+  <text x="56" y="112" fill="#667085" font-family="Segoe UI, Arial, sans-serif" font-size="18">Revised: face and compass elements are separated so they do not overlap.</text>
+
+  <g transform="translate(56 150)">
+    <rect width="236" height="330" rx="18" fill="#ffffff"/>
+    <svg x="28" y="24" width="180" height="180" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="92" fill="#101828"/>
+      <circle cx="256" cy="256" r="166" fill="#f8fafc"/>
+      <circle cx="256" cy="256" r="132" fill="#d0d7e2"/>
+      <path d="M256 98v36M256 378v36M98 256h36M378 256h36" stroke="#667085" stroke-width="18" stroke-linecap="round"/>
+      <circle cx="256" cy="282" r="82" fill="#ffffff"/>
+      <circle cx="224" cy="274" r="13" fill="#101828"/>
+      <circle cx="288" cy="274" r="13" fill="#101828"/>
+      <path d="M224 318c20 18 44 18 64 0" fill="none" stroke="#101828" stroke-width="15" stroke-linecap="round"/>
+      <path d="M256 130 286 214h-60l30-84Z" fill="#14b8a6"/>
+      <path d="M256 382 226 334h60l-30 48Z" fill="#101828"/>
+    </svg>
+    <text x="28" y="238" fill="#101828" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="800">A. Clean dial</text>
+    <text x="28" y="270" fill="#667085" font-family="Segoe UI, Arial, sans-serif" font-size="14">Face sits lower. Pointer stays above and below.</text>
+  </g>
+
+  <g transform="translate(318 150)">
+    <rect width="236" height="330" rx="18" fill="#ffffff"/>
+    <svg x="28" y="24" width="180" height="180" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="92" fill="#12233a"/>
+      <path d="M256 68c62 42 120 58 176 62v124c0 94-60 159-176 202C140 413 80 348 80 254V130c56-4 114-20 176-62Z" fill="#f8fafc"/>
+      <path d="M256 110c48 30 92 43 134 48v95c0 72-43 120-134 155-91-35-134-83-134-155v-95c42-5 86-18 134-48Z" fill="#d0d7e2"/>
+      <circle cx="256" cy="278" r="76" fill="#ffffff"/>
+      <circle cx="228" cy="270" r="12" fill="#101828"/>
+      <circle cx="284" cy="270" r="12" fill="#101828"/>
+      <path d="M228 311c18 15 38 15 56 0" fill="none" stroke="#101828" stroke-width="13" stroke-linecap="round"/>
+      <g transform="translate(256 188)">
+        <circle r="42" fill="#f8fafc" stroke="#101828" stroke-width="12"/>
+        <path d="M0-30 12 0H-12L0-30Z" fill="#14b8a6"/>
+        <path d="M0 30-12 0h24L0 30Z" fill="#101828"/>
+      </g>
+    </svg>
+    <text x="28" y="238" fill="#101828" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="800">B. Shield + badge</text>
+    <text x="28" y="270" fill="#667085" font-family="Segoe UI, Arial, sans-serif" font-size="14">Trust shield with a separate compass badge.</text>
+  </g>
+
+  <g transform="translate(580 150)">
+    <rect width="236" height="330" rx="18" fill="#ffffff"/>
+    <svg x="28" y="24" width="180" height="180" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="92" fill="#0f172a"/>
+      <circle cx="256" cy="256" r="170" fill="#172033"/>
+      <circle cx="256" cy="256" r="132" fill="#f8fafc"/>
+      <path d="M154 182c42-36 75-54 102-54s60 18 102 54" fill="none" stroke="#7dd3c7" stroke-width="20" stroke-linecap="round"/>
+      <circle cx="256" cy="278" r="84" fill="#d0d7e2"/>
+      <circle cx="224" cy="270" r="13" fill="#101828"/>
+      <circle cx="288" cy="270" r="13" fill="#101828"/>
+      <path d="M224 316c22 18 42 18 64 0" fill="none" stroke="#101828" stroke-width="15" stroke-linecap="round"/>
+      <g transform="translate(256 398)">
+        <path d="M0-52 24 0H-24L0-52Z" fill="#14b8a6"/>
+        <path d="M0 52-24 0h48L0 52Z" fill="#f8fafc"/>
+      </g>
+      <path d="M256 58v44M58 256h44M410 256h44" stroke="#7dd3c7" stroke-width="18" stroke-linecap="round"/>
+    </svg>
+    <text x="28" y="238" fill="#101828" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="800">C. Guide arc</text>
+    <text x="28" y="270" fill="#667085" font-family="Segoe UI, Arial, sans-serif" font-size="14">A soft horizon/guide arc, pointer as a lower marker.</text>
+  </g>
+
+  <g transform="translate(842 150)">
+    <rect width="236" height="330" rx="18" fill="#ffffff"/>
+    <svg x="28" y="24" width="180" height="180" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="92" fill="#101828"/>
+      <circle cx="256" cy="256" r="164" fill="#f8fafc"/>
+      <path d="M256 88 286 176h-60l30-88Z" fill="#14b8a6"/>
+      <path d="M256 424 226 336h60l-30 88Z" fill="#101828"/>
+      <path d="M88 256l88-30v60l-88-30Z" fill="#d0d7e2"/>
+      <path d="M424 256l-88 30v-60l88 30Z" fill="#d0d7e2"/>
+      <circle cx="256" cy="256" r="98" fill="#ffffff" stroke="#d0d7e2" stroke-width="18"/>
+      <circle cx="220" cy="248" r="14" fill="#101828"/>
+      <circle cx="292" cy="248" r="14" fill="#101828"/>
+      <path d="M222 302c22 22 46 22 68 0" fill="none" stroke="#101828" stroke-width="16" stroke-linecap="round"/>
+      <circle cx="256" cy="256" r="18" fill="#14b8a6"/>
+    </svg>
+    <text x="28" y="238" fill="#101828" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="800">D. Center avatar</text>
+    <text x="28" y="270" fill="#667085" font-family="Segoe UI, Arial, sans-serif" font-size="14">Most balanced. Compass points frame the face.</text>
+  </g>
+
+  <text x="56" y="558" fill="#101828" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="800">Recommendation</text>
+  <text x="56" y="596" fill="#667085" font-family="Segoe UI, Arial, sans-serif" font-size="18">D is the cleanest app icon. A is friendlier if we want the companion feeling to dominate.</text>
+</svg>

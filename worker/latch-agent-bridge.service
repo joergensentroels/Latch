@@ -1,5 +1,5 @@
 [Unit]
-Description=Latch safe text-only bridge for OpenClaw worker
+Description=Latch approval-planning bridge for OpenClaw worker
 After=network-online.target tailscaled.service docker.service
 Wants=network-online.target
 

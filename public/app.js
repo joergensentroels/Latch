@@ -1,46 +1,69 @@
-const initialTab = new URLSearchParams(location.search).get("tab");
-const tabs = ["inbox", "tasks", "approvals", "context", "timeline"];
+const tabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings"];
+const simpleTabs = ["inbox", "tasks", "approvals", "context", "credits", "settings"];
+const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings", "credits"];
+const initialParams = new URLSearchParams(location.search);
+const initialTab = normalizeTab(initialParams.get("tab"));
+const initialApprovalId = cleanRouteId(initialParams.get("approval") || initialParams.get("approvalId") || "");
 const maxContextUploadBytes = 2_000_000;
 const fallbackChannels = [
-  { id: "compass", label: "Compass", description: "Direct conversation", builtIn: true },
+  { id: "compass", label: "Companion", description: "Direct chat with Compass Companion", builtIn: true },
   { id: "general", label: "General", description: "Loose notes", builtIn: true },
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
 
 const state = {
-  token: localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
-  tab: tabs.includes(initialTab) ? initialTab : "inbox",
+  token: localStorage.getItem("latchUserToken") || localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
+  authMode: localStorage.getItem("latchAuthMode") || (localStorage.getItem("latchUserToken") ? "user" : "operator"),
+  proMode: localStorage.getItem("latchProMode") === "true",
+  tab: proTabs.includes(initialTab) ? initialTab : "inbox",
   activeChannel: localStorage.getItem("latchActiveChannel") || "compass",
+  channelRailWidth: Number(localStorage.getItem("latchChannelRailWidth") || 260),
+  showArchivedChannels: localStorage.getItem("latchShowArchivedChannels") === "true",
   data: null,
   taskFilter: localStorage.getItem("latchTaskFilter") || "open",
   approvalsFilter: localStorage.getItem("latchApprovalsFilter") || "pending",
   seenNotificationIds: new Set(JSON.parse(localStorage.getItem("latchSeenNotificationIds") || "[]")),
+  disclosureState: JSON.parse(localStorage.getItem("latchDisclosureState") || "{}"),
   notificationBaselineReady: false,
   deferredInstallPrompt: null,
   approvalDecision: null,
-  contextView: null
+  highlightedApprovalId: initialApprovalId,
+  pendingApprovalScroll: Boolean(initialApprovalId),
+  contextView: null,
+  reopenDrafts: {},
+  forceMessageScrollBottom: false,
+  doctor: null
 };
 
 const loginView = document.querySelector("#loginView");
 const mainView = document.querySelector("#mainView");
 const loginForm = document.querySelector("#loginForm");
+const devUserButton = document.querySelector("#devUserButton");
 const tokenInput = document.querySelector("#tokenInput");
+const loginStatus = document.querySelector("#loginStatus");
 const toggleTokenVisibility = document.querySelector("#toggleTokenVisibility");
 const messageForm = document.querySelector("#messageForm");
 const messageText = document.querySelector("#messageText");
+const messageRouting = document.querySelector("#messageRouting");
+const chatShell = document.querySelector(".chat-shell");
 const channelList = document.querySelector("#channelList");
+const channelResizer = document.querySelector("#channelResizer");
 const channelForm = document.querySelector("#channelForm");
 const channelName = document.querySelector("#channelName");
 const channelDescription = document.querySelector("#channelDescription");
+const showArchivedChannels = document.querySelector("#showArchivedChannels");
 const chatEyebrow = document.querySelector("#chatEyebrow");
 const chatTitle = document.querySelector("#chatTitle");
 const chatCount = document.querySelector("#chatCount");
 const taskForm = document.querySelector("#taskForm");
+const taskBriefEyebrow = document.querySelector("#taskBriefEyebrow");
+const taskTitleLabel = document.querySelector("#taskTitleLabel");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
 const taskInstructionDetails = document.querySelector("#taskInstructionDetails");
 const taskPriority = document.querySelector("#taskPriority");
+const taskRouting = document.querySelector("#taskRouting");
 const contactDraftForm = document.querySelector("#contactDraftForm");
 const contactRecipient = document.querySelector("#contactRecipient");
 const contactSubject = document.querySelector("#contactSubject");
@@ -54,7 +77,8 @@ const profilePurpose = document.querySelector("#profilePurpose");
 const profileGoals = document.querySelector("#profileGoals");
 const profileBoundaries = document.querySelector("#profileBoundaries");
 const profileCommunicationStyle = document.querySelector("#profileCommunicationStyle");
-const profileShare = document.querySelector("#profileShare");
+const profileAnchorPurpose = document.querySelector("#profileAnchorPurpose");
+const profileAnchorGovernance = document.querySelector("#profileAnchorGovernance");
 const profileStatus = document.querySelector("#profileStatus");
 const contextMainSection = document.querySelector("#contextMainSection");
 const profileSection = document.querySelector("#profileSection");
@@ -65,24 +89,39 @@ const contextCategory = document.querySelector("#contextCategory");
 const contextTags = document.querySelector("#contextTags");
 const contextText = document.querySelector("#contextText");
 const contextShare = document.querySelector("#contextShare");
+const contextNetworkShare = document.querySelector("#contextNetworkShare");
 const contextNoteStatus = document.querySelector("#contextNoteStatus");
 const contextFileForm = document.querySelector("#contextFileForm");
 const contextFileInput = document.querySelector("#contextFileInput");
 const contextFileCategory = document.querySelector("#contextFileCategory");
 const contextFileTags = document.querySelector("#contextFileTags");
 const contextFileShare = document.querySelector("#contextFileShare");
+const contextFileNetworkShare = document.querySelector("#contextFileNetworkShare");
 const contextFileStatus = document.querySelector("#contextFileStatus");
+const networkInviteForm = document.querySelector("#networkInviteForm");
+const networkWorkerName = document.querySelector("#networkWorkerName");
+const networkWorkerBackend = document.querySelector("#networkWorkerBackend");
+const networkWorkerModels = document.querySelector("#networkWorkerModels");
+const networkInviteStatus = document.querySelector("#networkInviteStatus");
+const autonomyForm = document.querySelector("#autonomyForm");
+const autonomyMode = document.querySelector("#autonomyMode");
+const autonomySummary = document.querySelector("#autonomySummary");
+const autonomyStatus = document.querySelector("#autonomyStatus");
 const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
 const appLockButton = document.querySelector("#appLockButton");
+const proModeButton = document.querySelector("#proModeButton");
 const installButton = document.querySelector("#installButton");
 const notifyButton = document.querySelector("#notifyButton");
+const doctorRunButton = document.querySelector("#doctorRunButton");
+const doctorStatus = document.querySelector("#doctorStatus");
 const backupButton = document.querySelector("#backupButton");
 const exportContextButton = document.querySelector("#exportContextButton");
 const backupStatus = document.querySelector("#backupStatus");
 const connectionDot = document.querySelector("#connectionDot");
 const connectionText = document.querySelector("#connectionText");
 const pendingSummary = document.querySelector("#pendingSummary");
+const creditSummary = document.querySelector("#creditSummary");
 const routeWarning = document.querySelector("#routeWarning");
 const pinDialog = document.querySelector("#pinDialog");
 const pinForm = document.querySelector("#pinForm");
@@ -107,6 +146,8 @@ const approvalDialogClose = document.querySelector("#approvalDialogClose");
 const approvalDecisionCancel = document.querySelector("#approvalDecisionCancel");
 const taskFilterButtons = document.querySelectorAll("[data-task-filter]");
 const approvalFilterButtons = document.querySelectorAll("[data-approval-filter]");
+const moreTabsButton = document.querySelector("#moreTabsButton");
+const tabsMoreMenu = document.querySelector("#tabsMoreMenu");
 
 const lists = {
   messages: document.querySelector("#messagesList"),
@@ -114,22 +155,83 @@ const lists = {
   approvals: document.querySelector("#approvalsList"),
   context: document.querySelector("#contextList"),
   operations: document.querySelector("#operationsList"),
+  doctor: document.querySelector("#doctorGrid"),
+  network: document.querySelector("#networkList"),
   archives: document.querySelector("#archivesList"),
   events: document.querySelector("#eventsList")
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
+const networkGrid = document.querySelector("#networkGrid");
 const capabilityGrid = document.querySelector("#capabilityGrid");
+const userTierList = document.querySelector("#userTierList");
 const securityChecklist = document.querySelector("#securityChecklist");
 const testConsoleStatus = document.querySelector("#testConsoleStatus");
 const testActionButtons = document.querySelectorAll("[data-test-action]");
+const creditsGrid = document.querySelector("#creditsGrid");
+const creditsList = document.querySelector("#creditsList");
+const purchaseForm = document.querySelector("#purchaseForm");
+const purchaseCredits = document.querySelector("#purchaseCredits");
+const purchaseNote = document.querySelector("#purchaseNote");
+const purchaseStatus = document.querySelector("#purchaseStatus");
+const simpleSettingsSummary = document.querySelector("#simpleSettingsSummary");
 let pinMode = "unlock";
+
+const contextAutoResizeTextareas = [
+  contextText,
+  profilePurpose,
+  profileGoals,
+  profileBoundaries,
+  profileCommunicationStyle
+].filter(Boolean);
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   state.token = tokenInput.value.trim();
+  state.authMode = "operator";
+  setFormStatus(loginStatus, "Unlocking...", "");
   localStorage.setItem("latchOperatorToken", state.token);
+  localStorage.setItem("latchAuthMode", "operator");
+  localStorage.removeItem("latchUserToken");
   localStorage.removeItem("commandCenterToken");
-  await boot();
+  try {
+    await boot();
+    setFormStatus(loginStatus, "", "");
+  } catch (error) {
+    localStorage.removeItem("latchOperatorToken");
+    localStorage.removeItem("commandCenterToken");
+    state.token = "";
+    tokenInput.value = "";
+    showLogin();
+    setFormStatus(loginStatus, loginErrorMessage(error), "error");
+  }
+});
+
+devUserButton?.addEventListener("click", async () => {
+  devUserButton.disabled = true;
+  setFormStatus(loginStatus, "Starting local user session...", "");
+  try {
+    const result = await fetchJson("/api/me/session/dev", {
+      method: "POST",
+      body: JSON.stringify({
+        displayName: "Compass user",
+        email: "local-user@compass.local"
+      })
+    });
+    state.token = result.token;
+    state.authMode = "user";
+    state.proMode = false;
+    localStorage.setItem("latchUserToken", state.token);
+    localStorage.setItem("latchAuthMode", "user");
+    localStorage.setItem("latchProMode", "false");
+    localStorage.removeItem("latchOperatorToken");
+    localStorage.removeItem("commandCenterToken");
+    await boot();
+    setFormStatus(loginStatus, "", "");
+  } catch (error) {
+    setFormStatus(loginStatus, `Local user login failed: ${error.message}`, "error");
+  } finally {
+    devUserButton.disabled = false;
+  }
 });
 
 toggleTokenVisibility.addEventListener("click", () => {
@@ -147,14 +249,38 @@ messageForm.addEventListener("submit", async (event) => {
   if (!text) return;
 
   await withSubmitLock(messageForm, async () => {
-    await api("/api/messages", {
+    const routingPreference = isProMode() ? (messageRouting.value || "auto") : "auto";
+    const active = activeChannel();
+    await api(state.authMode === "user" ? "/api/me/messages" : "/api/messages", {
       method: "POST",
-      body: JSON.stringify({ text, channel: state.activeChannel })
+      body: JSON.stringify({
+        text,
+        channel: active.id,
+        routingPreference,
+        allowNetwork: routingPreference !== "local"
+      })
     });
     messageText.value = "";
+    resizeMessageText();
+    messageRouting.value = "auto";
+    state.forceMessageScrollBottom = true;
     await refresh();
   });
 });
+
+messageText.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+
+  event.preventDefault();
+  messageForm.requestSubmit();
+});
+
+messageText.addEventListener("input", resizeMessageText);
+resizeMessageText();
+contextAutoResizeTextareas.forEach((textarea) => {
+  textarea.addEventListener("input", () => resizeTextareaToContent(textarea));
+});
+resizeContextTextareas();
 
 channelForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -177,6 +303,13 @@ channelForm.addEventListener("submit", async (event) => {
   });
 });
 
+showArchivedChannels?.addEventListener("change", () => {
+  state.showArchivedChannels = showArchivedChannels.checked;
+  localStorage.setItem("latchShowArchivedChannels", String(state.showArchivedChannels));
+  renderChannels();
+  renderMessages();
+});
+
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const goal = taskTitle.value.trim();
@@ -187,20 +320,30 @@ taskForm.addEventListener("submit", async (event) => {
   }
 
   await withSubmitLock(taskForm, async () => {
-    await api("/api/tasks", {
+    const routingPreference = isProMode() ? (taskRouting.value || "auto") : "auto";
+    const task = await api(state.authMode === "user" ? "/api/me/tasks" : "/api/tasks", {
       method: "POST",
       body: JSON.stringify({
         title: titleFromBrief(goal),
         goal,
         instructions,
         details: composeTaskDetails(goal, instructions),
-        priority: taskPriority.value
+        priority: taskPriority.value,
+        routingPreference,
+        allowNetwork: routingPreference !== "local"
       })
     });
     taskTitle.value = "";
     taskDetails.value = "";
     taskInstructionDetails.open = false;
     taskPriority.value = "normal";
+    taskRouting.value = "auto";
+    if (task.channel && isProMode()) {
+      state.activeChannel = task.channel;
+      localStorage.setItem("latchActiveChannel", state.activeChannel);
+      state.tab = "inbox";
+      updateRoute();
+    }
     await refresh();
   });
 });
@@ -274,20 +417,23 @@ contextNoteForm.addEventListener("submit", async (event) => {
 
   try {
     await withSubmitLock(contextNoteForm, async () => {
-      await api("/api/context/notes", {
+      await api(contextApiPath("/notes"), {
         method: "POST",
         body: JSON.stringify({
           title,
           text,
           category: contextCategory.value,
           tags: tagsFromInput(contextTags.value),
-          shareWithAgent: contextShare.checked
+          shareWithAgent: contextShare.checked,
+          shareWithNetwork: isProMode() && contextNetworkShare.checked
         })
       });
       contextTitle.value = "";
       contextTags.value = "";
       contextText.value = "";
+      resizeTextareaToContent(contextText);
       contextShare.checked = true;
+      contextNetworkShare.checked = false;
       setFormStatus(contextNoteStatus, "Saved to Context.", "success");
       await refresh();
     });
@@ -311,7 +457,7 @@ contextFileForm.addEventListener("submit", async (event) => {
   try {
     await withSubmitLock(contextFileForm, async () => {
       const contentBase64 = await fileToBase64(file);
-      await api("/api/context/files", {
+      await api(contextApiPath("/files"), {
         method: "POST",
         body: JSON.stringify({
           name: file.name,
@@ -320,12 +466,14 @@ contextFileForm.addEventListener("submit", async (event) => {
           category: contextFileCategory.value,
           tags: tagsFromInput(contextFileTags.value),
           shareWithAgent: contextFileShare.checked,
+          shareWithNetwork: isProMode() && contextFileNetworkShare.checked,
           contentBase64
         })
       });
       contextFileInput.value = "";
       contextFileTags.value = "";
       contextFileShare.checked = false;
+      contextFileNetworkShare.checked = false;
       setFormStatus(contextFileStatus, "Uploaded to Context.", "success");
       await refresh();
     });
@@ -336,8 +484,19 @@ contextFileForm.addEventListener("submit", async (event) => {
 
 refreshButton.addEventListener("click", refresh);
 notifyButton.addEventListener("click", enableNotifications);
+doctorRunButton?.addEventListener("click", runDoctor);
+proModeButton?.addEventListener("click", () => {
+  if (state.authMode !== "operator") return;
+  state.proMode = !state.proMode;
+  localStorage.setItem("latchProMode", String(state.proMode));
+  render();
+});
 backupButton.addEventListener("click", createBackup);
 exportContextButton.addEventListener("click", exportContext);
+networkInviteForm?.addEventListener("submit", createNetworkInvite);
+purchaseForm?.addEventListener("submit", createPurchaseRequest);
+autonomyForm?.addEventListener("submit", (event) => event.preventDefault());
+autonomyMode?.addEventListener("change", updateAutonomyPolicy);
 appLockButton.addEventListener("click", () => {
   if (!state.token) return;
   if (!isAppLockConfigured()) {
@@ -366,6 +525,8 @@ passkeyButton?.addEventListener("click", handlePasskeyButton);
 pinCancelButton.addEventListener("click", () => {
   if (pinMode === "unlock") {
     localStorage.removeItem("latchOperatorToken");
+    localStorage.removeItem("latchUserToken");
+    localStorage.removeItem("latchAuthMode");
     state.token = "";
     closePinDialog();
     showLogin();
@@ -376,7 +537,9 @@ pinCancelButton.addEventListener("click", () => {
 
 lockButton.addEventListener("click", () => {
   localStorage.removeItem("latchOperatorToken");
+  localStorage.removeItem("latchUserToken");
   localStorage.removeItem("commandCenterToken");
+  localStorage.removeItem("latchAuthMode");
   state.token = "";
   showLogin();
 });
@@ -392,13 +555,22 @@ if ("serviceWorker" in navigator) {
 }
 
 document.querySelectorAll(".tab").forEach((button) => {
+  if (!button.dataset.tab) return;
   button.addEventListener("click", () => {
-    state.tab = button.dataset.tab;
-    if (state.tab === "context") state.contextView = preferredContextView();
-    history.replaceState(null, "", `?tab=${state.tab}`);
-    renderTabs();
-    renderContextView();
+    if (!visibleTabs().includes(button.dataset.tab)) return;
+    openTab(button.dataset.tab);
   });
+});
+
+moreTabsButton?.addEventListener("click", () => {
+  const open = tabsMoreMenu?.classList.toggle("hidden") === false;
+  moreTabsButton.setAttribute("aria-expanded", String(open));
+});
+
+document.addEventListener("click", (event) => {
+  if (!tabsMoreMenu || tabsMoreMenu.classList.contains("hidden")) return;
+  if (tabsMoreMenu.contains(event.target) || moreTabsButton?.contains(event.target)) return;
+  closeMoreTabs();
 });
 
 contextViewButtons.forEach((button) => {
@@ -428,9 +600,10 @@ taskFilterButtons.forEach((button) => {
   });
 });
 
+setupChannelRailResize();
 boot();
 setInterval(() => {
-  if (state.token && !mainView.classList.contains("hidden")) refresh();
+  if (state.token && !mainView.classList.contains("hidden") && !isEditingReopenDraft()) refresh();
 }, 8000);
 
 async function boot() {
@@ -447,9 +620,10 @@ async function boot() {
     await refresh();
     loginView.classList.add("hidden");
     mainView.classList.remove("hidden");
-  } catch {
+  } catch (error) {
     markConnection(false);
     showLogin();
+    throw error;
   }
 }
 
@@ -466,16 +640,67 @@ function showPinLock() {
   openPinDialog("unlock");
 }
 
+function setupChannelRailResize() {
+  if (!chatShell || !channelResizer) return;
+  applyChannelRailWidth(state.channelRailWidth);
+  let dragStartX = 0;
+  let dragStartWidth = 0;
+  let dragging = false;
+
+  channelResizer.addEventListener("pointerdown", (event) => {
+    if (!isProMode()) return;
+    dragging = true;
+    dragStartX = event.clientX;
+    dragStartWidth = state.channelRailWidth;
+    channelResizer.setPointerCapture?.(event.pointerId);
+    document.body.classList.add("resizing-channels");
+    event.preventDefault();
+  });
+
+  channelResizer.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    applyChannelRailWidth(dragStartWidth + event.clientX - dragStartX);
+  });
+
+  const finishDrag = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    channelResizer.releasePointerCapture?.(event.pointerId);
+    document.body.classList.remove("resizing-channels");
+    localStorage.setItem("latchChannelRailWidth", String(state.channelRailWidth));
+  };
+  channelResizer.addEventListener("pointerup", finishDrag);
+  channelResizer.addEventListener("pointercancel", finishDrag);
+}
+
+function applyChannelRailWidth(value) {
+  if (!chatShell) return;
+  const width = Math.round(Math.max(210, Math.min(460, Number(value) || 260)));
+  state.channelRailWidth = width;
+  chatShell.style.setProperty("--channel-rail-width", `${width}px`);
+}
+
 async function refresh() {
   try {
-    const [appState, llmConfig, about] = await Promise.all([
-      api("/api/state"),
-      api("/api/llm/config"),
-      api("/api/about")
-    ]);
-    state.data = appState;
-    state.llmConfig = llmConfig;
-    state.about = about;
+    if (state.authMode === "user") {
+      const [appState, me] = await Promise.all([
+        api("/api/me/state"),
+        api("/api/me")
+      ]);
+      state.data = appState;
+      state.me = me;
+      state.llmConfig = { enabled: true, model: "Auto" };
+      state.about = {};
+    } else {
+      const [appState, llmConfig, about] = await Promise.all([
+        api("/api/state"),
+        api("/api/llm/config"),
+        api("/api/about")
+      ]);
+      state.data = appState;
+      state.llmConfig = llmConfig;
+      state.about = about;
+    }
     markConnection(true);
     render();
   } catch (error) {
@@ -485,7 +710,7 @@ async function refresh() {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  return fetchJson(path, {
     ...options,
     headers: {
       "content-type": "application/json",
@@ -493,39 +718,107 @@ async function api(path, options = {}) {
       ...(options.headers || {})
     }
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+}
+
+async function fetchJson(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "content-type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body.message || body.error || "";
+    } catch {
+      detail = await response.text().catch(() => "");
+    }
+    throw new Error(detail ? `Request failed: ${response.status} ${detail}` : `Request failed: ${response.status}`);
+  }
   return response.json();
 }
 
+function loginErrorMessage(error) {
+  const message = String(error?.message || error || "");
+  if (message.includes("401")) return "Operator key was rejected. Check the current key on the trusted host.";
+  if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "Compass could not reach Latch. Check that the server is running.";
+  return `Unlock failed: ${message || "unknown error"}`;
+}
+
 async function withSubmitLock(form, callback) {
+  if (form.dataset.submitting === "true") return;
+  form.dataset.submitting = "true";
   const button = form.querySelector("button[type='submit']");
   button.disabled = true;
   try {
     await callback();
   } finally {
+    delete form.dataset.submitting;
     button.disabled = false;
   }
 }
 
 function render() {
+  renderExperienceMode();
   renderTabs();
   renderStatus();
   renderRouteWarning();
   renderNotificationButton();
+  renderAppLockButton();
   maybeNotify();
   renderChannels();
+  renderTaskComposerCopy();
   renderMessages();
   renderTasks();
   renderApprovals();
   renderProfile();
   renderContextView();
-  renderContext();
-  renderDiagnostics();
+    renderContext();
+    renderDiagnostics();
+    renderDoctor();
+    renderAutonomyPolicy();
+  renderNetwork();
+  renderCredits();
+  renderSimpleSettings();
   renderCapabilities();
+  renderUserTiers();
   renderOperations();
   renderSecurityChecklist();
   renderArchives();
   renderEvents();
+}
+
+function isProMode() {
+  return state.authMode === "operator" && state.proMode;
+}
+
+function visibleTabs() {
+  return isProMode() ? proTabs : simpleTabs;
+}
+
+function renderExperienceMode() {
+  const pro = isProMode();
+  document.body.classList.toggle("pro-mode", pro);
+  document.body.classList.toggle("simple-mode", !pro);
+  proModeButton?.classList.toggle("hidden", state.authMode !== "operator");
+  proModeButton?.classList.toggle("active", pro);
+  if (proModeButton) {
+    proModeButton.title = pro ? "Switch to Simple Mode" : "Switch to Pro Mode";
+    proModeButton.setAttribute("aria-label", proModeButton.title);
+    proModeButton.textContent = pro ? "Simple Mode" : "Pro Mode";
+  }
+  messageRouting?.classList.toggle("hidden", !pro);
+  taskRouting?.classList.toggle("hidden", !pro);
+  if (!pro) {
+    state.activeChannel = "compass";
+  }
+  if (!visibleTabs().includes(state.tab)) {
+    state.tab = "inbox";
+    updateRoute();
+  }
 }
 
 function renderProfile() {
@@ -537,7 +830,9 @@ function renderProfile() {
   profileGoals.value = profile.goals || "";
   profileBoundaries.value = profile.boundaries || "";
   profileCommunicationStyle.value = profile.communicationStyle || "";
-  profileShare.checked = profile.shareWithAgent !== false;
+  resizeContextTextareas();
+  if (profile.anchorPurpose || profile.foundationPurpose) profileAnchorPurpose.textContent = profile.anchorPurpose || profile.foundationPurpose;
+  if (profile.anchorGovernance) profileAnchorGovernance.textContent = profile.anchorGovernance;
 }
 
 function currentProfilePayload() {
@@ -547,11 +842,12 @@ function currentProfilePayload() {
     goals: profileGoals.value.trim(),
     boundaries: profileBoundaries.value.trim(),
     communicationStyle: profileCommunicationStyle.value.trim(),
-    shareWithAgent: profileShare.checked
+    shareWithAgent: true
   };
 }
 
 function preferredContextView() {
+  if (!isProMode()) return "context";
   return isProfileComplete(state.data?.profile || {}) ? "context" : "profile";
 }
 
@@ -561,17 +857,56 @@ function isProfileComplete(profile = {}) {
 }
 
 function renderContextView() {
-  const activeView = state.contextView || preferredContextView();
+  const activeView = !isProMode() ? "context" : (state.contextView || preferredContextView());
   state.contextView = activeView;
   contextMainSection.classList.toggle("hidden", activeView !== "context");
   profileSection.classList.toggle("hidden", activeView !== "profile");
   contextViewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.contextView === activeView);
   });
+  requestAnimationFrame(resizeContextTextareas);
 }
 
 function renderRouteWarning() {
   routeWarning.classList.toggle("hidden", isPrivateRoute());
+}
+
+function openTab(tabId) {
+  state.tab = normalizeTab(tabId);
+  if (state.tab !== "approvals") state.highlightedApprovalId = "";
+  if (state.tab === "context") state.contextView = preferredContextView();
+  updateRoute();
+  closeMoreTabs();
+  renderTabs();
+  renderContextView();
+}
+
+function updateRoute(options = {}) {
+  const tab = normalizeTab(options.tab || state.tab);
+  const approvalId = options.approvalId !== undefined ? cleanRouteId(options.approvalId) : (tab === "approvals" ? state.highlightedApprovalId : "");
+  const params = new URLSearchParams();
+  params.set("tab", routeTabName(tab));
+  if (tab === "approvals" && approvalId) params.set("approval", approvalId);
+  history.replaceState(null, "", `?${params.toString()}`);
+}
+
+function normalizeTab(tabId) {
+  if (tabId === "review") return "approvals";
+  return tabs.includes(tabId) || simpleTabs.includes(tabId) || proTabs.includes(tabId) ? tabId : "inbox";
+}
+
+function routeTabName(tabId) {
+  return tabId === "approvals" ? "review" : tabId;
+}
+
+function cleanRouteId(value) {
+  const text = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{1,140}$/.test(text) ? text : "";
+}
+
+function closeMoreTabs() {
+  tabsMoreMenu?.classList.add("hidden");
+  moreTabsButton?.setAttribute("aria-expanded", "false");
 }
 
 async function enableNotifications() {
@@ -579,7 +914,7 @@ async function enableNotifications() {
   const permission = await Notification.requestPermission();
   renderNotificationButton();
   if (permission === "granted") {
-    await showNotification("Latch notifications enabled", {
+    await showNotification("Compass notifications enabled", {
       body: "You will get alerts while this app can receive updates.",
       tag: "latch-enabled"
     });
@@ -595,6 +930,16 @@ function renderNotificationButton() {
   notifyButton.classList.toggle("active", permission === "granted");
   notifyButton.title = permission === "granted" ? "Notifications enabled" : "Enable notifications";
   notifyButton.setAttribute("aria-label", notifyButton.title);
+  notifyButton.textContent = permission === "granted" ? "Notifications On" : "Notifications";
+}
+
+function renderAppLockButton() {
+  if (!appLockButton) return;
+  const configured = isAppLockConfigured();
+  appLockButton.classList.toggle("active", configured);
+  appLockButton.title = configured ? "Lock this app with PIN or passkey" : "Set App PIN lock";
+  appLockButton.setAttribute("aria-label", appLockButton.title);
+  appLockButton.textContent = configured ? "App Lock On" : "App Lock";
 }
 
 function isPrivateRoute() {
@@ -610,7 +955,21 @@ function renderStatus() {
   const pendingApprovals = (state.data?.approvals || []).filter((item) => item.status === "pending").length;
   const openTasks = (state.data?.tasks || []).filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const llmStatus = state.llmConfig?.enabled ? `LLM ${state.llmConfig.model}` : "LLM not set";
-  pendingSummary.textContent = `${pendingApprovals} approvals - ${openTasks} tasks - ${llmStatus}`;
+  pendingSummary.textContent = isProMode()
+    ? `${pendingApprovals} approvals - ${openTasks} tasks - ${llmStatus}`
+    : `${openTasks} open tasks - ${friendlyComputeSummary()}`;
+  const balance = creditBalance();
+  creditSummary.textContent = `${balance} credits`;
+}
+
+function creditBalance() {
+  if (state.authMode === "user") return state.data?.credits?.account?.balance ?? 0;
+  const operator = (state.data?.network?.ledgerAccounts || []).find((account) => account.id === "operator");
+  return operator?.balance ?? 0;
+}
+
+function friendlyComputeSummary() {
+  return state.data?.compute?.status || "Handled locally";
 }
 
 function maybeNotify() {
@@ -621,18 +980,18 @@ function maybeNotify() {
       .filter((item) => item.status === "pending")
       .map((item) => ({
         id: item.id,
-        title: "Latch needs attention",
+        title: "Compass needs attention",
         body: item.type === "human_verification" || item.type === "context_question"
-          ? "Human input is needed. Open Latch to review."
-          : "Approval requested. Open Latch to review.",
-        url: "/?tab=approvals"
+          ? "Human input is needed. Open Compass to review."
+          : "Approval requested. Open Compass to review.",
+        url: reviewApprovalUrl(item.id)
       })),
     ...(state.data?.messages || [])
       .filter((item) => item.direction === "agent_to_operator")
       .map((item) => ({
         id: item.id,
-        title: "Latch agent update",
-        body: "Open Latch to read the latest update.",
+        title: "Compass Companion update",
+        body: "Open Compass to read the latest update.",
         url: "/?tab=inbox"
       }))
   ];
@@ -679,25 +1038,164 @@ function saveSeenNotificationIds() {
 }
 
 function renderTabs() {
+  const allowed = visibleTabs();
   document.querySelectorAll(".tab").forEach((button) => {
+    if (!button.dataset.tab) return;
+    button.classList.toggle("hidden", !allowed.includes(button.dataset.tab));
     button.classList.toggle("active", button.dataset.tab === state.tab);
   });
+  renderMoreTabs(allowed);
+  renderTabBadges();
   document.querySelectorAll(".panel").forEach((panel) => panel.classList.add("hidden"));
-  document.querySelector(`#${state.tab}Panel`).classList.remove("hidden");
+  const panel = document.querySelector(`#${state.tab}Panel`);
+  if (panel) panel.classList.remove("hidden");
+}
+
+function renderMoreTabs(allowed) {
+  if (!moreTabsButton || !tabsMoreMenu) return;
+  const primaryTabs = allowed.slice(0, 3);
+  const moreTabs = allowed.slice(3);
+  const activeInMore = moreTabs.includes(state.tab);
+  moreTabsButton.classList.toggle("hidden", moreTabs.length === 0);
+  moreTabsButton.classList.toggle("active", activeInMore);
+  moreTabsButton.querySelector("span").textContent = activeInMore ? tabLabel(state.tab) : "More";
+  tabsMoreMenu.innerHTML = moreTabs.map((tabId) => `
+    <button class="more-tab ${tabId === state.tab ? "active" : ""}" type="button" data-more-tab="${escapeHtml(tabId)}" role="menuitem">
+      ${escapeHtml(tabLabel(tabId))}
+    </button>
+  `).join("");
+  tabsMoreMenu.querySelectorAll("[data-more-tab]").forEach((button) => {
+    button.addEventListener("click", () => openTab(button.dataset.moreTab));
+  });
+  document.querySelectorAll(".tab[data-tab]").forEach((button) => {
+    button.classList.toggle("mobile-secondary-tab", !primaryTabs.includes(button.dataset.tab));
+  });
+}
+
+function renderTabBadges() {
+  document.querySelectorAll(".tab[data-tab]").forEach((button) => {
+    updateTabBadge(button, button.dataset.tab);
+  });
+  document.querySelectorAll("[data-more-tab]").forEach((button) => {
+    updateTabBadge(button, button.dataset.moreTab);
+  });
+  if (moreTabsButton) {
+    const moreTabs = visibleTabs().slice(3);
+    const activeInMore = moreTabs.includes(state.tab);
+    updateButtonBadge(
+      moreTabsButton,
+      activeInMore ? tabBadgeValue(state.tab) : aggregateMoreTabBadge(moreTabs),
+      moreTabsButton.querySelector("span")?.textContent || "More",
+      activeInMore ? state.tab : ""
+    );
+  }
+}
+
+function updateTabBadge(button, tabId) {
+  updateButtonBadge(button, tabBadgeValue(tabId), tabLabel(tabId), tabId);
+}
+
+function updateButtonBadge(button, value, label, tabId = "") {
+  let badge = button.querySelector(".tab-badge");
+  if (!value) {
+    badge?.remove();
+    button.removeAttribute("aria-label");
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.className = "tab-badge";
+    button.append(badge);
+  }
+  badge.textContent = value;
+  badge.classList.toggle("credit-alert", value === "!");
+  badge.setAttribute("aria-hidden", "true");
+  button.setAttribute("aria-label", tabBadgeAriaLabel(label, value, tabId));
+}
+
+function tabBadgeValue(tabId) {
+  if (tabId === "inbox") return formatTabBadgeValue(unreadChannelCount());
+  if (tabId === "tasks") return formatTabBadgeValue(openTaskCount());
+  if (tabId === "approvals") return formatTabBadgeValue(pendingApprovalCount());
+  if (tabId === "credits") return creditBalance() <= 0 ? "!" : "";
+  return "";
+}
+
+function aggregateMoreTabBadge(tabIds) {
+  const badges = tabIds.map((tabId) => tabBadgeValue(tabId)).filter(Boolean);
+  if (badges.includes("!")) return "!";
+  const count = badges.reduce((total, value) => total + Number(value.replace("+", "") || 0), 0);
+  return formatTabBadgeValue(count);
+}
+
+function tabBadgeAriaLabel(label, value, tabId) {
+  if (value === "!" && tabId === "credits") return `${label}, no credits left`;
+  if (tabId === "inbox") return `${label}, ${value} unread channel${value === "1" ? "" : "s"}`;
+  if (tabId === "tasks") return `${label}, ${value} open task${value === "1" ? "" : "s"}`;
+  if (tabId === "approvals") return `${label}, ${value} pending request${value === "1" ? "" : "s"}`;
+  if (value === "!") return `${label}, attention needed`;
+  return `${label}, ${value} items need attention`;
+}
+
+function formatTabBadgeValue(count) {
+  if (!count) return "";
+  return count > 99 ? "99+" : String(count);
+}
+
+function unreadChannelCount() {
+  const messages = state.data?.messages || [];
+  return badgeChannels().filter((channel) => unreadCount(channel.id, messages) > 0).length;
+}
+
+function badgeChannels() {
+  const channels = Array.isArray(state.data?.channels) && state.data.channels.length
+    ? state.data.channels
+    : fallbackChannels;
+  if (!isProMode()) return channels.filter((channel) => channel.id === "compass").slice(0, 1);
+  return channels;
+}
+
+function openTaskCount() {
+  return (state.data?.tasks || []).filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
+}
+
+function pendingApprovalCount() {
+  return (state.data?.approvals || []).filter((item) => item.status === "pending").length;
+}
+
+function tabLabel(tabId) {
+  const labels = {
+    inbox: "Inbox",
+    tasks: "Tasks",
+    approvals: "Review",
+    context: "Context",
+    timeline: "Timeline",
+    settings: "Settings",
+    credits: "Credits"
+  };
+  return labels[tabId] || tabId;
 }
 
 function renderMessages() {
   const messages = state.data?.messages || [];
   const active = activeChannel();
-  const channelMessages = messages
-    .filter((message) => messageChannel(message) === active.id)
-    .slice()
-    .reverse();
-  markChannelSeen(active.id, channelMessages);
-  chatEyebrow.textContent = active.label;
-  chatTitle.textContent = active.description;
+  const channelMessages = (isProMode()
+    ? messages.filter((message) => messageChannel(message) === active.id)
+    : messages
+  ).slice().reverse();
+  const messageList = lists.messages;
+  const priorScrollTop = messageList.scrollTop;
+  const priorChannel = messageList.dataset.channel || "";
+  const channelChanged = priorChannel !== active.id;
+  const shouldStickToBottom = state.forceMessageScrollBottom
+    || channelChanged
+    || messageList.childElementCount === 0
+    || isNearScrollBottom(messageList);
+  if (state.tab === "inbox") markChannelSeen(active.id, channelMessages);
+  chatEyebrow.textContent = isProMode() ? active.label : "Compass";
+  chatTitle.textContent = isProMode() ? active.description : "Direct chat with Compass";
   chatCount.textContent = `${channelMessages.length} message${channelMessages.length === 1 ? "" : "s"}`;
-  messageText.placeholder = `Message ${active.label}`;
+  messageText.placeholder = isProMode() ? `Message ${active.label}` : "Message Compass";
 
   renderList(lists.messages, channelMessages, (message) => `
     <article class="chat-message ${message.direction === "operator_to_agent" ? "from-operator" : "from-agent"}">
@@ -705,10 +1203,12 @@ function renderMessages() {
         <div class="message-meta">
           <strong>${escapeHtml(message.direction === "operator_to_agent" ? "You" : agentDisplayName())}</strong>
           <span>${formatTime(message.createdAt)}</span>
+          ${message.routing ? `<span>${escapeHtml(message.routing.label || routingLabel(message.routingPreference))}</span>` : (isProMode() && message.routingPreference ? `<span>${escapeHtml(routingLabel(message.routingPreference))}</span>` : "")}
+          ${message.routing?.credits ? `<span>${escapeHtml(String(message.routing.credits))} credits</span>` : ""}
           ${message.taskId ? `<button class="link-button" data-open-task="${escapeHtml(message.taskId)}" type="button">Task</button>` : ""}
         </div>
-        <p>${escapeHtml(message.text)}</p>
-        <div class="message-actions">
+        <p>${messageTextMarkup(message)}</p>
+        <div class="message-actions ${isProMode() ? "" : "hidden"}">
           <select data-move-message="${escapeHtml(message.id)}" aria-label="Move message to channel">
             ${availableChannels().map((channel) => `<option value="${escapeHtml(channel.id)}" ${messageChannel(message) === channel.id ? "selected" : ""}>${escapeHtml(channel.label)}</option>`).join("")}
           </select>
@@ -717,14 +1217,53 @@ function renderMessages() {
       </div>
     </article>
   `);
+  messageList.dataset.channel = active.id;
   bindArchiveButtons(lists.messages);
   bindMessageTools(lists.messages);
+  state.forceMessageScrollBottom = false;
+  if (!shouldStickToBottom) {
+    messageList.scrollTop = priorScrollTop;
+  }
   requestAnimationFrame(() => {
-    lists.messages.scrollTop = lists.messages.scrollHeight;
+    if (shouldStickToBottom) {
+      messageList.scrollTop = messageList.scrollHeight;
+    } else {
+      messageList.scrollTop = priorScrollTop;
+    }
   });
+  renderTabBadges();
+}
+
+function isNearScrollBottom(target, threshold = 80) {
+  return target.scrollHeight - target.scrollTop - target.clientHeight <= threshold;
+}
+
+function resizeMessageText() {
+  resizeTextareaToContent(messageText, 220);
+}
+
+function resizeContextTextareas() {
+  contextAutoResizeTextareas.forEach((textarea) => resizeTextareaToContent(textarea));
+}
+
+function resizeTextareaToContent(textarea, maxHeight = Infinity) {
+  textarea.style.height = "auto";
+  const computed = getComputedStyle(textarea);
+  const minHeight = Number.parseFloat(computed.minHeight) || 42;
+  const cssMaxHeight = Number.parseFloat(computed.maxHeight);
+  const effectiveMaxHeight = Number.isFinite(cssMaxHeight) ? Math.min(maxHeight, cssMaxHeight) : maxHeight;
+  const borderHeight = textarea.offsetHeight - textarea.clientHeight;
+  const nextHeight = Math.min(effectiveMaxHeight, Math.max(minHeight, textarea.scrollHeight + borderHeight));
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = nextHeight >= effectiveMaxHeight ? "auto" : "hidden";
 }
 
 function renderChannels() {
+  if (!isProMode()) {
+    channelList.innerHTML = "";
+    return;
+  }
+  if (showArchivedChannels) showArchivedChannels.checked = state.showArchivedChannels;
   const messages = state.data?.messages || [];
   const channels = availableChannels();
   if (!channels.some((channel) => channel.id === state.activeChannel)) {
@@ -736,17 +1275,25 @@ function renderChannels() {
     const unread = unreadCount(channel.id, messages);
     const latest = messages.find((message) => messageChannel(message) === channel.id);
     return `
-      <div class="channel-row">
+      <div class="channel-row ${channel.archivedAt ? "archived" : ""}">
         <button class="channel-button ${channel.id === state.activeChannel ? "active" : ""}" type="button" data-channel="${escapeHtml(channel.id)}">
           <span class="channel-symbol" aria-hidden="true">#</span>
           <span class="channel-copy">
             <strong>${escapeHtml(channel.label)}</strong>
-            <small>${escapeHtml(latest ? latest.text.slice(0, 48) : channel.description)}</small>
+            <small>${escapeHtml(latest ? displayMessageText(latest).slice(0, 48) : channel.description)}</small>
           </span>
           <em class="${unread ? "unread" : ""}">${unread || count}</em>
         </button>
         ${channel.builtIn ? "" : `
-          <button class="channel-archive" type="button" data-archive-channel="${escapeHtml(channel.id)}" title="Archive channel" aria-label="Archive ${escapeHtml(channel.label)}">x</button>
+          <button class="channel-archive" type="button" data-archive-channel="${escapeHtml(channel.id)}" data-archive-channel-state="${channel.archivedAt ? "false" : "true"}" title="${channel.archivedAt ? "Restore channel" : "Archive channel"}" aria-label="${channel.archivedAt ? "Restore" : "Archive"} ${escapeHtml(channel.label)}">${channel.archivedAt ? "+" : "x"}</button>
+          ${channel.archivedAt ? `
+            <button class="channel-delete hold-delete" type="button" data-delete-channel="${escapeHtml(channel.id)}" title="Hold 2 seconds to delete channel" aria-label="Hold to delete ${escapeHtml(channel.label)}">
+              <span class="hold-delete-progress" aria-hidden="true"></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 7h2v8h-2v-8Zm4 0h2v8h-2v-8ZM7 8h10l-1 12H8L7 8Z"></path>
+              </svg>
+            </button>
+          ` : ""}
         `}
       </div>
     `;
@@ -763,7 +1310,7 @@ function renderChannels() {
     button.addEventListener("click", async () => {
       await api(`/api/channels/${encodeURIComponent(button.dataset.archiveChannel)}`, {
         method: "PATCH",
-        body: JSON.stringify({ archived: true })
+        body: JSON.stringify({ archived: button.dataset.archiveChannelState === "true" })
       });
       if (state.activeChannel === button.dataset.archiveChannel) {
         state.activeChannel = "compass";
@@ -772,14 +1319,21 @@ function renderChannels() {
       await refresh();
     });
   });
+  channelList.querySelectorAll("[data-delete-channel]").forEach((button) => {
+    bindHoldDeleteChannel(button);
+  });
 }
 
 function activeChannel() {
+  if (!isProMode()) {
+    return availableChannels().find((channel) => channel.id === "compass") || fallbackChannels[0];
+  }
   const channels = availableChannels();
   return channels.find((channel) => channel.id === state.activeChannel) || channels[0] || fallbackChannels[0];
 }
 
 function messageChannel(message) {
+  if (!isProMode()) return "compass";
   if (knownChannels().some((channel) => channel.id === message.channel)) return message.channel;
   if (message.direction === "agent_to_operator") {
     const lowered = String(message.text || "").toLowerCase();
@@ -789,11 +1343,56 @@ function messageChannel(message) {
   return "compass";
 }
 
+function displayMessageText(message) {
+  return cleanDisplayMessageText(message?.text || "");
+}
+
+function messageTextMarkup(message) {
+  return linkApprovalIds(displayMessageText(message));
+}
+
+function linkApprovalIds(value) {
+  const text = String(value || "");
+  const pattern = /\bapproval_[A-Za-z0-9_]+\b/g;
+  let cursor = 0;
+  let markup = "";
+  for (const match of text.matchAll(pattern)) {
+    const id = cleanRouteId(match[0]);
+    if (!id) continue;
+    markup += escapeHtml(text.slice(cursor, match.index));
+    markup += `<a class="approval-link" href="${escapeHtml(reviewApprovalUrl(id))}" data-open-approval="${escapeHtml(id)}">${escapeHtml(id)}</a>`;
+    cursor = (match.index || 0) + match[0].length;
+  }
+  markup += escapeHtml(text.slice(cursor));
+  return markup;
+}
+
+function reviewApprovalUrl(approvalId = "") {
+  const id = cleanRouteId(approvalId);
+  return `/?tab=review${id ? `&approval=${encodeURIComponent(id)}` : ""}`;
+}
+
+function cleanDisplayMessageText(value) {
+  let text = String(value || "").replace(/\r\n/g, "\n").trim();
+  let previous = "";
+  while (text && text !== previous) {
+    previous = text;
+    text = text
+      .replace(/^Reply to inbox instruction:\s*/i, "")
+      .replace(/^(?:COMPASS|COMPANION|OPERATIONS|RESEARCH|GENERAL|[A-Z0-9_-]+_CHANNEL)\s*:\s*/g, "")
+      .trim();
+  }
+  return text;
+}
+
 function availableChannels() {
-  const channels = Array.isArray(state.data?.channels) && state.data.channels.length
+  const active = Array.isArray(state.data?.channels) && state.data.channels.length
     ? state.data.channels
     : fallbackChannels;
-  return channels.filter((channel) => !channel.archivedAt);
+  const archived = Array.isArray(state.data?.archives?.channels) ? state.data.archives.channels : [];
+  const channels = state.showArchivedChannels ? [...active, ...archived] : active;
+  if (!isProMode()) return active.filter((channel) => channel.id === "compass");
+  return channels;
 }
 
 function knownChannels() {
@@ -804,7 +1403,7 @@ function knownChannels() {
 }
 
 function channelLabel(channelId) {
-  return knownChannels().find((channel) => channel.id === channelId)?.label || channelId || "Compass";
+  return knownChannels().find((channel) => channel.id === channelId)?.label || channelId || "Companion";
 }
 
 function channelSeenMap() {
@@ -834,7 +1433,7 @@ function markChannelSeen(channelId, messages) {
 }
 
 function unreadCount(channelId, messages) {
-  if (channelId === state.activeChannel) return 0;
+  if (state.tab === "inbox" && channelId === state.activeChannel) return 0;
   const seenAt = channelSeenMap()[channelId] || "";
   return messages.filter((message) =>
     message.direction === "agent_to_operator"
@@ -844,12 +1443,28 @@ function unreadCount(channelId, messages) {
 }
 
 function agentDisplayName() {
-  return state.data?.profile?.name || "Compass";
+  return state.data?.profile?.name || "Compass Companion";
+}
+
+function renderTaskComposerCopy() {
+  const name = agentDisplayName();
+  if (taskBriefEyebrow) taskBriefEyebrow.textContent = `Brief for ${name}`;
+  if (taskTitleLabel) taskTitleLabel.textContent = name;
+  if (taskTitle) taskTitle.placeholder = `What should ${name} accomplish?`;
 }
 
 function titleFromBrief(value) {
   const firstLine = String(value || "").split(/\r?\n/).find((line) => line.trim()) || "Untitled task";
   return firstLine.trim().slice(0, 120);
+}
+
+function routingLabel(value) {
+  const labels = {
+    auto: "Auto routing",
+    local: "Local only",
+    network: "Network allowed"
+  };
+  return labels[value] || "Auto routing";
 }
 
 function composeTaskDetails(goal, instructions) {
@@ -874,6 +1489,10 @@ function taskBodyMarkup(task) {
   return `<p class="item-body">${escapeHtml(task.details || task.note || "")}</p>`;
 }
 
+function taskChannelLabel(channelId) {
+  return channelId === "compass" ? agentDisplayName() : channelLabel(channelId);
+}
+
 function renderTasks() {
   taskFilterButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.taskFilter === state.taskFilter);
@@ -886,7 +1505,9 @@ function renderTasks() {
   const messages = state.data?.messages || [];
   renderList(lists.tasks, tasks, (task) => {
     const linkedMessage = messages.find((message) => message.taskId === task.id);
-    const linkedChannel = linkedMessage ? messageChannel(linkedMessage) : "";
+    const taskChannelExists = task.channel && knownChannels().some((channel) => channel.id === task.channel);
+    const linkedChannel = taskChannelExists ? task.channel : (linkedMessage ? messageChannel(linkedMessage) : "");
+    const canReopen = ["done", "failed", "paused"].includes(task.status) && !task.channelDeletedAt;
     return `
     <article class="item" data-task-card="${escapeHtml(task.id)}">
       <div class="item-header">
@@ -894,14 +1515,20 @@ function renderTasks() {
         <span class="badge ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
       </div>
       ${taskBodyMarkup(task)}
-      ${linkedMessage ? `
+      ${linkedChannel ? `
         <div class="linked-message">
-          <span class="type-pill shared">${escapeHtml(channelLabel(linkedChannel))}</span>
-          <p>${escapeHtml(linkedMessage.text.slice(0, 180))}</p>
+          <span class="type-pill shared">${escapeHtml(taskChannelLabel(linkedChannel))}</span>
+          ${linkedMessage ? `<p>${escapeHtml(linkedMessage.text.slice(0, 180))}</p>` : `<p>${escapeHtml(channelLabel(linkedChannel))}</p>`}
           <button class="secondary-button" data-open-message-channel="${escapeHtml(linkedChannel)}" type="button">Open Chat</button>
         </div>
       ` : ""}
-      <p class="item-meta">${escapeHtml(task.priority)} - ${formatTime(task.updatedAt || task.createdAt)}</p>
+      <p class="item-meta">${escapeHtml(task.priority)} - ${escapeHtml(routingLabel(task.routingPreference || "auto"))} - ${formatTime(task.updatedAt || task.createdAt)}</p>
+      ${canReopen ? `
+        <form class="reopen-task-form" data-reopen-task="${escapeHtml(task.id)}">
+          <textarea rows="2" maxlength="4000" placeholder="What should Compass add or fix before trying again?">${escapeHtml(state.reopenDrafts[task.id] || "")}</textarea>
+          <button class="secondary-button" type="submit">Reopen</button>
+        </form>
+      ` : ""}
       <div class="approval-actions">
         <button class="secondary-button" data-archive-kind="tasks" data-archive-id="${escapeHtml(task.id)}" type="button">Archive</button>
       </div>
@@ -910,19 +1537,28 @@ function renderTasks() {
   });
   bindArchiveButtons(lists.tasks);
   bindTaskLinks(lists.tasks);
+  bindReopenTaskForms(lists.tasks);
 }
 
 function renderApprovals() {
+  const allApprovals = state.data?.approvals || [];
+  const highlightedApproval = allApprovals.find((approval) => approval.id === state.highlightedApprovalId);
+  if (highlightedApproval && highlightedApproval.status !== "pending" && state.approvalsFilter === "pending") {
+    state.approvalsFilter = "all";
+    localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
+  }
   approvalFilterButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.approvalFilter === state.approvalsFilter);
   });
-
-  const allApprovals = state.data?.approvals || [];
   const approvals = state.approvalsFilter === "pending"
     ? allApprovals.filter((approval) => approval.status === "pending")
     : allApprovals;
+  if (!isProMode()) {
+    renderSimpleApprovals(approvals);
+    return;
+  }
   renderList(lists.approvals, approvals, (approval) => `
-    <article class="item ${["human_verification", "context_question", "external_contact", "web_research"].includes(approval.type) ? "human-request" : ""}">
+    <article class="item ${approvalHighlightClass(approval.id)} ${["human_verification", "context_question", "external_contact", "web_research", "github_repo", "github_file"].includes(approval.type) ? "human-request" : ""}" data-approval-card="${escapeHtml(approval.id)}">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(approval.title)}</h2>
         <span class="badge ${escapeHtml(approval.status)}">${escapeHtml(approval.status)}</span>
@@ -932,7 +1568,10 @@ function renderApprovals() {
         ${approval.sensitive ? `<span class="type-pill sensitive">Sensitive</span>` : ""}
         ${approval.riskLevel ? `<span class="type-pill risk-${escapeHtml(approval.riskLevel)}">${escapeHtml(approval.riskLevel)} risk</span>` : ""}
         ${approval.executionMode === "read_only_status" ? `<span class="type-pill shared">Read-only</span>` : ""}
-        <span class="item-meta">Requested by ${escapeHtml(approval.requestedBy || "agent")}</span>
+        ${["shell", "browser"].includes(approval.executionMode) ? `<span class="type-pill shared">${escapeHtml(approval.executionMode)}</span>` : ""}
+        ${approval.decisionMode === "auto" ? `<span class="type-pill auto-review">Auto-reviewed</span>` : ""}
+        ${approval.proEligible ? `<span class="type-pill auto-review">Pro eligible</span>` : ""}
+        <span class="item-meta">Requested by ${escapeHtml(approvalRequesterLabel(approval.requestedBy))}</span>
       </div>
       ${approval.actionPreview || approval.actionTemplate ? `
         <div class="approval-summary">
@@ -942,9 +1581,12 @@ function renderApprovals() {
       ` : ""}
       ${approval.type === "external_contact" ? contactApprovalSummary(approval) : ""}
       ${approval.type === "web_research" ? researchApprovalSummary(approval) : ""}
+      ${approval.type === "github_repo" ? githubRepoApprovalSummary(approval) : ""}
+      ${approval.type === "github_file" ? githubFileApprovalSummary(approval) : ""}
       <p class="item-body">${escapeHtml(approval.details)}</p>
       ${approvalAdvice(approval) ? `<p class="approval-advice">${escapeHtml(approvalAdvice(approval))}</p>` : ""}
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
+      ${executionPlanMarkup(approval)}
       ${approval.renderedCommands?.length ? `
         <details class="command-details">
           <summary>Show exact command${approval.renderedCommands.length === 1 ? "" : "s"}</summary>
@@ -956,11 +1598,12 @@ function renderApprovals() {
           <pre class="item-body">${escapeHtml(approval.command)}</pre>
         </details>
       ` : ""}
-      ${approval.responseNote ? `<p class="help-note"><strong>Operator note:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
+      ${approval.responseNote ? `<p class="help-note"><strong>${approval.decisionMode === "auto" ? "Policy note" : "Operator note"}:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
+      ${approval.decisionReason ? `<p class="item-meta">${escapeHtml(approval.decisionReason)}</p>` : ""}
       ${approval.status === "pending" ? `
         <div class="approval-actions">
-          <button class="secondary-button" data-approval="${approval.id}" data-status="approved">${approvalActionLabel(approval, "approved")}</button>
-          <button class="danger-button" data-approval="${approval.id}" data-status="denied">${approvalActionLabel(approval, "denied")}</button>
+          <button class="secondary-button" data-approval="${escapeHtml(approval.id)}" data-status="approved">${approvalActionLabel(approval, "approved")}</button>
+          <button class="danger-button" data-approval="${escapeHtml(approval.id)}" data-status="denied">${approvalActionLabel(approval, "denied")}</button>
           <button class="secondary-button" data-archive-kind="approvals" data-archive-id="${escapeHtml(approval.id)}" type="button">Archive</button>
         </div>
       ` : `
@@ -980,6 +1623,71 @@ function renderApprovals() {
     button.addEventListener("click", () => copyContactDraft(button.dataset.copyContact));
   });
   bindArchiveButtons(lists.approvals);
+  focusHighlightedApproval();
+}
+
+function renderSimpleApprovals(approvals) {
+  renderList(lists.approvals, approvals, (approval) => `
+    <article class="item human-request ${approvalHighlightClass(approval.id)}" data-approval-card="${escapeHtml(approval.id)}">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(approval.title)}</h2>
+        <span class="badge ${escapeHtml(approval.status)}">${escapeHtml(simpleApprovalStatus(approval.status))}</span>
+      </div>
+      <div class="meta-row">
+        <span class="type-pill ${escapeHtml(approval.type || "other")}">${escapeHtml(simpleApprovalType(approval.type))}</span>
+        <span class="item-meta">${formatTime(approval.updatedAt || approval.createdAt)}</span>
+      </div>
+      ${simpleApprovalSummary(approval)}
+      <p class="item-body">${escapeHtml(approval.details || "")}</p>
+      ${approval.responseNote ? `<p class="help-note"><strong>Your note:</strong> ${escapeHtml(approval.responseNote)}</p>` : ""}
+      ${approval.status === "pending" ? `
+        <div class="approval-actions">
+          <button class="secondary-button" data-approval="${escapeHtml(approval.id)}" data-status="approved">${escapeHtml(simpleApprovalActionLabel(approval, "approved"))}</button>
+          <button class="danger-button" data-approval="${escapeHtml(approval.id)}" data-status="denied">${escapeHtml(simpleApprovalActionLabel(approval, "denied"))}</button>
+        </div>
+      ` : ""}
+    </article>
+  `);
+  lists.approvals.querySelectorAll("[data-approval]").forEach((button) => {
+    button.addEventListener("click", () => openApprovalDialog(button.dataset.approval, button.dataset.status));
+  });
+  focusHighlightedApproval();
+}
+
+function approvalHighlightClass(approvalId) {
+  return approvalId && approvalId === state.highlightedApprovalId ? "route-highlight" : "";
+}
+
+function approvalRequesterLabel(value) {
+  const labels = {
+    compass: "Companion",
+    agent: "Worker",
+    operator: "Operator",
+    user: "You"
+  };
+  return labels[value] || value || "Worker";
+}
+
+function focusHighlightedApproval() {
+  if (state.tab !== "approvals" || !state.highlightedApprovalId || !state.pendingApprovalScroll) return;
+  state.pendingApprovalScroll = false;
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`[data-approval-card="${CSS.escape(state.highlightedApprovalId)}"]`);
+    card?.scrollIntoView({ block: "center" });
+  });
+}
+
+function focusDialogInput(input) {
+  if (!input || isTouchViewport()) return;
+  try {
+    input.focus({ preventScroll: true });
+  } catch {
+    input.focus();
+  }
+}
+
+function isTouchViewport() {
+  return window.matchMedia?.("(pointer: coarse)")?.matches || window.innerWidth < 760;
 }
 
 function renderContext() {
@@ -993,8 +1701,11 @@ function renderContext() {
       <div class="meta-row">
         <span class="type-pill">${formatContextCategory(item.category)}</span>
         ${(item.tags || []).map((tag) => `<span class="type-pill neutral">${escapeHtml(tag)}</span>`).join("")}
-        ${item.shareWithAgent ? `<span class="type-pill shared">Shared</span>` : `<span class="type-pill neutral">Private</span>`}
-        <span class="item-meta">${escapeHtml(item.source || "operator")}</span>
+        ${item.shareWithAgent ? `<span class="type-pill shared">${isProMode() ? "Shared" : "Compass"}</span>` : `<span class="type-pill neutral">Private</span>`}
+        ${item.rememberedAt ? `<span class="type-pill shared">Remembered</span>` : ""}
+        ${item.forgottenAt ? `<span class="type-pill neutral">Forgotten</span>` : ""}
+        ${isProMode() && item.shareWithNetwork ? `<span class="type-pill network">Network</span>` : ""}
+        ${isProMode() ? `<span class="item-meta">${escapeHtml(item.source || "operator")}</span>` : ""}
         <span class="item-meta">${formatTime(item.createdAt)}</span>
         ${item.kind === "file" ? `<span class="item-meta">${escapeHtml(formatBytes(item.size || 0))}</span>` : ""}
       </div>
@@ -1003,13 +1714,17 @@ function renderContext() {
         ${item.shareStatus ? `<p class="help-note">${escapeHtml(item.shareStatus)}</p>` : ""}
         <div class="approval-actions">
           <button class="secondary-button" data-context-download="${escapeHtml(item.id)}" type="button">Download</button>
-          <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Share"}</button>
+          <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Use in Compass"}</button>
+          ${!isProMode() && !item.forgottenAt ? `<button class="secondary-button" data-context-forget="${escapeHtml(item.id)}" type="button">Forget</button>` : ""}
+          ${isProMode() ? `<button class="secondary-button" data-context-network="${escapeHtml(item.id)}" data-context-network-value="${item.shareWithNetwork ? "false" : "true"}" type="button">${item.shareWithNetwork ? "Remove Network" : "Network Share"}</button>` : ""}
           <button class="secondary-button" data-archive-kind="context" data-archive-id="${escapeHtml(item.id)}" type="button">Archive</button>
         </div>
       ` : `
         <p class="item-body">${escapeHtml(item.text || item.preview || "")}</p>
         <div class="approval-actions">
-          <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Share"}</button>
+          <button class="secondary-button" data-context-share="${escapeHtml(item.id)}" data-context-share-value="${item.shareWithAgent ? "false" : "true"}" type="button">${item.shareWithAgent ? "Keep Private" : "Use in Compass"}</button>
+          ${!isProMode() && !item.forgottenAt ? `<button class="secondary-button" data-context-forget="${escapeHtml(item.id)}" type="button">Forget</button>` : ""}
+          ${isProMode() ? `<button class="secondary-button" data-context-network="${escapeHtml(item.id)}" data-context-network-value="${item.shareWithNetwork ? "false" : "true"}" type="button">${item.shareWithNetwork ? "Remove Network" : "Network Share"}</button>` : ""}
           <button class="secondary-button" data-archive-kind="context" data-archive-id="${escapeHtml(item.id)}" type="button">Archive</button>
         </div>
       `}
@@ -1022,19 +1737,47 @@ function renderContext() {
   lists.context.querySelectorAll("[data-context-share]").forEach((button) => {
     button.addEventListener("click", () => updateContextShare(button.dataset.contextShare, button.dataset.contextShareValue === "true"));
   });
+  lists.context.querySelectorAll("[data-context-network]").forEach((button) => {
+    button.addEventListener("click", () => updateContextNetworkShare(button.dataset.contextNetwork, button.dataset.contextNetworkValue === "true"));
+  });
+  lists.context.querySelectorAll("[data-context-forget]").forEach((button) => {
+    button.addEventListener("click", () => forgetContextMemory(button.dataset.contextForget));
+  });
   bindArchiveButtons(lists.context);
 }
 
 async function updateContextShare(id, shareWithAgent) {
-  await api(`/api/context/${encodeURIComponent(id)}`, {
+  await api(contextApiPath(`/${encodeURIComponent(id)}`), {
     method: "PATCH",
     body: JSON.stringify({ shareWithAgent })
   });
   await refresh();
 }
 
+async function updateContextNetworkShare(id, shareWithNetwork) {
+  if (!isProMode()) return;
+  await api(`/api/context/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ shareWithNetwork })
+  });
+  await refresh();
+}
+
+async function forgetContextMemory(id) {
+  await api(contextApiPath(`/${encodeURIComponent(id)}`), {
+    method: "PATCH",
+    body: JSON.stringify({ forgotten: true })
+  });
+  await refresh();
+}
+
+function contextApiPath(suffix = "") {
+  const base = state.authMode === "user" ? "/api/me/context" : "/api/context";
+  return `${base}${suffix}`;
+}
+
 async function downloadContextFile(id) {
-  const response = await fetch(`/api/context/files/${encodeURIComponent(id)}`, {
+  const response = await fetch(contextApiPath(`/files/${encodeURIComponent(id)}`), {
     headers: { authorization: `Bearer ${state.token}` }
   });
   if (!response.ok) throw new Error(`Download failed: ${response.status}`);
@@ -1061,18 +1804,20 @@ function openApprovalDialog(approvalId, status) {
 
   state.approvalDecision = { approval, status };
   const isApproved = status === "approved";
-  approvalDialogEyebrow.textContent = formatApprovalType(approval.type);
-  approvalDialogTitle.textContent = isApproved
-    ? (approval.type === "context_question" ? "Save Answer" : (approval.type === "human_verification" ? "Mark Done" : "Approve Request"))
-    : (approval.type === "context_question" ? "Skip Question" : (approval.type === "human_verification" ? "Cannot Help" : "Deny Request"));
+  approvalDialogEyebrow.textContent = isProMode() ? formatApprovalType(approval.type) : simpleApprovalType(approval.type);
+  approvalDialogTitle.textContent = isProMode()
+    ? (isApproved
+      ? (approval.type === "context_question" ? "Save Answer" : (approval.type === "human_verification" ? "Mark Done" : "Approve Request"))
+      : (approval.type === "context_question" ? "Skip Question" : (approval.type === "human_verification" ? "Cannot Help" : "Deny Request")))
+    : (isApproved ? simpleApprovalActionLabel(approval, "approved") : simpleApprovalActionLabel(approval, "denied"));
   approvalDialogSummary.textContent = approval.title;
   approvalDecisionNote.value = "";
   approvalDecisionNote.placeholder = approvalPlaceholder(approval, status);
-  approvalDecisionSubmit.textContent = isApproved ? "Save Approval" : "Save Denial";
+  approvalDecisionSubmit.textContent = isApproved ? "Save" : "Save";
   approvalDecisionSubmit.classList.toggle("danger-button", !isApproved);
   approvalDecisionSubmit.classList.toggle("action-button", isApproved);
   approvalDialog.classList.remove("hidden");
-  approvalDecisionNote.focus();
+  focusDialogInput(approvalDecisionNote);
 }
 
 function closeApprovalDialog() {
@@ -1088,7 +1833,7 @@ async function submitApprovalDecision(event) {
   const { approval, status } = state.approvalDecision;
   approvalDecisionSubmit.disabled = true;
   try {
-    await api(`/api/approvals/${approval.id}`, {
+    await api(approvalApiPath(`/${approval.id}`), {
       method: "PATCH",
       body: JSON.stringify({
         status,
@@ -1104,10 +1849,19 @@ async function submitApprovalDecision(event) {
 
 function approvalPlaceholder(approval, status) {
   if (status === "denied") return "Reason or safer alternative";
+  if (!isProMode()) {
+    if (approval.type === "purchase") return "Budget, exact item, or what you checked before continuing";
+    if (approval.type === "credential") return "What you did manually. Do not paste passwords or payment details.";
+    if (approval.type === "external_contact") return "Edits, confirmation, or why this should wait";
+    if (approval.type === "context_question") return "Your answer for Compass to remember";
+    return "Optional note";
+  }
   if (approval.type === "context_question") return "Your answer will be saved into Context and shared with the worker";
   if (approval.type === "human_verification") return "Verification completed, or short result";
   if (approval.type === "external_contact") return "Manual send result, edits, or reason to hold";
   if (approval.type === "web_research") return "Approved scope, source limits, or safer research route";
+  if (approval.type === "github_repo") return "Approved repository details, or why this should wait";
+  if (approval.type === "github_file") return "Approved file update details, or why this should wait";
   if (approval.type === "credential") return "Minimum non-secret result, never a password";
   if (approval.type === "command") return "Reviewed scope or manual result";
   if (approval.type === "purchase") return "Budget/vendor check or manual purchase result";
@@ -1127,6 +1881,12 @@ function approvalAdvice(approval) {
   if (approval.type === "web_research") {
     return "Read-only research can fetch exact approved public URLs only. It will not search, crawl, log in, download files, or touch private network addresses.";
   }
+  if (approval.type === "github_repo") {
+    return "GitHub repo creation uses the trusted host connector after approval. The worker never receives the GitHub token.";
+  }
+  if (approval.type === "github_file") {
+    return "CompassProjects file updates can auto-commit in Full access for operators and Pro users. The worker never receives the GitHub token.";
+  }
   if (approval.sensitive) {
     return "Sensitive request. Do not paste passwords, recovery codes, payment details, or long-lived tokens back to the agent.";
   }
@@ -1140,14 +1900,23 @@ function approvalActionOutcome(approval) {
   if (approval.executionMode === "read_only_status") {
     return "If approved, the worker runs this fixed read-only diagnostic and records a trimmed audit result.";
   }
+  if (["shell", "browser"].includes(approval.executionMode)) {
+    return "If approved by policy or the operator, the VM executor runs this exact plan and records an audit result.";
+  }
   if (approval.type === "command") {
-    return "Approval records your decision; the current bridge will not execute arbitrary commands.";
+    return "Approval records your decision. Shell/browser work needs an exact executor plan before it can run.";
   }
   if (approval.type === "external_contact") {
     return "Approval records the reviewed draft. The operator still sends manually unless a future connector is enabled.";
   }
   if (approval.type === "web_research") {
     return "If approved, the worker fetches exact approved public URLs, extracts compact source notes, and reports a summary.";
+  }
+  if (approval.type === "github_repo") {
+    return "If approved, Latch creates the repository with the configured GitHub connector and records the resulting URL.";
+  }
+  if (approval.type === "github_file") {
+    return "If approved by the operator or Full access policy, Latch commits this file update through the trusted host connector and records the resulting URL.";
   }
   if (approval.sensitive) {
     return "Approval records a human step; sensitive notes stay inside Latch.";
@@ -1177,6 +1946,8 @@ function formatApprovalType(value) {
     credential: "Credential",
     external_contact: "External contact",
     web_research: "Web research",
+    github_repo: "GitHub repo",
+    github_file: "GitHub file",
     other: "Other"
   };
   return labels[value] || "Other";
@@ -1187,7 +1958,70 @@ function approvalActionLabel(approval, status) {
   if (approval.type === "human_verification") return status === "approved" ? "Mark done" : "Cannot help";
   if (approval.type === "external_contact") return status === "approved" ? "Mark reviewed" : "Hold";
   if (approval.type === "web_research") return status === "approved" ? "Approve scope" : "Deny scope";
+  if (approval.type === "github_repo") return status === "approved" ? "Create repo" : "Hold";
+  if (approval.type === "github_file") return status === "approved" ? "Commit file" : "Hold";
   return status === "approved" ? "Approve" : "Deny";
+}
+
+function approvalApiPath(suffix = "") {
+  const base = state.authMode === "user" ? "/api/me/approvals" : "/api/approvals";
+  return `${base}${suffix}`;
+}
+
+function simpleApprovalStatus(value) {
+  const labels = {
+    pending: "needs review",
+    approved: "approved",
+    denied: "held"
+  };
+  return labels[value] || value || "review";
+}
+
+function simpleApprovalType(value) {
+  const labels = {
+    command: "Action",
+    human_verification: "Confirmation",
+    context_question: "Question",
+    account_setup: "Account",
+    purchase: "Shopping",
+    credential: "Private info",
+    external_contact: "Message",
+    web_research: "Research",
+    github_repo: "GitHub repo",
+    github_file: "GitHub file",
+    other: "Review"
+  };
+  return labels[value] || "Review";
+}
+
+function simpleApprovalActionLabel(approval, status) {
+  const approved = status === "approved";
+  if (approval.type === "purchase") return approved ? "I checked this" : "Do not continue";
+  if (approval.type === "credential") return approved ? "Handled manually" : "Do not share";
+  if (approval.type === "external_contact") return approved ? "Looks good" : "Hold this";
+  if (approval.type === "context_question") return approved ? "Save answer" : "Skip";
+  if (approval.type === "human_verification") return approved ? "Done" : "Cannot help";
+  if (approval.type === "web_research") return approved ? "Use these sources" : "Do not research";
+  if (approval.type === "github_repo") return approved ? "Looks good" : "Hold this";
+  if (approval.type === "github_file") return approved ? "Looks good" : "Hold this";
+  return approved ? "Approve" : "Deny";
+}
+
+function simpleApprovalSummary(approval) {
+  if (approval.type === "purchase") {
+    return `<div class="approval-summary"><strong>Shopping check</strong><p>Confirm the exact item, price, vendor, and budget before Compass continues.</p></div>`;
+  }
+  if (approval.type === "credential") {
+    return `<div class="approval-summary"><strong>Private information</strong><p>Handle secrets, payment details, and login steps yourself. Do not paste them into Compass.</p></div>`;
+  }
+  if (approval.type === "external_contact") return contactApprovalSummary(approval);
+  if (approval.type === "web_research") return researchApprovalSummary(approval);
+  if (approval.type === "github_repo") return githubRepoApprovalSummary(approval);
+  if (approval.type === "github_file") return githubFileApprovalSummary(approval);
+  if (approval.type === "context_question") {
+    return `<div class="approval-summary"><strong>Memory update</strong><p>Your answer can be saved to Context for future conversations.</p></div>`;
+  }
+  return "";
 }
 
 function contactApprovalSummary(approval) {
@@ -1233,17 +2067,225 @@ function researchApprovalSummary(approval) {
   `;
 }
 
+function githubRepoApprovalSummary(approval) {
+  const repoUrl = approval.githubRepoUrl || "";
+  return `
+    <div class="approval-summary github-summary">
+      <strong>GitHub repository</strong>
+      <dl class="detail-grid">
+        <dt>Name</dt><dd>${escapeHtml(approval.githubRepoName || "Not specified")}</dd>
+        <dt>Visibility</dt><dd>${escapeHtml(approval.githubVisibility || "private")}</dd>
+        <dt>Owner</dt><dd>${escapeHtml(approval.githubOwner || "Configured account")}</dd>
+        <dt>Initialize</dt><dd>${approval.githubAutoInit === false ? "No README" : "README enabled"}</dd>
+        <dt>Description</dt><dd>${escapeHtml(approval.githubDescription || "Not specified")}</dd>
+        ${repoUrl ? `<dt>Created</dt><dd><a href="${escapeHtml(repoUrl)}" rel="noreferrer">${escapeHtml(approval.githubFullName || repoUrl)}</a></dd>` : ""}
+      </dl>
+    </div>
+  `;
+}
+
+function githubFileApprovalSummary(approval) {
+  const fileUrl = approval.githubFileUrl || "";
+  return `
+    <div class="approval-summary github-summary">
+      <strong>GitHub file update</strong>
+      <dl class="detail-grid">
+        <dt>Repository</dt><dd>${escapeHtml(approval.githubRepoName || "Configured repository")}</dd>
+        <dt>Owner</dt><dd>${escapeHtml(approval.githubOwner || "Configured account")}</dd>
+        <dt>Path</dt><dd>${escapeHtml(approval.githubFilePath || "README.md")}</dd>
+        <dt>Commit</dt><dd>${escapeHtml(approval.githubCommitMessage || "Update file")}</dd>
+        ${fileUrl ? `<dt>Updated</dt><dd><a href="${escapeHtml(fileUrl)}" rel="noreferrer">${escapeHtml(fileUrl)}</a></dd>` : ""}
+      </dl>
+      ${approval.githubFileContent ? `
+        <details class="command-details">
+          <summary>Show proposed content</summary>
+          <pre class="item-body">${escapeHtml(approval.githubFileContent)}</pre>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+function executionPlanMarkup(approval) {
+  const plan = approval.executionPlan || {};
+  if (!["shell", "browser"].includes(approval.executionMode) || !plan.mode) return "";
+  const lines = [
+    `Mode: ${plan.mode}`,
+    `Timeout: ${plan.timeoutSeconds || 300}s`,
+    `Expected: ${plan.expectedResult || "Not specified"}`
+  ];
+  if (plan.actions?.length) {
+    lines.push("Actions:");
+    plan.actions.forEach((action, index) => {
+      lines.push(`${index + 1}. ${action.type}${action.url ? ` ${action.url}` : ""}${action.selector ? ` ${action.selector}` : ""}${action.path ? ` -> ${action.path}` : ""}`);
+    });
+  }
+  return `
+    <details class="command-details">
+      <summary>Show execution plan</summary>
+      <pre class="item-body">${escapeHtml(lines.join("\n"))}</pre>
+    </details>
+  `;
+}
+
 function renderEvents() {
   const events = state.data?.events || [];
-  renderList(lists.events, events, (item) => `
-    <article class="item">
-      <div class="item-header">
-        <h2 class="item-title">${escapeHtml(item.type)}</h2>
-        <span class="item-meta">${formatTime(item.createdAt)}</span>
+  if (!events.length) {
+    renderList(lists.events, events, () => "");
+    return;
+  }
+
+  const groups = groupedEventsByDay(events);
+  lists.events.innerHTML = groups.map((group, index) => {
+    const key = `timeline:day:${group.key}`;
+    return `
+    <details class="timeline-group" data-disclosure-key="${escapeHtml(key)}" ${disclosureOpen(key, index === 0) ? "open" : ""}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(group.label)}</strong>
+          <small>${escapeHtml(group.bundleCount === group.eventCount ? `${group.eventCount} events` : `${group.eventCount} events in ${group.bundleCount} groups`)}</small>
+        </span>
+        <span class="badge">${group.eventCount}</span>
+      </summary>
+      <div class="timeline-group-items">
+        ${group.bundles.map(timelineBundleMarkup).join("")}
       </div>
-      <p class="item-body">${escapeHtml(item.summary || "")}</p>
-    </article>
-  `);
+    </details>
+  `;
+  }).join("");
+  bindDisclosureState(lists.events);
+}
+
+function timelineBundleMarkup(bundle) {
+  if (bundle.items.length === 1) {
+    const item = bundle.items[0];
+    return `
+      <article class="item timeline-event">
+        <div class="item-header">
+          <h2 class="item-title">${escapeHtml(item.type)}</h2>
+          <span class="item-meta">${formatTime(item.createdAt)}</span>
+        </div>
+        <p class="item-body">${escapeHtml(item.summary || "")}</p>
+      </article>
+    `;
+  }
+
+  const key = `timeline:bundle:${bundle.key}`;
+  return `
+    <details class="item timeline-event timeline-bundle" data-disclosure-key="${escapeHtml(key)}" ${disclosureOpen(key, false) ? "open" : ""}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(bundle.type)}</strong>
+          <small>${escapeHtml(bundle.timeRange)}</small>
+        </span>
+        <span class="badge">${bundle.items.length}</span>
+      </summary>
+      <p class="item-body">${escapeHtml(bundle.summary || "")}</p>
+      <div class="timeline-bundle-items">
+        ${bundle.items.map((item) => `
+          <div class="timeline-bundle-row">
+            <span class="item-meta">${formatTime(item.createdAt)}</span>
+            <span>${escapeHtml(item.summary || "")}</span>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function groupedEventsByDay(events) {
+  const groups = new Map();
+  for (const item of events) {
+    const key = eventDayKey(item.createdAt);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        date: eventDayDate(item.createdAt),
+        items: []
+      });
+    }
+    groups.get(key).items.push(item);
+  }
+  return Array.from(groups.values())
+    .sort((left, right) => right.date - left.date)
+    .map((group) => ({
+      ...group,
+      label: eventDayLabel(group.date),
+      eventCount: group.items.length,
+      bundles: collapsedEventBundles(group.items),
+      get bundleCount() {
+        return this.bundles.length;
+      }
+    }));
+}
+
+function collapsedEventBundles(events) {
+  const bundles = new Map();
+  for (const item of events) {
+    const key = `${item.type || "event"}\u0000${item.summary || ""}`;
+    if (!bundles.has(key)) {
+      bundles.set(key, {
+        key,
+        type: item.type || "event",
+        summary: item.summary || "",
+        items: []
+      });
+    }
+    bundles.get(key).items.push(item);
+  }
+  return Array.from(bundles.values())
+    .map((bundle) => {
+      const sorted = bundle.items
+        .slice()
+        .sort((left, right) => Date.parse(right.createdAt || 0) - Date.parse(left.createdAt || 0));
+      return {
+        ...bundle,
+        items: sorted,
+        latestAt: sorted[0]?.createdAt || "",
+        earliestAt: sorted[sorted.length - 1]?.createdAt || "",
+        timeRange: eventBundleTimeRange(sorted)
+      };
+    })
+    .sort((left, right) => Date.parse(right.latestAt || 0) - Date.parse(left.latestAt || 0));
+}
+
+function eventBundleTimeRange(items) {
+  if (!items.length) return "";
+  const latest = items[0]?.createdAt || "";
+  const earliest = items[items.length - 1]?.createdAt || latest;
+  if (items.length === 1 || latest === earliest) return formatClockTime(latest);
+  return `${formatClockTime(earliest)}-${formatClockTime(latest)}`;
+}
+
+function eventDayDate(value) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return new Date(0);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function eventDayKey(value) {
+  return eventDayDate(value).toISOString();
+}
+
+function eventDayLabel(date) {
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  if (sameDay) return "Today";
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(date);
+}
+
+function agencyCapabilitySummary(worker) {
+  const caps = worker?.capabilities || {};
+  const enabled = [
+    caps.bridge ? "bridge" : "",
+    caps.diagnostics ? "diagnostics" : "",
+    caps.executor ? "executor" : "",
+    caps.browser ? "browser" : "",
+    caps.shell ? "shell" : "",
+    caps.downloads ? "downloads" : ""
+  ].filter(Boolean);
+  return enabled.length ? enabled.join(", ") : "No capabilities reported yet";
 }
 
 function renderDiagnostics() {
@@ -1255,6 +2297,8 @@ function renderDiagnostics() {
   const latestAgentMessage = messages.find((message) => message.direction === "agent_to_operator");
   const latestExecution = executions[0];
   const latestResearch = researchRuns[0];
+  const agencyWorkers = state.data?.agencyWorkers || state.about?.agencyWorkers || [];
+  const agencyWorker = agencyWorkers[0];
   const openTasks = tasks.filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const pendingApprovals = approvals.filter((item) => item.status === "pending").length;
   const llmReady = Boolean(state.llmConfig?.enabled);
@@ -1278,7 +2322,15 @@ function renderDiagnostics() {
       status: pendingApprovals ? "warn" : "ok"
     },
     {
-      label: "Worker",
+      label: "Agency Worker",
+      value: agencyWorker ? `${agencyWorker.name} / ${agencyWorker.status}` : "Not paired",
+      status: agencyWorker?.health === "ok" ? "ok" : agencyWorker ? "warn" : "warn",
+      note: agencyWorker
+        ? agencyCapabilitySummary(agencyWorker)
+        : "Install and pair Compass Worker before browser, shell, files, downloads, or automation can run."
+    },
+    {
+      label: "Last Worker Update",
       value: latestAgentMessage ? formatTime(latestAgentMessage.createdAt) : "No update",
       status: latestAgentMessage ? "ok" : "warn",
       note: latestAgentMessage ? latestAgentMessage.text.slice(0, 140) : ""
@@ -1324,16 +2376,537 @@ function renderDiagnostics() {
   `).join("");
 }
 
+async function runDoctor() {
+  if (!doctorRunButton || state.authMode !== "operator") return;
+  doctorRunButton.disabled = true;
+  setFormStatus(doctorStatus, "Running doctor checks...", "");
+  try {
+    state.doctor = await api("/api/doctor");
+    const failed = (state.doctor.checks || []).filter((check) => check.status === "bad").length;
+    const warnings = (state.doctor.checks || []).filter((check) => check.status === "warn").length;
+    setFormStatus(
+      doctorStatus,
+      failed ? `${failed} check${failed === 1 ? "" : "s"} need attention.` : warnings ? `${warnings} warning${warnings === 1 ? "" : "s"}.` : "All doctor checks passed.",
+      failed ? "error" : "success"
+    );
+    renderDoctor();
+  } catch (error) {
+    setFormStatus(doctorStatus, `Doctor check failed: ${error.message}`, "error");
+  } finally {
+    doctorRunButton.disabled = false;
+  }
+}
+
+function renderDoctor() {
+  if (!lists.doctor) return;
+  const doctor = state.doctor;
+  if (!doctor?.checks?.length) {
+    lists.doctor.innerHTML = `
+      <article class="status-card warn">
+        <span>Doctor</span>
+        <strong>Not run yet</strong>
+        <p>Run Doctor for host, VM, worker, LLM, and runtime checks.</p>
+      </article>
+    `;
+    return;
+  }
+  lists.doctor.innerHTML = doctor.checks.map((check) => `
+    <article class="status-card ${escapeHtml(check.status || (check.ok ? "ok" : "bad"))}">
+      <span>${escapeHtml(check.name)}</span>
+      <strong>${escapeHtml(check.ok ? "OK" : check.status === "warn" ? "Warning" : "Needs attention")}</strong>
+      <p>${escapeHtml(check.detail || "")}</p>
+    </article>
+  `).join("") + `
+    <article class="status-card ${doctor.ok ? "ok" : "bad"}">
+      <span>Last Checked</span>
+      <strong>${escapeHtml(formatTime(doctor.checkedAt))}</strong>
+      <p>${escapeHtml(doctor.baseUrl || "")}</p>
+    </article>
+  `;
+}
+
+function renderAutonomyPolicy() {
+  if (!autonomyForm || !autonomyMode || !autonomySummary) return;
+  const policy = state.data?.autonomy || state.about?.autonomy || {};
+  const mode = policy.mode || "default_permissions";
+  if (!autonomyForm.contains(document.activeElement)) autonomyMode.value = mode;
+  renderAutonomySummary(autonomyMode.value || mode, policy.updatedAt);
+}
+
+function renderAutonomySummary(mode, updatedAt = "") {
+  if (!autonomySummary) return;
+  const summary = autonomyModeSummary(mode);
+  autonomySummary.innerHTML = `
+    <strong>${escapeHtml(autonomyModeLabel(mode))}</strong>
+    <p>${escapeHtml(summary)}</p>
+    ${updatedAt ? `<p>Updated ${escapeHtml(formatTime(updatedAt))}</p>` : ""}
+  `;
+}
+
+async function updateAutonomyPolicy() {
+  if (!autonomyMode) return;
+  const requestedMode = autonomyMode.value;
+  renderAutonomySummary(requestedMode, state.data?.autonomy?.updatedAt || state.about?.autonomy?.updatedAt || "");
+  setFormStatus(autonomyStatus, "Saving...", "");
+  autonomyMode.disabled = true;
+  try {
+    const policy = await api("/api/autonomy", {
+      method: "PATCH",
+      body: JSON.stringify({ mode: requestedMode })
+    });
+    setFormStatus(autonomyStatus, "Autonomy policy saved.", "success");
+    state.data = {
+      ...(state.data || {}),
+      autonomy: policy
+    };
+    await refresh();
+  } catch (error) {
+    setFormStatus(autonomyStatus, `Could not save policy: ${error.message}`, "error");
+    renderAutonomyPolicy();
+  } finally {
+    autonomyMode.disabled = false;
+  }
+}
+
+function autonomyModeLabel(value) {
+  const labels = {
+    default_permissions: "Default permissions",
+    auto_review: "Auto review",
+    full_access: "Full access"
+  };
+  return labels[value] || labels.default_permissions;
+}
+
+function autonomyModeSummary(value) {
+  const summaries = {
+    default_permissions: "Approval cards wait for the operator unless they are completed manually.",
+    auto_review: "Low-risk read-only diagnostics and tightly bounded public research can approve themselves after policy review.",
+    full_access: "Non-sensitive VM command requests and CompassProjects file updates can approve themselves for operators and Pro users; credentials, purchases, external contact, GitHub repo creation, account setup, human verification, and context answers still require the operator."
+  };
+  return summaries[value] || summaries.default_permissions;
+}
+
+function renderNetwork() {
+  if (!networkGrid || !lists.network) return;
+
+  const network = state.data?.network || {};
+  const workers = network.workers || [];
+  const jobs = network.jobs || [];
+  const accounts = network.ledgerAccounts || [];
+  const entries = network.ledgerEntries || [];
+  const operator = accounts.find((account) => account.id === "operator");
+  const onlineWorkers = workers.filter((worker) => worker.status === "active" && ["ok", "warn"].includes(worker.health)).length;
+  const activeJobs = jobs.filter((job) => ["queued", "assigned"].includes(job.status)).length;
+
+  const cards = [
+    {
+      label: "Network Balance",
+      value: `${operator?.balance ?? 0} credits`,
+      status: (operator?.balance ?? 0) > 0 ? "ok" : "warn",
+      note: "Internal private-alpha ledger only"
+    },
+    {
+      label: "Workers",
+      value: `${onlineWorkers}/${workers.length} online`,
+      status: onlineWorkers ? "ok" : "warn",
+      note: "Workers poll Latch; no inbound ports required"
+    },
+    {
+      label: "Jobs",
+      value: `${activeJobs} active`,
+      status: activeJobs ? "warn" : "ok",
+      note: `${jobs.length} recent network jobs`
+    },
+    {
+      label: "Routing",
+      value: "Auto / Local / Network",
+      status: "ok",
+      note: "Sensitive auto-routed prompts stay local"
+    }
+  ];
+  networkGrid.innerHTML = cards.map((card) => `
+    <article class="status-card ${card.status}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <p>${escapeHtml(card.note)}</p>
+    </article>
+  `).join("");
+
+  const items = [
+    ...workers.map((worker) => ({ kind: "worker", sortTime: worker.lastSeenAt || worker.createdAt, worker })),
+    ...jobs.slice(0, 8).map((job) => ({ kind: "job", sortTime: job.updatedAt || job.createdAt, job })),
+    ...groupedLedgerEntriesByDay(entries).slice(0, 6).map((group) => ({ kind: "ledgerDay", sortTime: group.date.toISOString(), group, open: false }))
+  ].sort((left, right) => String(right.sortTime || "").localeCompare(String(left.sortTime || "")));
+
+  renderList(lists.network, items.slice(0, 18), (item) => {
+    if (item.kind === "worker") return networkWorkerCard(item.worker);
+    if (item.kind === "job") return networkJobCard(item.job);
+    return networkLedgerDayCard(item.group, { scope: "network", defaultOpen: item.open });
+  });
+  bindDisclosureState(lists.network);
+  lists.network.querySelectorAll("[data-worker-status]").forEach((button) => {
+    button.addEventListener("click", () => updateWorkerStatus(button.dataset.workerStatus, button.dataset.statusValue));
+  });
+}
+
+function networkWorkerCard(worker) {
+  const paused = worker.status === "paused";
+  return `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(worker.name)}</h2>
+        <span class="badge ${paused ? "paused" : "done"}">${escapeHtml(paused ? "paused" : worker.health || "unknown")}</span>
+      </div>
+      <div class="meta-row">
+        <span class="type-pill network">${escapeHtml(worker.backendType)}</span>
+        <span class="item-meta">${escapeHtml((worker.models || []).join(", ") || worker.defaultModel || "model unset")}</span>
+        <span class="item-meta">${escapeHtml(String(worker.inputCreditsPer1k))}/${escapeHtml(String(worker.outputCreditsPer1k))} cr / 1k</span>
+      </div>
+      <p class="item-body">Last seen ${formatTime(worker.lastSeenAt)}.</p>
+      <div class="approval-actions">
+        <button class="secondary-button" data-worker-status="${escapeHtml(worker.id)}" data-status-value="${paused ? "active" : "paused"}" type="button">${paused ? "Resume" : "Pause"}</button>
+      </div>
+    </article>
+  `;
+}
+
+function networkJobCard(job) {
+  return `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(job.model || "Network job")}</h2>
+        <span class="badge ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+      </div>
+      <div class="meta-row">
+        <span class="type-pill network">${escapeHtml(job.workerName || job.workerId || "worker")}</span>
+        <span class="item-meta">${escapeHtml(job.routingReason || "routed")}</span>
+        <span class="item-meta">${escapeHtml(String(job.chargedCredits || job.reservedCredits || 0))} credits</span>
+      </div>
+      ${job.error ? `<p class="approval-advice">${escapeHtml(job.error)}</p>` : `<p class="item-body">${formatTime(job.updatedAt || job.createdAt)}</p>`}
+    </article>
+  `;
+}
+
+function networkLedgerDayCard(group, { scope = "network", defaultOpen = false } = {}) {
+  const dayKey = `ledger:${scope}:day:${group.key}`;
+  const dayOpen = disclosureOpen(dayKey, defaultOpen);
+  return `
+    <details class="item ledger-day" data-disclosure-key="${escapeHtml(dayKey)}" ${dayOpen ? "open" : ""}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(group.label)}</strong>
+          <small>${group.entries.length} movements</small>
+        </span>
+        <span class="badge ${group.net >= 0 ? "approved" : "denied"}">${group.net >= 0 ? "+" : ""}${escapeHtml(String(group.net))}</span>
+      </summary>
+      <div class="ledger-day-summary">
+        ${ledgerMovementGroupMarkup("Inbound", group.inbound, group.positive, "approved", `${dayKey}:inbound`)}
+        ${ledgerMovementGroupMarkup("Outbound", group.outbound, Math.abs(group.negative), "denied", `${dayKey}:outbound`)}
+      </div>
+    </details>
+  `;
+}
+
+function ledgerMovementGroupMarkup(label, entries, amount, badgeClass, key) {
+  const signedAmount = amount === 0 ? "0" : (label === "Inbound" ? `+${amount}` : `-${amount}`);
+  const hasEntries = entries.length > 0;
+  return `
+    <details class="ledger-movement" data-disclosure-key="${escapeHtml(key)}" ${disclosureOpen(key, false) ? "open" : ""} ${hasEntries ? "" : "disabled"}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(label)}</strong>
+          <small>${entries.length} movement${entries.length === 1 ? "" : "s"}</small>
+        </span>
+        <span class="badge ${badgeClass}">${escapeHtml(signedAmount)}</span>
+      </summary>
+      ${hasEntries ? `<div class="ledger-day-items">${entries.map(networkLedgerRow).join("")}</div>` : ""}
+    </details>
+  `;
+}
+
+function networkLedgerRow(entry) {
+  return `
+    <div class="ledger-row">
+      <span class="badge ${entry.amount >= 0 ? "approved" : "denied"}">${entry.amount >= 0 ? "+" : ""}${escapeHtml(String(entry.amount))}</span>
+      <div>
+        <strong>${escapeHtml(entry.type)}</strong>
+        <p>${escapeHtml(entry.note || entry.accountId)}</p>
+        <small>${escapeHtml(entry.accountId)} - balance ${escapeHtml(String(entry.balanceAfter))} - ${formatTime(entry.createdAt)}</small>
+      </div>
+    </div>
+  `;
+}
+
+function groupedLedgerEntriesByDay(entries) {
+  const groups = new Map();
+  for (const entry of entries || []) {
+    const key = eventDayKey(entry.createdAt);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        date: eventDayDate(entry.createdAt),
+        entries: []
+      });
+    }
+    groups.get(key).entries.push(entry);
+  }
+  return Array.from(groups.values())
+    .map((group) => {
+      const sorted = group.entries
+        .slice()
+        .sort((left, right) => Date.parse(right.createdAt || 0) - Date.parse(left.createdAt || 0));
+      const amounts = sorted.map((entry) => Number(entry.amount) || 0);
+      return {
+        ...group,
+        entries: sorted,
+        label: eventDayLabel(group.date),
+        net: amounts.reduce((total, amount) => total + amount, 0),
+        inbound: sorted.filter((entry) => Number(entry.amount) > 0),
+        outbound: sorted.filter((entry) => Number(entry.amount) < 0),
+        positive: amounts.filter((amount) => amount > 0).reduce((total, amount) => total + amount, 0),
+        negative: amounts.filter((amount) => amount < 0).reduce((total, amount) => total + amount, 0)
+      };
+    })
+    .sort((left, right) => right.date - left.date);
+}
+
+function ledgerPeriodTotals(entries) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  return {
+    month: ledgerTotalsSince(entries, monthStart),
+    year: ledgerTotalsSince(entries, yearStart)
+  };
+}
+
+function ledgerTotalsSince(entries, startDate) {
+  const amounts = (entries || [])
+    .filter((entry) => Date.parse(entry.createdAt || 0) >= startDate.getTime())
+    .map((entry) => Number(entry.amount) || 0);
+  return {
+    net: amounts.reduce((total, amount) => total + amount, 0),
+    positive: amounts.filter((amount) => amount > 0).reduce((total, amount) => total + amount, 0),
+    negative: amounts.filter((amount) => amount < 0).reduce((total, amount) => total + amount, 0)
+  };
+}
+
+function signedCredits(value) {
+  const amount = Number(value) || 0;
+  return `${amount >= 0 ? "+" : ""}${amount} credits`;
+}
+
+async function createNetworkInvite(event) {
+  event.preventDefault();
+  const name = networkWorkerName.value.trim();
+  if (!name) {
+    setFormStatus(networkInviteStatus, "Worker name is required.", "error");
+    return;
+  }
+  try {
+    await withSubmitLock(networkInviteForm, async () => {
+      const result = await api("/api/network/workers", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          backendType: networkWorkerBackend.value,
+          models: tagsFromInput(networkWorkerModels.value)
+        })
+      });
+      networkWorkerName.value = "";
+      networkWorkerModels.value = "";
+      setFormStatus(networkInviteStatus, `Invite token: ${result.token}`, "success");
+      await refresh();
+    });
+  } catch (error) {
+    setFormStatus(networkInviteStatus, `Could not create invite: ${error.message}`, "error");
+  }
+}
+
+async function updateWorkerStatus(id, status) {
+  await api(`/api/network/workers/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+  await refresh();
+}
+
+function renderCredits() {
+  if (!creditsGrid || !creditsList) return;
+  const balance = creditBalance();
+  const purchases = state.data?.purchases || [];
+  const operatorAccountId = state.authMode === "user" ? state.data?.credits?.account?.id : "operator";
+  const entries = state.authMode === "user"
+    ? (state.data?.credits?.recentEntries || [])
+    : (state.data?.network?.ledgerEntries || []).filter((entry) => entry.accountId === operatorAccountId).slice(0, 20);
+  const compute = state.data?.compute || {};
+  const totals = ledgerPeriodTotals(entries);
+  creditsGrid.innerHTML = [
+    {
+      label: "Balance",
+      value: `${balance} credits`,
+      status: balance > 0 ? "ok" : "warn",
+      note: state.authMode === "user" ? "Used automatically when Compass needs extra compute" : "Operator network ledger"
+    },
+    {
+      label: "Compute",
+      value: compute.status || (state.authMode === "user" ? "Handled locally" : "Pro routing"),
+      status: compute.status === "Fallback used" ? "warn" : "ok",
+      note: compute.lastCredits ? `${compute.lastCredits} credits on the last network job` : "Auto routing uses extra compute only when eligible"
+    },
+    {
+      label: "Top-Ups",
+      value: `${purchases.filter((item) => item.status === "pending").length} pending`,
+      status: purchases.some((item) => item.status === "pending") ? "warn" : "ok",
+      note: "Payment-ready records; manual completion for now"
+    },
+    {
+      label: "This Month",
+      value: signedCredits(totals.month.net),
+      status: totals.month.net < 0 ? "warn" : "ok",
+      note: `In ${totals.month.positive} / out ${Math.abs(totals.month.negative)}`
+    },
+    {
+      label: "This Year",
+      value: signedCredits(totals.year.net),
+      status: totals.year.net < 0 ? "warn" : "ok",
+      note: `In ${totals.year.positive} / out ${Math.abs(totals.year.negative)}`
+    }
+  ].map((card) => `
+    <article class="status-card ${card.status}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <p>${escapeHtml(card.note)}</p>
+    </article>
+  `).join("");
+
+  const items = [
+    ...purchases.map((purchase) => ({ kind: "purchase", sortTime: purchase.updatedAt || purchase.createdAt, purchase })),
+    ...groupedLedgerEntriesByDay(entries).map((group, index) => ({ kind: "ledgerDay", sortTime: group.date.toISOString(), group, open: index === 0 }))
+  ].sort((left, right) => String(right.sortTime || "").localeCompare(String(left.sortTime || "")));
+  renderList(creditsList, items.slice(0, 30), (item) => item.kind === "purchase" ? purchaseCard(item.purchase) : networkLedgerDayCard(item.group, { scope: "credits", defaultOpen: item.open }));
+  bindDisclosureState(creditsList);
+}
+
+function purchaseCard(purchase) {
+  return `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(String(purchase.credits))} credits</h2>
+        <span class="badge ${escapeHtml(purchase.status)}">${escapeHtml(purchase.status)}</span>
+      </div>
+      <p class="item-body">${escapeHtml(purchase.note || "Credit top-up request")}</p>
+      <p class="item-meta">${escapeHtml(purchase.provider)} - ${formatTime(purchase.updatedAt || purchase.createdAt)}</p>
+    </article>
+  `;
+}
+
+function creditEntryCard(entry) {
+  return `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(entry.label || entry.type)}</h2>
+        <span class="badge">${escapeHtml(String(entry.amount))}</span>
+      </div>
+      <p class="item-body">Balance ${escapeHtml(String(entry.balanceAfter))}</p>
+      <p class="item-meta">${formatTime(entry.createdAt)}</p>
+    </article>
+  `;
+}
+
+async function createPurchaseRequest(event) {
+  event.preventDefault();
+  const credits = Number(purchaseCredits.value || 0);
+  if (!Number.isInteger(credits) || credits <= 0) {
+    setFormStatus(purchaseStatus, "Enter a positive credit amount.", "error");
+    return;
+  }
+  if (state.authMode !== "user") {
+    setFormStatus(purchaseStatus, "Credit purchase requests are for signed-in Compass users. Operator adjustments stay in Pro Mode.", "error");
+    return;
+  }
+  try {
+    await withSubmitLock(purchaseForm, async () => {
+      await api("/api/me/purchases", {
+        method: "POST",
+        body: JSON.stringify({
+          credits,
+          provider: "manual",
+          note: purchaseNote.value.trim() || "Manual top-up request"
+        })
+      });
+      setFormStatus(purchaseStatus, "Credit request recorded.", "success");
+      purchaseNote.value = "";
+      await refresh();
+    });
+  } catch (error) {
+    setFormStatus(purchaseStatus, `Could not request credits: ${error.message}`, "error");
+  }
+}
+
+function renderSimpleSettings() {
+  if (!simpleSettingsSummary) return;
+  const contract = state.data?.productContract || state.about?.productContract || {};
+  const cards = [
+    {
+      label: "Experience",
+      value: isProMode() ? "Pro Mode" : "Simple Mode",
+      status: "ok",
+      note: isProMode() ? "Latch internals are visible." : "Compass hides routing and worker details."
+    },
+    {
+      label: "Account",
+      value: state.authMode === "user" ? (state.data?.user?.displayName || "Compass user") : "Operator",
+      status: "ok",
+      note: state.authMode === "user" ? "External auth-ready local session." : "Self-hosted operator session."
+    },
+    {
+      label: "Credits",
+      value: `${creditBalance()} credits`,
+      status: creditBalance() > 0 ? "ok" : "warn",
+      note: "Extra compute uses credits when routing is eligible."
+    },
+    {
+      label: "Simple",
+      value: "Durable companion",
+      status: "ok",
+      note: contract.simple || "Memory, tasks, approvals, history, and stronger reasoning without direct tools."
+    },
+    {
+      label: "Agency",
+      value: isProMode() ? "Worker visible" : "Worker required",
+      status: isProMode() ? "ok" : "warn",
+      note: isProMode()
+        ? (contract.pro || "A paired OpenClaw worker can act under approvals.")
+        : "Browser, shell, files, downloads, and external action require Pro with a paired worker."
+    }
+  ];
+  simpleSettingsSummary.innerHTML = cards.map((card) => `
+    <article class="status-card ${card.status}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <p>${escapeHtml(card.note)}</p>
+    </article>
+  `).join("");
+}
+
 function renderCapabilities() {
+  if (!capabilityGrid) return;
+  const executorSeen = (state.data?.executions || []).some((item) => ["shell", "browser"].includes(item.mode));
+  const agencyWorker = (state.data?.agencyWorkers || [])[0];
+  const caps = agencyWorker?.capabilities || {};
   const capabilities = [
-    ["Internal Latch chat", "Enabled", "Compass can reply into Compass, Operations, Research, and custom channels.", "ok"],
+    ["Compass chat", "Enabled", "Compass Companion can reply into Companion, Operations, Research, and custom channels.", "ok"],
+    ["Simple memory", "Enabled", "Simple chat and tasks use saved Context, recent history, goals, and approvals for continuity.", "ok"],
+    ["Simple task planner", "Server loop", "Queued Simple tasks get a planning pass and pause before real-world action without a worker.", "ok"],
     ["Channel management", "Operator only", "You can create, archive, and move messages between channels.", "ok"],
     ["Read-only diagnostics", "Approval-gated", "Bridge status, logs, Tailscale, Docker, gateway, and repo status use templates only.", "warn"],
     ["Exact-URL research", "Approval-gated", "Public URLs only, no crawling, no login, cached source notes.", "warn"],
-    ["External contact", "Draft only", "Latch can prepare a draft, but it does not send email or messages.", "warn"],
-    ["Credentials/payments", "Disabled", "Compass should not receive secrets or control purchases/payment tools.", "bad"],
-    ["Browser automation", "Disabled", "No interactive browser control until after security review.", "bad"],
-    ["Write/system commands", "Disabled", "No sudo, installs, restarts, deletes, or arbitrary shell execution.", "bad"]
+    ["External contact", "Draft only", "Compass can prepare a draft, but Latch does not send email or messages.", "warn"],
+    ["Credentials/payments", "Disabled", "Compass Companion should not receive secrets or control purchases/payment tools.", "bad"],
+    ["Worker pairing", agencyWorker ? agencyWorker.status : "Not paired", agencyWorker ? agencyCapabilitySummary(agencyWorker) : "Pair OpenClaw before action runtime is available.", agencyWorker?.health === "ok" ? "ok" : "warn"],
+    ["Browser automation", caps.browser || executorSeen ? "Policy-gated" : "Executor-ready", "Playwright-managed Firefox runs approved headless browser plans for operators and Pro users.", caps.browser || executorSeen ? "ok" : "warn"],
+    ["Write/system commands", caps.shell || executorSeen ? "Policy-gated" : "Executor-ready", "Full access can auto-run non-sensitive approved VM plans for operators and Pro users.", caps.shell || executorSeen ? "ok" : "warn"]
   ];
   capabilityGrid.innerHTML = capabilities.map(([label, value, note, status]) => `
     <article class="capability-card ${status}">
@@ -1344,6 +2917,42 @@ function renderCapabilities() {
       <p>${escapeHtml(note)}</p>
     </article>
   `).join("");
+}
+
+function renderUserTiers() {
+  if (!userTierList) return;
+  const users = state.data?.users || [];
+  renderList(userTierList, users, (user) => {
+    const pro = Boolean(user.preferences?.proMode);
+    return `
+      <article class="item">
+        <div class="item-header">
+          <h2 class="item-title">${escapeHtml(user.displayName || user.email || user.id)}</h2>
+          <span class="badge ${pro ? "approved" : "pending"}">${pro ? "pro" : "standard"}</span>
+        </div>
+        <p class="item-meta">${escapeHtml(user.email || user.id)} - ${escapeHtml(user.preferences?.defaultRoutingPreference || "auto")}</p>
+        <div class="approval-actions">
+          <button class="secondary-button" data-user-pro="${escapeHtml(user.id)}" data-pro-mode="${pro ? "false" : "true"}" type="button">
+            ${pro ? "Set Standard" : "Set Pro"}
+          </button>
+        </div>
+      </article>
+    `;
+  });
+  userTierList.querySelectorAll("[data-user-pro]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await api(`/api/users/${encodeURIComponent(button.dataset.userPro)}/preferences`, {
+          method: "PATCH",
+          body: JSON.stringify({ proMode: button.dataset.proMode === "true" })
+        });
+        await refresh();
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 }
 
 async function runTestAction(action) {
@@ -1367,7 +2976,7 @@ async function runTestAction(action) {
     },
     "plain-task": {
       title: "Test plain task",
-      goal: `Reply in ${active.label} with a short summary of what you can currently do in Latch.`,
+      goal: `Reply in ${active.label} with a short summary of what you can currently do in Compass.`,
       instructions: "Keep it concise and do not request external actions."
     }
   };
@@ -1474,7 +3083,7 @@ function renderSecurityChecklist() {
       label: "Private route",
       ok: isPrivateRoute(),
       warn: false,
-      note: isPrivateRoute() ? "This browser is using localhost or a Tailscale address." : "Open Latch through Tailscale before using it away from home."
+      note: isPrivateRoute() ? "This browser is using localhost or a Tailscale address." : "Open Compass through Tailscale before using it away from home."
     },
     {
       label: "Private HTTPS",
@@ -1515,7 +3124,7 @@ function renderArchives() {
   const archives = state.data?.archives || {};
   const items = [
     ...(archives.messages || []).map((item) => ({ kind: "messages", label: item.author || "Message", title: item.text || item.id, archivedAt: item.archivedAt, id: item.id })),
-    ...(archives.channels || []).map((item) => ({ kind: "channels", label: "Channel", title: item.label || item.id, archivedAt: item.archivedAt, id: item.id, keep: true })),
+    ...(archives.channels || []).map((item) => ({ kind: "channels", label: "Channel", title: item.label || item.id, archivedAt: item.archivedAt, id: item.id })),
     ...(archives.tasks || []).map((item) => ({ kind: "tasks", label: "Task", title: item.title || item.id, archivedAt: item.archivedAt, id: item.id })),
     ...(archives.approvals || []).map((item) => ({ kind: "approvals", label: "Approval", title: item.title || item.id, archivedAt: item.archivedAt, id: item.id })),
     ...(archives.contextItems || []).map((item) => ({ kind: "context", label: "Context", title: item.title || item.name || item.id, archivedAt: item.archivedAt, id: item.id }))
@@ -1551,6 +3160,29 @@ function renderList(target, items, template) {
   target.innerHTML = items.map(template).join("");
 }
 
+function disclosureOpen(key, defaultOpen = false) {
+  if (!key) return Boolean(defaultOpen);
+  if (Object.prototype.hasOwnProperty.call(state.disclosureState, key)) {
+    return Boolean(state.disclosureState[key]);
+  }
+  return Boolean(defaultOpen);
+}
+
+function bindDisclosureState(target) {
+  target.querySelectorAll("details[data-disclosure-key]").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      state.disclosureState[details.dataset.disclosureKey] = details.open;
+      saveDisclosureState();
+    });
+  });
+}
+
+function saveDisclosureState() {
+  const entries = Object.entries(state.disclosureState).slice(-300);
+  state.disclosureState = Object.fromEntries(entries);
+  localStorage.setItem("latchDisclosureState", JSON.stringify(state.disclosureState));
+}
+
 function bindArchiveButtons(target) {
   target.querySelectorAll("[data-archive-kind]").forEach((button) => {
     button.addEventListener("click", () => archiveItem(button.dataset.archiveKind, button.dataset.archiveId, true));
@@ -1570,25 +3202,74 @@ function bindMessageTools(target) {
   target.querySelectorAll("[data-open-task]").forEach((button) => {
     button.addEventListener("click", () => openTaskLink(button.dataset.openTask));
   });
+  target.querySelectorAll("[data-open-approval]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      openApprovalLink(link.dataset.openApproval);
+    });
+  });
 }
 
 function bindTaskLinks(target) {
   target.querySelectorAll("[data-open-message-channel]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (knownChannels().find((channel) => channel.id === button.dataset.openMessageChannel)?.archivedAt) {
+        state.showArchivedChannels = true;
+        localStorage.setItem("latchShowArchivedChannels", "true");
+      }
       state.activeChannel = button.dataset.openMessageChannel;
       localStorage.setItem("latchActiveChannel", state.activeChannel);
       state.tab = "inbox";
-      history.replaceState(null, "", "?tab=inbox");
+      updateRoute();
       render();
     });
   });
 }
 
+function bindReopenTaskForms(target) {
+  target.querySelectorAll("[data-reopen-task]").forEach((form) => {
+    const textarea = form.querySelector("textarea");
+    textarea?.addEventListener("input", () => {
+      state.reopenDrafts[form.dataset.reopenTask] = textarea.value;
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const note = textarea?.value.trim() || "";
+      await api(`${taskCollectionPath()}/${encodeURIComponent(form.dataset.reopenTask)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "queued", reopenNote: note })
+      });
+      delete state.reopenDrafts[form.dataset.reopenTask];
+      await refresh();
+    });
+  });
+}
+
+function isEditingReopenDraft() {
+  return Boolean(document.activeElement?.closest?.("[data-reopen-task]"));
+}
+
+function openApprovalLink(approvalId) {
+  const id = cleanRouteId(approvalId);
+  if (!id) return;
+  const approval = (state.data?.approvals || []).find((item) => item.id === id);
+  if (approval && approval.status !== "pending") {
+    state.approvalsFilter = "all";
+    localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
+  }
+  state.highlightedApprovalId = id;
+  state.pendingApprovalScroll = true;
+  state.tab = "approvals";
+  updateRoute({ approvalId: id });
+  render();
+}
+
 function openTaskLink(taskId) {
   state.tab = "tasks";
+  state.highlightedApprovalId = "";
   state.taskFilter = "all";
   localStorage.setItem("latchTaskFilter", state.taskFilter);
-  history.replaceState(null, "", "?tab=tasks");
+  updateRoute();
   render();
   requestAnimationFrame(() => {
     document.querySelector(`[data-task-card="${CSS.escape(taskId)}"]`)?.scrollIntoView({ block: "center" });
@@ -1609,15 +3290,101 @@ async function deleteItem(kind, id) {
   await refresh();
 }
 
+function bindHoldDeleteChannel(button) {
+  const holdMs = 2000;
+  let startedAt = 0;
+  let frame = 0;
+  let timer = 0;
+  let armed = false;
+  let deleting = false;
+
+  const reset = () => {
+    armed = false;
+    startedAt = 0;
+    if (frame) cancelAnimationFrame(frame);
+    if (timer) clearTimeout(timer);
+    frame = 0;
+    timer = 0;
+    button.classList.remove("holding");
+    button.style.setProperty("--hold-progress", "0");
+  };
+
+  const complete = async () => {
+    if (!armed || deleting) return;
+    const id = button.dataset.deleteChannel;
+    deleting = true;
+    button.disabled = true;
+    reset();
+    try {
+      await deleteChannel(id);
+    } finally {
+      deleting = false;
+      button.disabled = false;
+    }
+  };
+
+  const tick = () => {
+    if (!armed) return;
+    const progress = Math.min(1, (performance.now() - startedAt) / holdMs);
+    button.style.setProperty("--hold-progress", progress.toFixed(3));
+    if (progress >= 1) return;
+    frame = requestAnimationFrame(tick);
+  };
+
+  const startHold = (event) => {
+    if (button.disabled || deleting || armed) return;
+    armed = true;
+    startedAt = performance.now();
+    button.classList.add("holding");
+    if (event.pointerId !== undefined) button.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    timer = window.setTimeout(() => {
+      complete().catch((error) => console.error("Could not delete channel", error));
+    }, holdMs);
+    window.addEventListener("mouseup", stopHold, { once: true });
+    window.addEventListener("touchend", stopHold, { once: true });
+    window.addEventListener("touchcancel", stopHold, { once: true });
+    frame = requestAnimationFrame(tick);
+  };
+
+  const stopHold = (event) => {
+    if (event?.pointerId !== undefined) button.releasePointerCapture?.(event.pointerId);
+    reset();
+  };
+
+  button.addEventListener("pointerdown", startHold);
+  button.addEventListener("pointerup", stopHold);
+  button.addEventListener("pointercancel", stopHold);
+  button.addEventListener("mousedown", startHold);
+  button.addEventListener("mouseup", stopHold);
+  button.addEventListener("touchstart", startHold, { passive: false });
+  button.addEventListener("touchend", stopHold);
+  button.addEventListener("touchcancel", stopHold);
+  button.addEventListener("click", (event) => event.preventDefault());
+}
+
+async function deleteChannel(id) {
+  await api(`/api/channels/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (state.activeChannel === id) {
+    state.activeChannel = "compass";
+    localStorage.setItem("latchActiveChannel", state.activeChannel);
+  }
+  await refresh();
+}
+
 function collectionPath(kind) {
   const paths = {
     messages: "/api/messages",
     channels: "/api/channels",
-    tasks: "/api/tasks",
+    tasks: taskCollectionPath(),
     approvals: "/api/approvals",
-    context: "/api/context"
+    context: contextApiPath()
   };
   return paths[kind] || "/api/messages";
+}
+
+function taskCollectionPath() {
+  return state.authMode === "user" ? "/api/me/tasks" : "/api/tasks";
 }
 
 async function createBackup() {
@@ -1673,9 +3440,9 @@ function openPinDialog(mode) {
   const passkeySupported = isPasskeySupported();
   const passkeyConfigured = isPasskeyConfigured();
   pinDialogEyebrow.textContent = isSet ? "Set PIN" : "App Lock";
-  pinDialogTitle.textContent = isSet ? "Set App PIN" : "Unlock Latch";
+  pinDialogTitle.textContent = isSet ? "Set App PIN" : "Unlock Compass";
   pinHelp.textContent = isSet
-    ? "Set a local PIN for this device. You can add a passkey when Latch is opened over private HTTPS."
+    ? "Set a local PIN for this device. You can add a passkey when Compass is opened over private HTTPS."
     : passkeyConfigured
       ? "Use your passkey or enter your local PIN to unlock this device."
       : "Enter your local PIN to unlock this device.";
@@ -1759,18 +3526,18 @@ async function submitPin(event) {
 
 async function createPasskey() {
   if (!isPasskeySupported()) {
-    throw new Error("Open Latch over private HTTPS to use passkeys.");
+    throw new Error("Open Compass over private HTTPS to use passkeys.");
   }
   const userId = crypto.getRandomValues(new Uint8Array(16));
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const credential = await navigator.credentials.create({
     publicKey: {
       challenge,
-      rp: { name: "Latch" },
+      rp: { name: "Compass" },
       user: {
         id: userId,
-        name: "Latch operator",
-        displayName: "Latch operator"
+        name: "Compass operator",
+        displayName: "Compass operator"
       },
       pubKeyCredParams: [
         { type: "public-key", alg: -7 },
@@ -1797,7 +3564,7 @@ async function createPasskey() {
 
 async function unlockWithPasskey() {
   if (!isPasskeySupported()) {
-    throw new Error("Open Latch over private HTTPS to use passkeys.");
+    throw new Error("Open Compass over private HTTPS to use passkeys.");
   }
   const credentialId = base64UrlToBytes(localStorage.getItem("latchPasskeyCredentialId") || "");
   if (!credentialId.length) {
@@ -1878,6 +3645,14 @@ function formatTime(value) {
     minute: "2-digit",
     month: "short",
     day: "numeric"
+  }).format(new Date(value));
+}
+
+function formatClockTime(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit"
   }).format(new Date(value));
 }
 
