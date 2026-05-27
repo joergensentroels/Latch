@@ -4,6 +4,8 @@ const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings
 const initialParams = new URLSearchParams(location.search);
 const initialTab = normalizeTab(initialParams.get("tab"));
 const initialApprovalId = cleanRouteId(initialParams.get("approval") || initialParams.get("approvalId") || "");
+const savedTaskFilter = normalizeListFilter(localStorage.getItem("latchTaskFilter"), ["open", "all"], "open");
+const savedApprovalsFilter = normalizeListFilter(localStorage.getItem("latchApprovalsFilter"), ["pending", "all"], "pending");
 const maxContextUploadBytes = 2_000_000;
 const fallbackChannels = [
   { id: "compass", label: "Companion", description: "Direct chat with Compass Companion", builtIn: true },
@@ -21,11 +23,14 @@ const state = {
   channelRailWidth: Number(localStorage.getItem("latchChannelRailWidth") || 260),
   showArchivedChannels: localStorage.getItem("latchShowArchivedChannels") === "true",
   data: null,
-  taskFilter: localStorage.getItem("latchTaskFilter") || "open",
-  approvalsFilter: localStorage.getItem("latchApprovalsFilter") || "pending",
+  taskFilter: savedTaskFilter,
+  taskFilterPreference: savedTaskFilter,
+  approvalsFilter: savedApprovalsFilter,
+  approvalsFilterPreference: savedApprovalsFilter,
   seenNotificationIds: new Set(JSON.parse(localStorage.getItem("latchSeenNotificationIds") || "[]")),
   disclosureState: JSON.parse(localStorage.getItem("latchDisclosureState") || "{}"),
   notificationBaselineReady: false,
+  filterDefaultsInitialized: false,
   deferredInstallPrompt: null,
   approvalDecision: null,
   highlightedApprovalId: initialApprovalId,
@@ -586,16 +591,20 @@ testActionButtons.forEach((button) => {
 
 approvalFilterButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    state.approvalsFilter = button.dataset.approvalFilter;
-    localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
+    const filter = normalizeListFilter(button.dataset.approvalFilter, ["pending", "all"], state.approvalsFilterPreference);
+    state.approvalsFilter = filter;
+    state.approvalsFilterPreference = filter;
+    localStorage.setItem("latchApprovalsFilter", filter);
     renderApprovals();
   });
 });
 
 taskFilterButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    state.taskFilter = button.dataset.taskFilter;
-    localStorage.setItem("latchTaskFilter", state.taskFilter);
+    const filter = normalizeListFilter(button.dataset.taskFilter, ["open", "all"], state.taskFilterPreference);
+    state.taskFilter = filter;
+    state.taskFilterPreference = filter;
+    localStorage.setItem("latchTaskFilter", filter);
     renderTasks();
   });
 });
@@ -700,6 +709,10 @@ async function refresh() {
       state.data = appState;
       state.llmConfig = llmConfig;
       state.about = about;
+    }
+    if (!state.filterDefaultsInitialized) {
+      applyAttentionFilterDefaults();
+      state.filterDefaultsInitialized = true;
     }
     markConnection(true);
     render();
@@ -875,6 +888,7 @@ function openTab(tabId) {
   state.tab = normalizeTab(tabId);
   if (state.tab !== "approvals") state.highlightedApprovalId = "";
   if (state.tab === "context") state.contextView = preferredContextView();
+  applyAttentionFilterDefaults();
   updateRoute();
   closeMoreTabs();
   renderTabs();
@@ -893,6 +907,22 @@ function updateRoute(options = {}) {
 function normalizeTab(tabId) {
   if (tabId === "review") return "approvals";
   return tabs.includes(tabId) || simpleTabs.includes(tabId) || proTabs.includes(tabId) ? tabId : "inbox";
+}
+
+function normalizeListFilter(value, choices, fallback = "all") {
+  return choices.includes(value) ? value : fallback;
+}
+
+function applyAttentionFilterDefaults() {
+  if (state.tab === "tasks") {
+    state.taskFilter = openTaskCount() > 0 ? "open" : state.taskFilterPreference;
+  }
+  if (state.tab === "approvals") {
+    const highlightedApproval = (state.data?.approvals || []).find((approval) => approval.id === state.highlightedApprovalId);
+    state.approvalsFilter = pendingApprovalCount() > 0 && highlightedApproval?.status !== "approved" && highlightedApproval?.status !== "denied"
+      ? "pending"
+      : state.approvalsFilterPreference;
+  }
 }
 
 function routeTabName(tabId) {
@@ -1545,7 +1575,6 @@ function renderApprovals() {
   const highlightedApproval = allApprovals.find((approval) => approval.id === state.highlightedApprovalId);
   if (highlightedApproval && highlightedApproval.status !== "pending" && state.approvalsFilter === "pending") {
     state.approvalsFilter = "all";
-    localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
   }
   approvalFilterButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.approvalFilter === state.approvalsFilter);
@@ -3255,7 +3284,6 @@ function openApprovalLink(approvalId) {
   const approval = (state.data?.approvals || []).find((item) => item.id === id);
   if (approval && approval.status !== "pending") {
     state.approvalsFilter = "all";
-    localStorage.setItem("latchApprovalsFilter", state.approvalsFilter);
   }
   state.highlightedApprovalId = id;
   state.pendingApprovalScroll = true;
@@ -3268,6 +3296,7 @@ function openTaskLink(taskId) {
   state.tab = "tasks";
   state.highlightedApprovalId = "";
   state.taskFilter = "all";
+  state.taskFilterPreference = state.taskFilter;
   localStorage.setItem("latchTaskFilter", state.taskFilter);
   updateRoute();
   render();

@@ -5,6 +5,7 @@ data-dev/
 !.env.example
 *.log
 *.tmp
+.tmp-browser-check-*/
 node_modules/
 __pycache__/
 *.pyc

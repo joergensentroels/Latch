@@ -1091,6 +1091,9 @@ try {
   assert(appJs.includes("function unreadChannelCount()"), "inbox tab should badge channels with unread messages");
   assert(appJs.includes("function openTaskCount()"), "tasks tab should badge open tasks");
   assert(appJs.includes("function pendingApprovalCount()"), "review tab should badge pending requests");
+  assert(appJs.includes("function applyAttentionFilterDefaults()"), "tasks and review should prefer attention filters when their tabs have badge counts");
+  assert(appJs.includes("taskFilterPreference"), "task attention defaults should preserve the last selected task filter");
+  assert(appJs.includes("approvalsFilterPreference"), "review attention defaults should preserve the last selected review filter");
   assert(appJs.includes('if (state.tab === "inbox") markChannelSeen'), "hidden inbox renders should not consume unread badges");
   assert(appJs.includes('tabId === "credits") return creditBalance() <= 0 ? "!" : "";'), "credits tab should warn when no credits remain");
   assert(indexHtml.includes("moreTabsButton"), "mobile nav should include a More tab control");
