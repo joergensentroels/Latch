@@ -22,28 +22,25 @@ The safe default is:
 The bridge can:
 
 - poll Latch for tasks and messages
-- send text-only reports
+- send reports into Latch channels
 - call the Latch-hosted LLM gateway
 - use explicitly shared context
 - create approval requests
 - run approved read-only diagnostic templates
 - fetch exact approved public URLs for `web_research` approvals
+- create approved `shell` and `browser` execution plans for the separate VM executor
 
 The bridge cannot:
 
-- run arbitrary commands
-- use `sudo`
-- install packages
-- write or delete files
-- restart services
-- use shell pipes or redirects
+- execute commands directly inside the bridge process
+- bypass stored approval/execution plans for VM shell or browser work
 - access payment accounts
 - access the operator key
 - access provider API keys
 - send outbound email or messages to third parties
-- search the web, crawl links, log in, download files, or access private/internal web targets
+- use personal browser profiles, log in with stored credentials, or access private/internal web targets without an approved plan
 
-The bridge may create `external_contact` and `web_research` approval records. `external_contact` remains draft/manual only. `web_research` may fetch exact approved public URLs after approval and report compact source notes.
+The bridge may create `external_contact`, `web_research`, and VM execution approval records. `external_contact` remains draft/manual only. `web_research` may fetch exact approved public URLs after approval and report compact source notes. Shell/browser execution is performed only by `latch-agent-executor` after policy or human approval.
 
 ## Future Co-Creator Contact
 

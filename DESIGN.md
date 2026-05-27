@@ -4,6 +4,8 @@
 
 Latch is an operator gateway for directing a disposable agent machine from a trusted phone or desktop.
 
+Compass Simple should never collapse into ordinary chat. Its first value is durable continuity: memory, goals, task queue, approvals, history, and stronger reasoning through credits/network compute. Compass Pro adds the agency runtime by pairing that same companion with an OpenClaw worker. Credits are compute, not hands; browser, shell, files, downloads, and automation require a worker.
+
 The interface should feel:
 
 - calm under pressure

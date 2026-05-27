@@ -17,12 +17,13 @@ OpenClaw Gateway Tailscale URL: http://<openclaw-vm-tailscale-ip>:18789
 OpenClaw Gateway health URL: http://<openclaw-vm-tailscale-ip>:18789/healthz
 Latch private URL for worker: http://<windows-tailscale-ip>:8787
 Latch bridge service: latch-agent-bridge
-Bridge mode: safe text-only assistant
+Bridge mode: approval-gated planning and reporting
+Optional executor service: latch-agent-executor
 ```
 
-The bridge has been installed as a systemd service and verified to report into Latch. It may answer Latch tasks and new inbox instructions by calling Latch's external LLM gateway. It may route its own internal Latch replies into a requested Latch channel, such as `operations` or `research`. If a request looks like it needs a command, credential, account setup, human verification, outbound contact, or purchase, the bridge creates a Latch approval card instead of answering as if it can act.
+The bridge has been installed as a systemd service and verified to report into Latch. It may answer Latch tasks and new inbox instructions by calling Latch's external LLM gateway. It may route its own internal Latch replies into a requested Latch channel, such as `operations` or `research`. If a request looks like it needs a command, browser action, credential, account setup, human verification, outbound contact, or purchase, the bridge creates a Latch approval card instead of pretending the action already happened.
 
-Approving a card records the operator decision and reports it back into Latch. For non-sensitive approvals with an operator note, the bridge may use that note to draft a follow-up response through the LLM gateway. Sensitive notes are not forwarded to the external LLM. In the current safe text-only mode, approval does not cause the bridge to execute commands, use credentials, control a browser, or make purchases.
+Approving a card records the operator decision and reports it back into Latch. For non-sensitive approvals with an operator note, the bridge may use that note to draft a follow-up response through the LLM gateway. Sensitive notes are not forwarded to the external LLM. The bridge itself does not run arbitrary shell/browser actions; approved shell/browser plans run only through the separate `latch-agent-executor` service.
 
 Reboot persistence:
 
@@ -32,6 +33,7 @@ docker: enabled and active
 openclaw-openclaw-gateway-1: restart=unless-stopped, healthy
 openclaw-openclaw-cli-1: restart=unless-stopped, healthy
 latch-agent-bridge: enabled and active
+latch-agent-executor: optional, enabled only after explicit install
 ```
 
 OpenClaw Gateway is now bound to the VM Tailscale IP:
@@ -85,7 +87,7 @@ Latch URL: https://<windows-latch-tailscale-serve-name>
 
 Keep the OpenClaw Gateway private. If it must listen beyond localhost, bind it only to Tailscale/private LAN and firewall it.
 
-## Install The Report-Only Latch Bridge
+## Install The Latch Bridge
 
 Copy the files from `worker/` to the Ubuntu VM, then:
 
@@ -104,9 +106,22 @@ LATCH_WORKER_NAME=openclaw-vm
 OPENCLAW_HEALTH_URL=http://127.0.0.1:<gateway-port>/health
 ```
 
-The bridge is intentionally text-only. It does not execute commands, control finance, access credentials, control a browser, or receive provider API keys.
+The bridge is intentionally not root-capable. It does not control finance, access credentials, receive provider API keys, send external messages, or use personal browser profiles.
 
-Approved read-only diagnostics are the only exception. The bridge can run fixed internal templates such as bridge status, recent bridge logs, OpenClaw Gateway health, Docker status, Tailscale status, and read-only repo status. It does not run raw command text supplied by Latch, and it does not use `sudo`, write files, install packages, restart services, or run shell pipelines.
+Approved read-only diagnostics are the only exception inside the bridge. The bridge can run fixed internal templates such as bridge status, recent bridge logs, OpenClaw Gateway health, Docker status, Tailscale status, and read-only repo status.
+
+Compass autonomy modes can auto-approve some approval cards before the worker sees them. `Auto review` can release low-risk read-only diagnostics and bounded exact-URL public research. `Full access` can release non-sensitive VM shell/browser plans and `CompassProjects` file updates for operator tasks and operator-managed Pro users. Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers still require a human.
+
+## Install The Approved Executor
+
+The executor is a separate root-owned service. It installs Playwright-managed Firefox and runs only approved `executionPlan` records with `executionMode` set to `shell` or `browser`.
+
+```bash
+cd /path/to/worker
+sudo bash install-latch-agent-executor.sh
+sudo nano /etc/latch-agent-executor.env
+sudo systemctl enable --now latch-agent-executor
+```
 
 Test once:
 
@@ -143,6 +158,48 @@ sudo systemctl restart latch-agent-bridge
 sudo systemctl stop latch-agent-bridge
 sudo systemctl disable latch-agent-bridge
 ```
+
+Latch executor:
+
+```bash
+sudo systemctl status latch-agent-executor
+sudo journalctl -u latch-agent-executor -f
+sudo systemctl restart latch-agent-executor
+sudo systemctl stop latch-agent-executor
+sudo systemctl disable latch-agent-executor
+```
+
+From the trusted Windows host, copy updated bridge/executor files to the VM:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Deploy-Bridge-To-VM.ps1 -VmHost "<openclaw-vm-tailscale-ip>"
+```
+
+For one-command deploy, activation, restart, and health checks:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Deploy-Worker-To-VM.ps1 `
+  -VmHost "<openclaw-vm-tailscale-ip>" `
+  -HostAddress "<windows-tailscale-ip>" `
+  -Activate `
+  -RunDoctor
+```
+
+The helper stages files under `~/latch-worker-next`, installs them with sudo when `-Activate` is set, restarts the affected services, verifies service status, and can run the local doctor. Use `-BridgeOnly`, `-ExecutorOnly`, or `-VerifyOnly` for narrower maintenance.
+
+If sudo asks for a password, add `-InteractiveSudo`. When Codex starts the deploy and you want a visible password prompt, use `-InteractiveWindow`; it opens a separate PowerShell window for SSH/sudo interaction. For fully unattended deploys, configure narrow passwordless sudo for these install and systemctl commands.
+
+When changes are ready to push and deploy together, use the wrapper from the trusted Windows host:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Push-And-Deploy.ps1 `
+  -VmHost "<openclaw-vm-tailscale-ip>" `
+  -HostAddress "<windows-tailscale-ip>" `
+  -InteractiveWindow
+```
+
+It runs `git push` first and deploys the worker only after the push succeeds.
+By default it refuses to deploy with uncommitted local changes, so the pushed code and deployed code stay aligned. Use `-AllowDirtyDeploy` only for an intentional hot deploy while testing.
 
 Read-only diagnostic templates exposed through Latch approvals:
 

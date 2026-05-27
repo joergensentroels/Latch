@@ -21,7 +21,7 @@ args = argparse.Namespace(
 )
 
 channels = [
-    {"id": "compass", "label": "Compass"},
+    {"id": "compass", "label": "Companion"},
     {"id": "operations", "label": "Operations"},
     {"id": "research", "label": "Research"},
 ]
@@ -29,6 +29,32 @@ assert bridge.requested_latch_channel("Send a message in the operations channel"
 assert bridge.requested_latch_channel("Please reply to #research", channels) == "research"
 assert bridge.requested_latch_channel("Just answer normally", channels) == ""
 assert "Do not say you cannot write to Latch channels" in bridge.channel_briefing(channels, "operations")
+
+visible = bridge.clean_visible_report_text(
+    "compass <~ Latch bridge worker\nI'm the Latch bridge worker for your private OpenClaw setup and I coordinate with the latch-agent-executor service."
+)
+assert not visible.lower().startswith("compass:")
+assert "<~" not in visible
+assert "bridge worker" not in visible.lower()
+assert "openclaw" not in visible.lower()
+assert "latch-agent-executor" not in visible.lower()
+
+tool_call_visible = bridge.clean_visible_report_text(
+    'COMPANION <|tool_call_argument_begin|> {"channel": "compass", "message": "compass:\\nI am a bridge worker."}'
+)
+assert "<|tool_call" not in tool_call_visible
+assert not tool_call_visible.lower().startswith("compass:")
+assert "bridge worker" not in tool_call_visible.lower()
+
+self_description = bridge.companion_self_description({
+    "name": "Compass the 1st",
+    "purpose": "Help the user become more aligned with the person they genuinely want to become.",
+    "goals": "- Reduce overwhelm\n- Support sustainable progress",
+    "communicationStyle": "Calm, reflective, thoughtful, and concise.",
+})
+assert "Compass the 1st" in self_description
+assert "bridge" not in self_description.lower()
+assert "executor" not in self_description.lower()
 
 
 known = bridge.command_template("bridge.status", args)
@@ -85,6 +111,34 @@ assert research.allowed_domains == ("example.com",)
 assert research.seed_urls == ("https://example.com/docs",)
 assert research.max_pages == 5
 assert research.token_budget == 3000
+
+open_search = bridge.detect_approval_need(
+    "Inbox instruction",
+    "Can you Google Troels Anker Jørgensen working at PDC a/s and write down in your context what you learn about me?",
+)
+assert open_search.type == "command"
+assert open_search.execution_mode == "browser"
+assert open_search.execution_plan["actions"][0]["type"] == "search_web"
+assert "Troels Anker" in open_search.execution_plan["actions"][0]["text"]
+
+browser_install = bridge.detect_approval_need(
+    "Download Firefox",
+    "Please download Firefox onto the VM.",
+)
+assert browser_install.type == "command"
+
+whoami = bridge.detect_approval_need(
+    "Run whoami",
+    "Run whoami on the OpenClaw VM.",
+)
+assert whoami.type == "command"
+assert whoami.title == "VM execution approval needed"
+
+capability_note = bridge.detect_approval_need(
+    "Inbox instruction",
+    "You should be able to use firefox and playwright without having to ask for approval first.",
+)
+assert capability_note is None
 
 bridge.validate_research_url("https://93.184.216.34/docs", ["93.184.216.34"])
 

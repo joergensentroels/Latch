@@ -1,0 +1,16 @@
+[Unit]
+Description=Latch approved VM executor for OpenClaw worker
+After=network-online.target latch-agent-bridge.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/latch-agent-executor.env
+ExecStart=/opt/latch-agent-executor/bin/python /usr/local/bin/latch-agent-executor.py --state-path /var/lib/latch-agent-executor/state.json
+Restart=always
+RestartSec=10
+StateDirectory=latch-agent-executor
+WorkingDirectory=/var/lib/latch-agent-executor/work
+
+[Install]
+WantedBy=multi-user.target

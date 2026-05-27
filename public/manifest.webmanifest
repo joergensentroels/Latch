@@ -1,7 +1,7 @@
 {
-  "name": "Latch",
-  "short_name": "Latch",
-  "description": "Private operator gateway for agent tasks, approvals, model calls, and status.",
+  "name": "Compass",
+  "short_name": "Compass",
+  "description": "Private companion app powered by Latch approvals, routing, and agent infrastructure.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -36,7 +36,7 @@
     },
     {
       "name": "Approvals",
-      "url": "/?tab=approvals"
+      "url": "/?tab=review"
     }
   ]
 }

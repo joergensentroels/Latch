@@ -47,6 +47,14 @@ data/notifications.json
 
 Agents should not receive notification provider tokens. Latch should send phone alerts on the operator's behalf.
 
+GitHub repository-creation tokens live in:
+
+```text
+data/github.json
+```
+
+or in trusted-host environment variables such as `GITHUB_TOKEN`. The OpenClaw worker should never receive the GitHub token. It can request a `github_file` approval for an existing repository or a broader `github_repo` approval for repository creation; after operator approval, or Full access auto-approval for the configured `CompassProjects` repo, the trusted Latch host performs the GitHub action and returns only the URL/name to the worker.
+
 Operator-provided context lives in:
 
 ```text
@@ -82,15 +90,19 @@ To rotate keys:
 
 ## Current Bridge Safety
 
-`worker/latch-agent-bridge.py` does not execute tasks. It only:
+`worker/latch-agent-bridge.py` does not execute shell/browser plans directly. It:
 
 - connects to Latch
 - polls queued work
-- sends safe text-only prompts through the Latch LLM gateway
+- sends bounded prompts through the Latch LLM gateway
 - uses explicitly shared context as a briefing
-- creates approval cards for risky actions and context questions
+- creates approval cards, context questions, and exact VM execution plans
 
-Execution should be added only after approval handling and command allowlists are designed.
+Execution is split into a separate `latch-agent-executor` service. The bridge remains a planning/reporting process; the executor polls approved non-sensitive command approvals with `executionMode` set to `shell` or `browser`, runs the exact stored plan once, and records an execution audit.
+
+Full access auto-approval applies only to operator tasks and operator-managed Pro users. Standard signed-in users remain approval-limited. Non-sensitive `CompassProjects` file updates may auto-commit through the trusted host connector. Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers still require a human even in Full access.
+
+Shell plans run on the OpenClaw VM through `bash -lc` with a timeout and audit logs. Browser plans use Playwright-managed Firefox in a headless isolated profile under `/var/lib/latch-agent-executor/browser`.
 
 ## External LLM Gateway
 
@@ -112,7 +124,11 @@ See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) and [MAILBOX-BROWSER.md](./MAILBO
 
 ## Web Research
 
-Agents should not scrape broadly or browse without exact URLs, allowed domains, a page budget, and a token budget. Latch supports `web_research` approval records for bounded research scopes. After approval, the bridge may fetch exact approved public URLs and report compact source notes. It does not search, crawl, log in, download files, or fetch localhost/private network targets.
+Agents should not scrape broadly or browse without a reviewed plan. Latch supports `web_research` approval records for bounded source-note research and `browser` execution plans for Full access operator/Pro workflows. Browser downloads are audited and are not automatically opened or executed.
+
+## GitHub Repository Creation
+
+GitHub repository updates are host-side connectors, not VM credentials. Keep the GitHub token narrow, rotate it if exposed, and prefer a fine-grained token scoped to one existing repository with `Contents: read/write`. Repo creation always stays on the human-boundary approval path. File updates to the configured `CompassProjects` repo may auto-commit in Full access for operator or Pro-user sources; file updates to other repositories still require human review.
 
 ## Phone Install
 

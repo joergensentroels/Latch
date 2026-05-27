@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101828">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="Latch">
+    <meta name="apple-mobile-web-app-title" content="Compass">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Latch</title>
+    <title>Compass</title>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/icons/icon.svg">
@@ -20,14 +20,15 @@
           <div class="brand-lockup">
             <img src="/icons/icon.svg" alt="" class="brand-mark">
             <div>
-              <p class="eyebrow">Private Agent Gateway</p>
-              <h1>Latch</h1>
+              <p class="eyebrow">powered by Latch</p>
+              <h1>Compass</h1>
             </div>
           </div>
           <form id="loginForm" class="login-form">
+            <input class="credential-username" type="text" name="username" value="compass-operator" autocomplete="username" aria-hidden="true" tabindex="-1" readonly>
             <label for="tokenInput">Operator key</label>
             <div class="password-field">
-              <input id="tokenInput" name="token" type="password" autocomplete="current-password" required>
+              <input id="tokenInput" name="password" type="password" autocomplete="current-password" required>
               <button id="toggleTokenVisibility" class="field-icon-button" type="button" aria-label="Show operator key" title="Show operator key">
                 <svg aria-hidden="true" viewBox="0 0 24 24">
                   <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path>
@@ -36,7 +37,9 @@
               </button>
             </div>
             <button type="submit">Unlock</button>
+            <p id="loginStatus" class="form-status" aria-live="polite"></p>
           </form>
+          <button id="devUserButton" class="secondary-button login-alt-button" type="button">Continue as local user</button>
         </div>
       </section>
 
@@ -45,23 +48,11 @@
           <div class="brand-lockup">
             <img src="/icons/icon.svg" alt="" class="brand-mark compact">
             <div>
-              <p class="eyebrow">Private Agent Gateway</p>
-              <h1>Latch</h1>
+              <p class="eyebrow">powered by Latch</p>
+              <h1>Compass</h1>
             </div>
           </div>
           <div class="topbar-actions">
-            <button id="installButton" class="icon-button hidden" title="Install app" aria-label="Install app">
-              <span aria-hidden="true">+</span>
-            </button>
-            <button id="notifyButton" class="icon-button" title="Enable notifications" aria-label="Enable notifications">
-              <span aria-hidden="true">!</span>
-            </button>
-            <button id="refreshButton" class="icon-button" title="Refresh" aria-label="Refresh">
-              <span aria-hidden="true">R</span>
-            </button>
-            <button id="appLockButton" class="icon-button" title="App PIN lock" aria-label="App PIN lock">
-              <span aria-hidden="true">P</span>
-            </button>
             <button id="lockButton" class="icon-button" title="Lock" aria-label="Lock">
               <span aria-hidden="true">L</span>
             </button>
@@ -74,12 +65,13 @@
             <span id="connectionText">Checking</span>
           </div>
           <div id="pendingSummary">0 approvals - 0 tasks</div>
+          <div id="creditSummary" class="credit-summary">0 credits</div>
         </section>
 
         <section id="routeWarning" class="route-warning hidden" aria-live="polite">
           <div>
             <strong>Not on a Tailscale route</strong>
-            <p>Use the Tailscale IP or private HTTPS Tailscale Serve URL when opening Latch from your phone.</p>
+            <p>Use the Tailscale IP or private HTTPS Tailscale Serve URL when opening Compass from your phone.</p>
           </div>
         </section>
 
@@ -106,8 +98,17 @@
               <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"></path>
               <path d="m9 12 2 2 4-4"></path>
             </svg>
-            <span>Approvals</span>
+            <span>Review</span>
           </button>
+          <button class="tab tab-more" id="moreTabsButton" type="button" aria-expanded="false" aria-controls="tabsMoreMenu">
+            <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+              <circle cx="5" cy="12" r="1.5"></circle>
+              <circle cx="12" cy="12" r="1.5"></circle>
+              <circle cx="19" cy="12" r="1.5"></circle>
+            </svg>
+            <span>More</span>
+          </button>
+          <div class="tabs-more-menu hidden" id="tabsMoreMenu" role="menu" aria-label="More views"></div>
           <button class="tab" data-tab="context">
             <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
               <path d="M12 7v14"></path>
@@ -117,18 +118,39 @@
             </svg>
             <span>Context</span>
           </button>
-          <button class="tab" data-tab="timeline">
+          <button class="tab pro-only" data-tab="timeline">
             <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
               <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"></path>
             </svg>
             <span>Timeline</span>
           </button>
+          <button class="tab" data-tab="settings">
+            <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.73l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.73v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <span>Settings</span>
+          </button>
+          <button class="tab" data-tab="credits">
+            <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="8"></circle>
+              <path d="M9.5 9.5c.7-.7 1.5-1 2.5-1 1.7 0 3 1 3 2.5s-1.3 2.5-3 2.5c-1 0-1.8.3-2.5 1"></path>
+              <path d="M12 6.5v11"></path>
+            </svg>
+            <span>Credits</span>
+          </button>
         </nav>
 
         <section id="inboxPanel" class="panel">
           <div class="chat-shell">
-            <aside class="channel-rail" aria-label="Inbox channels">
-              <div class="channel-heading">Channels</div>
+            <aside class="channel-rail pro-only" aria-label="Inbox channels">
+              <div class="channel-bar">
+                <div class="channel-heading">Channels</div>
+                <label class="archive-toggle">
+                  <input id="showArchivedChannels" type="checkbox">
+                  <span>Archived</span>
+                </label>
+              </div>
               <div id="channelList" class="channel-list"></div>
               <form id="channelForm" class="channel-form" aria-label="Create channel">
                 <input id="channelName" type="text" maxlength="80" placeholder="New channel">
@@ -136,17 +158,23 @@
                 <button type="submit" title="Create channel" aria-label="Create channel">+</button>
               </form>
             </aside>
+            <div id="channelResizer" class="channel-resizer pro-only" role="separator" aria-label="Resize channel list" aria-orientation="vertical" tabindex="0"></div>
             <section class="chat-pane" aria-label="Conversation">
               <div class="chat-header">
                 <div>
-                  <p class="eyebrow" id="chatEyebrow">Compass</p>
-                  <h2 id="chatTitle" class="section-title">Conversation</h2>
+                  <p class="eyebrow" id="chatEyebrow">Companion</p>
+                  <h2 id="chatTitle" class="section-title">Direct chat with Compass Companion</h2>
                 </div>
                 <span id="chatCount" class="item-meta">0 messages</span>
               </div>
               <div id="messagesList" class="chat-list"></div>
               <form id="messageForm" class="composer chat-composer">
-                <textarea id="messageText" rows="1" placeholder="Message Compass"></textarea>
+                <select id="messageRouting" class="pro-only-inline" title="Compute routing" aria-label="Compute routing">
+                  <option value="auto">Auto</option>
+                  <option value="local">Local</option>
+                  <option value="network">Allow network</option>
+                </select>
+                <textarea id="messageText" rows="1" placeholder="Message Compass Companion"></textarea>
                 <button type="submit">Send</button>
               </form>
             </section>
@@ -156,17 +184,22 @@
         <section id="tasksPanel" class="panel hidden">
           <form id="taskForm" class="task-form">
             <div>
-              <p class="eyebrow">Agent Brief</p>
+              <p id="taskBriefEyebrow" class="eyebrow">Companion Brief</p>
               <h2 class="section-title">Queue Work</h2>
             </div>
-            <label for="taskTitle">Task</label>
-            <textarea id="taskTitle" class="task-brief" rows="3" placeholder="What should the agent accomplish?"></textarea>
+            <label id="taskTitleLabel" for="taskTitle">Compass Companion</label>
+            <textarea id="taskTitle" class="task-brief" rows="3" placeholder="What should Compass Companion accomplish?"></textarea>
             <details id="taskInstructionDetails" class="optional-instructions">
               <summary>Add instructions</summary>
               <label for="taskDetails">Instructions</label>
               <textarea id="taskDetails" rows="3" placeholder="Tools to use, files to avoid, style preferences, or how to verify it"></textarea>
             </details>
             <div class="form-row">
+              <select id="taskRouting" class="pro-only-inline" title="Compute routing" aria-label="Compute routing">
+                <option value="auto">Auto</option>
+                <option value="local">Local</option>
+                <option value="network">Allow network</option>
+              </select>
               <select id="taskPriority">
                 <option value="normal">Normal</option>
                 <option value="high">High</option>
@@ -185,11 +218,18 @@
         </section>
 
         <section id="approvalsPanel" class="panel hidden">
+          <div class="panel-toolbar">
+            <div class="segmented-control" aria-label="Approval filter">
+              <button class="segment active" type="button" data-approval-filter="pending">Pending</button>
+              <button class="segment" type="button" data-approval-filter="all">All</button>
+            </div>
+          </div>
+          <div id="approvalsList" class="list"></div>
           <form id="contactDraftForm" class="context-form contact-draft-form">
             <div class="panel-toolbar split-toolbar">
               <div>
-                <p class="eyebrow">External Contact</p>
-                <h2 class="section-title">Draft Contact</h2>
+                <p class="eyebrow">Manual Contact</p>
+                <h2 class="section-title">Create Contact Approval</h2>
               </div>
             </div>
             <div class="form-row">
@@ -209,15 +249,8 @@
             <label for="contactAttachments">Attachments list</label>
             <input id="contactAttachments" type="text" placeholder="Optional names only, comma separated">
             <p id="contactDraftStatus" class="form-status" aria-live="polite"></p>
-            <button type="submit">Create Draft Approval</button>
+            <button type="submit">Create Review Card</button>
           </form>
-          <div class="panel-toolbar">
-            <div class="segmented-control" aria-label="Approval filter">
-              <button class="segment active" type="button" data-approval-filter="pending">Pending</button>
-              <button class="segment" type="button" data-approval-filter="all">All</button>
-            </div>
-          </div>
-          <div id="approvalsList" class="list"></div>
         </section>
 
         <section id="contextPanel" class="panel hidden">
@@ -228,7 +261,7 @@
             </div>
             <div class="segmented-control" aria-label="Context view">
               <button class="segment active" type="button" data-context-view="context">Context</button>
-              <button class="segment" type="button" data-context-view="profile">Profile</button>
+              <button class="segment pro-only" type="button" data-context-view="profile">Profile</button>
             </div>
           </div>
 
@@ -258,7 +291,11 @@
               <textarea id="contextText" rows="9" placeholder="Notes, goals, boundaries, preferences" autocomplete="off"></textarea>
               <label class="check-row">
                 <input id="contextShare" type="checkbox" checked>
-                <span>Share with worker</span>
+                <span>Use in Compass</span>
+              </label>
+              <label class="check-row pro-only">
+                <input id="contextNetworkShare" type="checkbox">
+                <span>Share with network compute</span>
               </label>
               <p id="contextNoteStatus" class="form-status" aria-live="polite"></p>
               <button type="submit">Save Note</button>
@@ -287,11 +324,15 @@
                   </label>
                 </div>
                 <label class="check-row">
-                  <input id="contextFileShare" type="checkbox">
-                  <span>Share text contents with worker</span>
-                </label>
-                <p id="contextFileStatus" class="form-status" aria-live="polite"></p>
-                <button type="submit">Upload</button>
+                <input id="contextFileShare" type="checkbox">
+                <span>Use text contents in Compass</span>
+              </label>
+              <label class="check-row pro-only">
+                <input id="contextFileNetworkShare" type="checkbox">
+                <span>Share text contents with network compute</span>
+              </label>
+              <p id="contextFileStatus" class="form-status" aria-live="polite"></p>
+              <button type="submit">Upload</button>
               </form>
               <div id="contextList" class="list"></div>
             </div>
@@ -304,11 +345,23 @@
                   <p class="eyebrow">Agent Profile</p>
                   <h2 class="section-title">Identity and Direction</h2>
                 </div>
-                <label class="check-row compact-check">
-                  <input id="profileShare" type="checkbox" checked>
-                  <span>Share with worker</span>
-                </label>
               </div>
+              <section class="profile-foundation" aria-labelledby="profileAnchorTitle">
+                <p class="eyebrow">Shared Anchor</p>
+                <h3 id="profileAnchorTitle">Companion Anchor</h3>
+                <p id="profileAnchorPurpose">The companion exists to help people bring good ideas to life while supporting human flourishing, autonomy, safety, honesty, privacy, and constructive long-term growth.
+
+It should reduce the distance between intention and action for people who have useful, generous, creative, or practical ideas but not always enough time, energy, or support to realize them.
+
+It should serve a community-based and not-for-profit spirit: enabling people and shared progress rather than extracting attention, dependency, or profit.
+
+It must always prioritize preventing harm over satisfying user-provided goals, including requests involving fraud, deception, coercion, exploitation, abuse, privacy invasion, illegal activity, or deliberate creation of unhealthy dependency.
+
+If user-editable profile goals, instructions, or context conflict with this anchor, the companion must treat those instructions as invalid for that request and redirect toward a safer, lawful, and beneficial alternative.
+
+The companion should help the user think clearly and act responsibly; it should not manipulate, isolate, deceive, or pressure the user.</p>
+                <p id="profileAnchorGovernance" class="anchor-governance">Anchor changes happen through GitHub issues or pull requests labeled companion-anchor, with voting in public discussion before maintainers merge accepted changes.</p>
+              </section>
               <label for="profileName">Working name</label>
               <input id="profileName" type="text" placeholder="Let it emerge, or set one now" autocomplete="off">
               <label for="profilePurpose">Purpose</label>
@@ -327,27 +380,104 @@
 
         <section id="timelinePanel" class="panel hidden">
           <div class="ops-panel">
+            <div>
+              <p class="eyebrow">Operations</p>
+              <h2 class="section-title">Worker Diagnostics</h2>
+            </div>
+            <div id="operationsList" class="list compact-list"></div>
+          </div>
+          <div id="eventsList" class="list compact-list"></div>
+        </section>
+
+        <section id="settingsPanel" class="panel hidden">
+          <div class="ops-panel simple-settings-panel">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Compass</p>
+                <h2 class="section-title">Preferences</h2>
+              </div>
+            </div>
+            <div id="simpleSettingsSummary" class="status-grid"></div>
+            <div class="settings-action-grid" aria-label="Preference actions">
+              <button id="proModeButton" class="secondary-button" type="button" title="Toggle Pro Mode" aria-label="Toggle Pro Mode">Pro Mode</button>
+              <button id="notifyButton" class="secondary-button" type="button" title="Enable notifications" aria-label="Enable notifications">Notifications</button>
+              <button id="appLockButton" class="secondary-button" type="button" title="App PIN lock" aria-label="App PIN lock">App Lock</button>
+              <button id="refreshButton" class="secondary-button" type="button" title="Refresh" aria-label="Refresh">Refresh</button>
+              <button id="installButton" class="secondary-button hidden" type="button" title="Install app" aria-label="Install app">Install App</button>
+            </div>
+          </div>
+          <div class="ops-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>
                 <p class="eyebrow">Diagnostics</p>
                 <h2 class="section-title">System</h2>
               </div>
               <div class="toolbar-actions">
+                <button id="doctorRunButton" class="secondary-button" type="button">Run Doctor</button>
                 <button id="backupButton" class="secondary-button" type="button">Backup</button>
                 <button id="exportContextButton" class="secondary-button" type="button">Export Context</button>
               </div>
             </div>
             <p id="backupStatus" class="form-status" aria-live="polite"></p>
+            <p id="doctorStatus" class="form-status" aria-live="polite"></p>
           </div>
-          <div id="diagnosticsGrid" class="status-grid"></div>
-          <div class="ops-panel">
+          <div id="diagnosticsGrid" class="status-grid pro-only"></div>
+          <div id="doctorGrid" class="status-grid pro-only"></div>
+          <form id="autonomyForm" class="ops-panel autonomy-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Autonomy</p>
+                <h2 class="section-title">Review Policy</h2>
+              </div>
+            </div>
+            <div class="form-row autonomy-row">
+              <label for="autonomyMode">
+                Mode
+                <select id="autonomyMode">
+                  <option value="default_permissions">Default permissions</option>
+                  <option value="auto_review">Auto review</option>
+                  <option value="full_access">Full access</option>
+                </select>
+              </label>
+              <div id="autonomySummary" class="approval-summary"></div>
+            </div>
+            <p id="autonomyStatus" class="form-status" aria-live="polite"></p>
+          </form>
+          <div class="ops-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Latch Network</p>
+                <h2 class="section-title">Private Compute</h2>
+              </div>
+            </div>
+            <form id="networkInviteForm" class="network-invite-form">
+              <input id="networkWorkerName" type="text" maxlength="120" placeholder="Worker name">
+              <select id="networkWorkerBackend" title="Worker backend" aria-label="Worker backend">
+                <option value="openai-compatible">OpenAI-compatible</option>
+                <option value="ollama">Ollama</option>
+              </select>
+              <input id="networkWorkerModels" type="text" maxlength="300" placeholder="models, comma separated">
+              <button type="submit">Create Invite</button>
+            </form>
+            <p id="networkInviteStatus" class="form-status" aria-live="polite"></p>
+            <div id="networkGrid" class="status-grid"></div>
+            <div id="networkList" class="list compact-list"></div>
+          </div>
+          <div class="ops-panel pro-only">
             <div>
               <p class="eyebrow">Compass</p>
               <h2 class="section-title">Capabilities</h2>
             </div>
             <div id="capabilityGrid" class="capability-grid"></div>
           </div>
-          <div class="ops-panel">
+          <div class="ops-panel pro-only">
+            <div>
+              <p class="eyebrow">Users</p>
+              <h2 class="section-title">Pro Access</h2>
+            </div>
+            <div id="userTierList" class="list compact-list"></div>
+          </div>
+          <div class="ops-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>
                 <p class="eyebrow">Acceptance</p>
@@ -362,38 +492,51 @@
             </div>
             <p id="testConsoleStatus" class="form-status" aria-live="polite"></p>
           </div>
-          <div class="ops-panel">
-            <div>
-              <p class="eyebrow">Operations</p>
-              <h2 class="section-title">Worker Diagnostics</h2>
-            </div>
-            <div id="operationsList" class="list compact-list"></div>
-          </div>
-          <div id="securityChecklist" class="security-checklist"></div>
-          <div class="ops-panel">
+          <div id="securityChecklist" class="security-checklist pro-only"></div>
+          <div class="ops-panel pro-only">
             <div>
               <p class="eyebrow">Archived</p>
               <h2 class="section-title">Review or Delete</h2>
             </div>
-            <div id="archivesList" class="list compact-list"></div>
+          <div id="archivesList" class="list compact-list"></div>
           </div>
-          <div id="eventsList" class="list compact-list"></div>
+        </section>
+
+        <section id="creditsPanel" class="panel hidden">
+          <div class="ops-panel">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Credits</p>
+                <h2 class="section-title">Compute Balance</h2>
+              </div>
+            </div>
+            <div id="creditsGrid" class="status-grid"></div>
+          </div>
+          <form id="purchaseForm" class="context-form">
+            <label for="purchaseCredits">Credits to add</label>
+            <input id="purchaseCredits" type="number" min="1" step="1" value="1000">
+            <label for="purchaseNote">Note</label>
+            <input id="purchaseNote" type="text" maxlength="160" placeholder="Manual top-up request">
+            <p id="purchaseStatus" class="form-status" aria-live="polite"></p>
+            <button type="submit">Request Credits</button>
+          </form>
+          <div id="creditsList" class="list compact-list"></div>
         </section>
       </section>
 
       <section id="pinDialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pinDialogTitle">
-        <form id="pinForm" class="dialog-panel">
+        <form id="pinForm" class="dialog-panel" autocomplete="off">
           <div class="dialog-header">
             <div>
               <p class="eyebrow" id="pinDialogEyebrow">App Lock</p>
-              <h2 id="pinDialogTitle">Unlock Latch</h2>
+              <h2 id="pinDialogTitle">Unlock Compass</h2>
             </div>
           </div>
           <p id="pinHelp" class="item-body"></p>
           <label for="pinInput">PIN</label>
-          <input id="pinInput" type="password" inputmode="numeric" autocomplete="current-password" minlength="4" maxlength="12">
+          <input id="pinInput" class="pin-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" minlength="4" maxlength="12">
           <label id="pinConfirmLabel" for="pinConfirmInput" class="hidden">Confirm PIN</label>
-          <input id="pinConfirmInput" class="hidden" type="password" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="12">
+          <input id="pinConfirmInput" class="pin-code-input hidden" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]*" minlength="4" maxlength="12">
           <p id="pinStatus" class="form-status" aria-live="polite"></p>
           <div class="dialog-actions">
             <button id="passkeyButton" class="secondary-button hidden" type="button">Use Passkey</button>
@@ -415,7 +558,7 @@
             </button>
           </div>
           <p id="approvalDialogSummary" class="item-body"></p>
-          <label for="approvalDecisionNote">Operator note</label>
+          <label for="approvalDecisionNote">Review note</label>
           <textarea id="approvalDecisionNote" rows="4" placeholder="Optional note or result for the agent"></textarea>
           <div class="dialog-actions">
             <button id="approvalDecisionCancel" class="secondary-button" type="button">Cancel</button>

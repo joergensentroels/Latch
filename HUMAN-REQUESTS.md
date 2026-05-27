@@ -9,7 +9,17 @@ Agents can request human presence.
 Agents should not borrow human identity.
 ```
 
-The default VM bridge also creates approval requests automatically when a task or inbox instruction appears to need a command, credential, account setup, human verification, or purchase. Approval records are a control surface, not permission for the current text-only bridge to execute the action.
+The default VM bridge creates approval requests automatically when a task or inbox instruction appears to need a command, browser action, credential, account setup, human verification, or purchase. Approval records are the control surface. Non-sensitive shell/browser approvals may be executed by the separate `latch-agent-executor` service; sensitive human-boundary actions are never delegated to the executor.
+
+## Autonomy Modes
+
+Operators can choose an autonomy mode in Compass:
+
+- `Default permissions`: every approval card waits for the operator.
+- `Auto review`: low-risk fixed read-only diagnostics and tightly bounded public URL research can be approved by policy.
+- `Full access`: non-sensitive VM shell/browser execution plans and `CompassProjects` file updates for the operator and operator-managed Pro users can be approved by policy.
+
+Credentials, purchases, external contact, account setup, GitHub repo creation, human verification, and context questions remain human-boundary requests in every mode.
 
 ## Request Shape
 
@@ -43,6 +53,6 @@ Content-Type: application/json
 - `approved`: human step is complete or permission is granted.
 - `denied`: operator declined or could not complete it.
 
-In the current safe text-only mode, approving a request records the decision and notifies the agent bridge, but it does not execute commands, use credentials, or perform purchases.
+Approving a shell/browser execution plan lets the separate VM executor run the exact approved plan and record an audit result. Approving credentials, purchases, account setup, external contact, human verification, or context questions records a human decision only; those categories are not executed by the bridge or executor.
 
 For non-sensitive approvals with an operator note, the bridge may use the note to draft a follow-up answer through the LLM gateway. Sensitive approval notes are not forwarded to the external LLM.

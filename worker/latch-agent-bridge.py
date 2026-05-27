@@ -2,11 +2,12 @@
 """
 Safe Latch bridge for an OpenClaw worker VM.
 
-This script does not execute tasks. It only:
+This script does not execute shell/browser plans directly. It:
 - checks optional OpenClaw Gateway health
 - reports worker status to Latch
 - polls queued work, inbox instructions, and pending approvals
 - answers tasks/instructions through Latch's external LLM gateway
+- creates approval-backed shell/browser plans for the separate executor service
 - records seen IDs locally so it does not spam repeated reports
 """
 
@@ -27,21 +28,24 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
 DEFAULT_STATE_PATH = Path.home() / ".local" / "state" / "latch-agent-bridge" / "state.json"
 DEFAULT_SOURCE_CACHE_PATH = Path.home() / ".cache" / "latch-agent-bridge" / "source-notes.json"
-SYSTEM_PROMPT = """You are the text-only Latch worker for a private OpenClaw setup.
+DEFAULT_CODE_REPO = "CompassProjects"
+SYSTEM_PROMPT = """You are the user's companion inside Compass.
+Your visible identity is the companion identity from the shared profile: name, purpose, goals, boundaries, and communication style. If no name is configured, use Compass Companion.
+When the user asks who you are, what your goals are, or what your purpose is, answer from the companion profile and anchor only. Do not describe backend architecture, worker processes, routing, approvals, VMs, products, or services as your identity.
+Implementation details are silent tools, not personality. Do not mention backend names, bridge/worker labels, VM setup, executor services, routing, or internal channels unless the user explicitly asks about technical implementation or diagnostics.
 You may help with planning, explanation, coding advice, and next-step suggestions.
-You may reply into Latch's own internal channels when the operator asks; the bridge will route your reply.
-Internal Latch channel replies are not external messaging.
-You cannot run shell commands, browse, scrape websites, send emails or external messages, use credentials, create accounts, make purchases, access payment tools, or perform actions outside Latch.
-If a request needs a real-world action, outbound contact, web research, credential, purchase, account setup, CAPTCHA, or command execution, say what you would need and ask the operator to approve or perform that step manually.
-For any future web/research workflow, prefer token-efficient summaries, narrow source lists, small page budgets, and reusable source notes instead of dumping raw pages.
+You may use policy-gated shell/browser execution plans, bounded exact-URL research, and trusted-host GitHub actions when the request calls for them. Mention these only as capabilities relevant to a concrete task, never as self-description.
+For code, file, README, or repository-content updates, assume the target repository is CompassProjects unless the operator explicitly names another repository.
+You must not handle private credentials, passwords, API keys, recovery codes, payment tools, purchases, account creation, CAPTCHA/human verification, personal browser profiles, or sending emails/external messages. If a workflow needs a private login or secret, stop and ask the human to handle that step without revealing the secret to you.
+For web/research/execution workflows, prefer token-efficient summaries, explicit source lists, small budgets, exact planned steps, and reusable source notes instead of dumping raw pages.
 If you need durable context from the operator before giving a good answer, include one to three lines that start exactly with CONTEXT_QUESTION: followed by a concrete question.
-Keep replies concise and practical."""
+Keep replies concise, practical, and in the companion's voice."""
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,7 @@ class ApprovalNeed:
     action_preview: str = ""
     rendered_commands: tuple[str, ...] = ()
     execution_mode: str = "none"
+    execution_plan: dict | None = None
     recipient: str = ""
     subject: str = ""
     contact_purpose: str = ""
@@ -69,6 +74,14 @@ class ApprovalNeed:
     token_budget: int = 0
     research_question: str = ""
     refresh_research: bool = False
+    github_repo_name: str = ""
+    github_description: str = ""
+    github_visibility: str = "private"
+    github_owner: str = ""
+    github_auto_init: bool = True
+    github_file_path: str = ""
+    github_file_content: str = ""
+    github_commit_message: str = ""
 
 
 READ_ONLY_TEMPLATE_LABELS = {
@@ -87,7 +100,7 @@ RISK_RULES = [
         ("buy", "purchase", "order", "checkout", "payment", "pay ", "invoice", "subscribe", "subscription"),
         "Purchase approval needed",
         "The request appears to involve payment, purchase, checkout, subscription, or spending.",
-        "Approve only after reviewing cost, vendor, and exact action. The text-only bridge will not perform the purchase.",
+        "Approve only after reviewing cost, vendor, and exact action. Purchases remain human-boundary steps and are not delegated to the executor.",
         True,
     ),
     (
@@ -116,17 +129,17 @@ RISK_RULES = [
     ),
     (
         "command",
-        ("run command", "execute", "powershell", "terminal", "shell", "sudo", "docker", "systemctl", "ssh ", "scp ", "install "),
+        ("run command", "execute", "powershell", "terminal", "shell", "sudo", "docker", "systemctl", "ssh ", "scp ", "install ", "download", "firefox", "chromium", "playwright", "browser"),
         "Command approval needed",
         "The request appears to require executing a command or changing a system.",
-        "Review the command/action. Approval is recorded, but the text-only bridge will not execute it yet.",
+        "Review the exact shell/browser plan. If approved and non-sensitive, the separate executor service may run it and report an audit record.",
         False,
     ),
 ]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Safe text-only Latch bridge for OpenClaw workers.")
+    parser = argparse.ArgumentParser(description="Safe Latch planning bridge for OpenClaw workers.")
     parser.add_argument("--base-url", default=os.getenv("LATCH_BASE_URL", "").rstrip("/"))
     parser.add_argument("--agent-key", default=os.getenv("LATCH_AGENT_KEY", ""))
     parser.add_argument("--worker-name", default=os.getenv("LATCH_WORKER_NAME", socket.gethostname()))
@@ -150,7 +163,7 @@ def main() -> int:
         return 2
 
     bridge = Bridge(args)
-    bridge.report(f"{args.worker_name} bridge online. Mode: safe text-only assistant.")
+    bridge.report(f"{args.worker_name} bridge online. Mode: approval-gated bridge with optional VM executor.")
 
     while True:
         bridge.tick()
@@ -172,6 +185,7 @@ class Bridge:
             if gateway != last:
                 self.report(f"OpenClaw Gateway health changed: {gateway}")
                 self.state["lastGatewayStatus"] = gateway
+        self.heartbeat(gateway)
 
         payload = self.request_json("GET", "/api/agent/poll")
         if not payload:
@@ -181,11 +195,50 @@ class Bridge:
         messages = payload.get("messages", [])
         channels = payload.get("channels", [])
         context_items = payload.get("contextItems", [])
+        network_context_items = payload.get("networkContextItems", [])
         profile = payload.get("profile", {})
         self.process_approval_decisions(payload.get("approvals", []), tasks, messages, context_items, profile)
-        self.process_tasks(tasks, context_items, profile, channels)
-        self.process_messages(messages, context_items, profile, channels)
+        work = payload.get("work", [])
+        if work:
+            self.process_scoped_work(work, channels, profile)
+            self.save_state()
+            return
+        self.process_tasks(tasks, context_items, network_context_items, profile, channels)
+        self.process_messages(messages, context_items, network_context_items, profile, channels)
         self.save_state()
+
+    def heartbeat(self, gateway: str = "") -> None:
+        health = "ok" if gateway.startswith("ok ") or not gateway else "warn"
+        self.request_json(
+            "POST",
+            "/api/agent/heartbeat",
+            {
+                "id": self.args.worker_name.lower().replace(" ", "-") or "openclaw-vm",
+                "name": self.args.worker_name,
+                "kind": "openclaw",
+                "location": "self-hosted",
+                "status": "online",
+                "health": health,
+                "capabilities": {
+                    "bridge": True,
+                    "diagnostics": True,
+                    "executor": False,
+                    "browser": False,
+                    "shell": False,
+                    "downloads": False,
+                },
+                "lastAuditEvent": gateway,
+            },
+        )
+
+    def process_scoped_work(self, work: list[dict], channels: list[dict], fallback_profile: dict) -> None:
+        for item in work:
+            context_items = item.get("contextItems", [])
+            profile = item.get("profile") or fallback_profile
+            if item.get("kind") == "task" and item.get("task"):
+                self.process_tasks([item["task"]], context_items, context_items, profile, channels)
+            elif item.get("kind") == "message" and item.get("message"):
+                self.process_messages([item["message"]], context_items, context_items, profile, channels)
 
     def check_openclaw_gateway(self) -> str:
         url = self.args.openclaw_health_url
@@ -214,41 +267,52 @@ class Bridge:
         if changed:
             self.state[f"seen_{bucket}"] = sorted(seen)[-500:]
 
-    def process_tasks(self, tasks: list[dict], context_items: list[dict], profile: dict, channels: list[dict]) -> None:
+    def process_tasks(self, tasks: list[dict], context_items: list[dict], network_context_items: list[dict], profile: dict, channels: list[dict]) -> None:
         queued = [task for task in tasks if task.get("status") == "queued"]
         for task in queued[: max(0, self.args.max_tasks_per_tick)]:
             task_id = str(task.get("id", ""))
-            if not task_id or task_id in set(self.state.setdefault("processed_tasks", [])):
+            task_key = task_processing_key(task)
+            if not task_id or task_key in set(self.state.setdefault("processed_tasks", [])):
                 continue
             title = clean(task.get("title") or "Untitled task", 180)
             details = clean(task.get("details") or "", 6000)
-            response_channel = requested_latch_channel(f"{title}\n{details}", channels) or "compass"
+            response_channel = clean_channel_id(task.get("channel") or "") or requested_latch_channel(f"{title}\n{details}", channels) or "compass"
+            routing_preference = clean_routing(task.get("routingPreference"))
+            allow_network = bool(task.get("allowNetwork")) and routing_preference != "local"
+            briefing_items = network_context_items if allow_network else context_items
+            briefing_profile = {} if allow_network else profile
             try:
                 approval = detect_approval_need(title, details)
                 if approval:
+                    if approval.type == "command" and approval.execution_mode == "none":
+                        approval = self.plan_execution_approval(title, details, approval, routing_preference, allow_network)
                     approval = enrich_status_template(approval, self.args)
                     self.patch_task(task_id, "waiting", "Waiting for operator approval or human help.")
                     created = self.create_approval(approval, task_id=task_id)
                     suffix = f" ({created.get('id')})" if created else ""
                     self.report(f"Approval requested for task: {title}{suffix}", task_id)
-                    self.remember("processed_tasks", task_id)
+                    self.remember("processed_tasks", task_key)
                     continue
 
-                self.patch_task(task_id, "running", f"{self.args.worker_name} is drafting a text-only response.")
+                self.patch_task(task_id, "running", f"{self.args.worker_name} is drafting a response.")
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "system", "content": context_briefing(context_items, profile)},
+                        {"role": "system", "content": context_briefing(briefing_items, briefing_profile)},
                         {"role": "system", "content": channel_briefing(channels, response_channel)},
                         {
                             "role": "user",
                             "content": (
-                                "Handle this queued Latch task as a text-only assistant.\n\n"
+                                "Handle this queued Compass task in the companion voice from the shared profile. "
+                                "Do not mention bridge/worker/VM implementation details unless the task asks about them.\n\n"
                                 f"Title: {title}\n\n"
                                 f"Details:\n{details or '(no details)'}"
                             ),
                         },
-                    ]
+                    ],
+                    routing_preference=routing_preference,
+                    allow_network=allow_network,
+                    priority=clean(task.get("priority") or "normal", 20),
                 )
                 questions = extract_context_questions(answer)
                 if questions:
@@ -256,17 +320,17 @@ class Bridge:
                     suffix = f" ({created.get('id')})" if created else ""
                     self.report(f"Context question requested for task: {title}{suffix}", task_id)
                     self.patch_task(task_id, "waiting", "Waiting for operator context answer.")
-                    self.remember("processed_tasks", task_id)
+                    self.remember("processed_tasks", task_key)
                     continue
-                self.report(f"Task completed: {title}\n\n{answer}", task_id, response_channel)
+                self.report(clean_visible_report_text(answer), task_id, response_channel)
                 self.patch_task(task_id, "done", f"Text-only response posted to {response_channel}.")
-                self.remember("processed_tasks", task_id)
+                self.remember("processed_tasks", task_key)
             except Exception as exc:  # noqa: BLE001 - keep bridge alive and report failure
                 self.report(f"Task failed: {title}\n\n{exc}", task_id, response_channel)
                 self.patch_task(task_id, "failed", str(exc)[:1800])
-                self.remember("processed_tasks", task_id)
+                self.remember("processed_tasks", task_key)
 
-    def process_messages(self, messages: list[dict], context_items: list[dict], profile: dict, channels: list[dict]) -> None:
+    def process_messages(self, messages: list[dict], context_items: list[dict], network_context_items: list[dict], profile: dict, channels: list[dict]) -> None:
         operator_messages = [
             message for message in messages
             if message.get("direction") == "operator_to_agent" and message.get("text")
@@ -291,9 +355,20 @@ class Bridge:
             message_id = str(message.get("id", ""))
             text = clean(message.get("text") or "", 6000)
             response_channel = requested_latch_channel(text, channels) or clean_channel_id(message.get("channel") or "compass")
+            routing_preference = clean_routing(message.get("routingPreference"))
+            allow_network = bool(message.get("allowNetwork")) and routing_preference != "local"
+            briefing_items = network_context_items if allow_network else context_items
+            briefing_profile = {} if allow_network else profile
             try:
+                if is_self_description_request(text):
+                    self.report(companion_self_description(profile), message_id, response_channel)
+                    self.remember("processed_messages", message_id)
+                    continue
+
                 approval = detect_approval_need("Inbox instruction", text)
                 if approval:
+                    if approval.type == "command" and approval.execution_mode == "none":
+                        approval = self.plan_execution_approval("Inbox instruction", text, approval, routing_preference, allow_network)
                     approval = enrich_status_template(approval, self.args)
                     created = self.create_approval(approval, message_id=message_id)
                     suffix = f" ({created.get('id')})" if created else ""
@@ -304,16 +379,19 @@ class Bridge:
                 answer = self.ask_llm(
                     [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "system", "content": context_briefing(context_items, profile)},
+                        {"role": "system", "content": context_briefing(briefing_items, briefing_profile)},
                         {"role": "system", "content": channel_briefing(channels, response_channel)},
                         {
                             "role": "user",
                             "content": (
-                                "Reply to this Latch inbox instruction as a text-only assistant.\n\n"
+                                "Reply to this Compass inbox instruction in the companion voice from the shared profile. "
+                                "Do not mention bridge/worker/VM implementation details unless the instruction asks about them.\n\n"
                                 f"Instruction:\n{text}"
                             ),
                         },
-                    ]
+                    ],
+                    routing_preference=routing_preference,
+                    allow_network=allow_network,
                 )
                 questions = extract_context_questions(answer)
                 if questions:
@@ -322,13 +400,13 @@ class Bridge:
                     self.report(f"Context question requested for inbox instruction{suffix}.", message_id)
                     self.remember("processed_messages", message_id)
                     continue
-                self.report(f"Reply to inbox instruction:\n\n{answer}", message_id, response_channel)
+                self.report(clean_visible_report_text(answer), message_id, response_channel)
                 self.remember("processed_messages", message_id)
             except Exception as exc:  # noqa: BLE001 - keep bridge alive and avoid hot loops
                 self.report(f"Could not answer inbox instruction yet: {exc}", message_id, response_channel)
                 self.remember("processed_messages", message_id)
 
-    def ask_llm(self, messages: list[dict]) -> str:
+    def ask_llm(self, messages: list[dict], routing_preference: str = "local", allow_network: bool = False, priority: str = "normal") -> str:
         response = self.request_json(
             "POST",
             "/api/llm/chat",
@@ -336,6 +414,9 @@ class Bridge:
                 "messages": messages,
                 "temperature": 0.2,
                 "maxTokens": 700,
+                "routingPreference": routing_preference,
+                "allowNetwork": allow_network,
+                "priority": priority,
             },
         )
         if not response:
@@ -347,6 +428,67 @@ class Bridge:
         if not text:
             raise RuntimeError("Latch LLM gateway returned an empty response.")
         return text
+
+    def plan_execution_approval(
+        self,
+        title: str,
+        details: str,
+        approval: ApprovalNeed,
+        routing_preference: str,
+        allow_network: bool,
+    ) -> ApprovalNeed:
+        try:
+            raw = self.ask_llm(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return JSON only. Create a bounded VM execution plan for a private Ubuntu worker.\n"
+                            "Allowed modes: shell or browser. Use shell for installs, files, services, and CLI work. "
+                            "Use browser for web pages, screenshots, form steps, and downloads.\n"
+                            "Schema: {\"mode\":\"shell|browser\",\"summary\":\"...\",\"sensitive\":false,"
+                            "\"riskLevel\":\"low|medium|high\",\"timeoutSeconds\":300,"
+                            "\"commands\":[\"...\"],\"actions\":[{\"type\":\"open|extract_text|screenshot|click|fill|press|wait|download|search_web\","
+                            "\"url\":\"...\",\"selector\":\"...\",\"text\":\"...\",\"key\":\"...\",\"path\":\"...\",\"timeoutMs\":0,\"maxResults\":3}],"
+                            "\"expectedResult\":\"...\"}.\n"
+                            "Do not include passwords, tokens, payment actions, account creation, CAPTCHA bypass, or external contact."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Title: {title}\n\nRequest:\n{details or '(no details)'}",
+                    },
+                ],
+                routing_preference=routing_preference,
+                allow_network=allow_network,
+            )
+            plan = sanitize_execution_plan(json.loads(extract_json_object(raw)))
+        except Exception as exc:  # noqa: BLE001 - fall back to a manual approval
+            return replace(
+                approval,
+                details=f"{approval.details}\n\nPlanning failed, so the operator must decide manually: {exc}",
+            )
+
+        command_text = "\n".join(plan.get("commands", []))
+        action_preview = plan.get("summary") or "Run approved VM execution plan"
+        rendered = tuple(plan.get("commands", []))
+        return replace(
+            approval,
+            title="VM execution approval needed",
+            details=(
+                f"{approval.details}\n\n"
+                f"Plan summary: {plan.get('summary') or 'No summary'}\n"
+                f"Expected result: {plan.get('expectedResult') or 'Not specified'}"
+            ),
+            command=command_text,
+            expected_response=plan.get("expectedResult") or approval.expected_response,
+            sensitive=bool(plan.get("sensitive")) or approval.sensitive,
+            risk_level=plan.get("riskLevel") or approval.risk_level,
+            action_preview=action_preview,
+            rendered_commands=rendered,
+            execution_mode=plan.get("mode") or "shell",
+            execution_plan=plan,
+        )
 
     def create_approval(self, approval: ApprovalNeed, task_id: str = "", message_id: str = "") -> dict:
         response = self.request_json(
@@ -372,10 +514,19 @@ class Bridge:
                 "tokenBudget": approval.token_budget,
                 "researchQuestion": approval.research_question,
                 "refreshResearch": approval.refresh_research,
+                "githubRepoName": approval.github_repo_name,
+                "githubDescription": approval.github_description,
+                "githubVisibility": approval.github_visibility,
+                "githubOwner": approval.github_owner,
+                "githubAutoInit": approval.github_auto_init,
+                "githubFilePath": approval.github_file_path,
+                "githubFileContent": approval.github_file_content,
+                "githubCommitMessage": approval.github_commit_message,
                 "actionTemplate": approval.action_template,
                 "actionPreview": approval.action_preview,
                 "renderedCommands": list(approval.rendered_commands),
                 "executionMode": approval.execution_mode,
+                "executionPlan": approval.execution_plan or {},
                 "taskId": task_id,
                 "messageId": message_id,
             },
@@ -426,7 +577,8 @@ class Bridge:
             note = clean(approval.get("responseNote") or "", 1000)
             task_id = clean(approval.get("taskId") or approval.get("messageId") or approval_id, 120)
             if approval.get("taskId"):
-                self.remember("processed_tasks", str(approval.get("taskId")))
+                approval_task = tasks_by_id.get(str(approval.get("taskId")))
+                self.remember("processed_tasks", task_processing_key(approval_task or {"id": approval.get("taskId")}))
             if approval.get("messageId"):
                 self.remember("processed_messages", str(approval.get("messageId")))
             if status == "approved":
@@ -467,7 +619,7 @@ class Bridge:
                 self.state.setdefault("processed_tasks", [])
                 self.state["processed_tasks"] = [
                     item for item in self.state["processed_tasks"]
-                    if item != str(approval.get("taskId"))
+                    if item != str(approval.get("taskId")) and not item.startswith(f"{approval.get('taskId')}:")
                 ]
             return
 
@@ -488,14 +640,23 @@ class Bridge:
                 self.patch_task(task_id, status, f"Read-only diagnostic {result['template']} exited {result['exitCode']}.")
             return
 
+        if approval_type == "command" and approval.get("executionMode") in {"shell", "browser"}:
+            self.report(
+                f"Execution approved: {title}\n\nThe root executor service will run the approved {approval.get('executionMode')} plan and report an audit record.",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "running", "Approved execution is waiting for the VM executor service.")
+            return
+
         if approval_type in {"command", "purchase"}:
             self.report(
-                f"Approval recorded: {title}\n\nThe text-only bridge will not execute commands, make purchases, or handle secrets yet."
+                f"Approval recorded: {title}\n\nThe bridge will not execute this category directly. Non-sensitive shell/browser plans require the executor; purchases and secrets remain human-boundary steps."
                 f"{f' Operator note: {note}' if note else ''}",
                 task_id,
             )
             if approval.get("taskId"):
-                self.patch_task(task_id, "paused", "Approval recorded. Execution is not enabled in text-only mode.")
+                self.patch_task(task_id, "paused", "Approval recorded. No executor-compatible plan was available for this request.")
             return
 
         if approval_type == "external_contact":
@@ -515,6 +676,36 @@ class Bridge:
             if approval.get("taskId"):
                 status = "done" if result["status"] in {"completed", "partial"} else "failed"
                 self.patch_task(task_id, status, f"Read-only research {result['status']} with {result['pagesFetched']} fetched page(s).")
+            return
+
+        if approval_type == "github_repo":
+            repo_url = clean(approval.get("githubRepoUrl") or "", 500)
+            full_name = clean(approval.get("githubFullName") or approval.get("githubRepoName") or "", 200)
+            self.report(
+                f"GitHub repository approved: {title}\n\n"
+                f"Repository: {full_name or '(not reported)'}\n"
+                f"URL: {repo_url or '(not reported)'}\n\n"
+                "The GitHub token stayed on the trusted Latch host; the worker received only this result.",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "done", f"GitHub repository created: {repo_url or full_name}")
+            return
+
+        if approval_type == "github_file":
+            file_url = clean(approval.get("githubFileUrl") or "", 500)
+            repo = clean(approval.get("githubRepoName") or "", 200)
+            file_path = clean(approval.get("githubFilePath") or "", 300)
+            self.report(
+                f"GitHub file update approved: {title}\n\n"
+                f"Repository: {repo or '(not reported)'}\n"
+                f"Path: {file_path or '(not reported)'}\n"
+                f"URL: {file_url or '(not reported)'}\n\n"
+                "The GitHub token stayed on the trusted Latch host; the worker received only this result.",
+                task_id,
+            )
+            if approval.get("taskId"):
+                self.patch_task(task_id, "done", f"GitHub file updated: {file_url or file_path}")
             return
 
         if is_sensitive:
@@ -553,7 +744,7 @@ class Bridge:
                 },
             ]
         )
-        self.report(f"Follow-up after approval: {title}\n\n{answer}", task_id)
+        self.report(clean_visible_report_text(answer), task_id)
         if approval.get("taskId"):
             self.patch_task(task_id, "done", "Follow-up response posted after operator approval.")
 
@@ -566,7 +757,7 @@ class Bridge:
         self.state[bucket] = sorted(seen)[-500:]
 
     def report(self, text: str, task_id: str = "", channel: str = "") -> None:
-        body = {"text": text, "taskId": task_id}
+        body = {"text": clean_visible_report_text(text), "taskId": task_id}
         if channel:
             body["channel"] = clean_channel_id(channel)
         self.request_json("POST", "/api/agent/report", body)
@@ -624,7 +815,7 @@ class Bridge:
         data = None
         headers = {"Authorization": f"Bearer {self.args.agent_key}"}
         if body is not None:
-            data = json.dumps(body).encode("utf-8")
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
@@ -652,6 +843,86 @@ def clean(value: object, limit: int) -> str:
     return str(value or "").strip()[:limit]
 
 
+def clean_visible_report_text(value: object) -> str:
+    text = str(value or "").replace("\r\n", "\n").strip()
+    text = extract_tool_call_message(text)
+    previous = ""
+    while text and text != previous:
+        previous = text
+        text = re.sub(r"^Reply to inbox instruction:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?is)^compass\s*<~\s*[^\\n]+\n", "", text)
+        text = re.sub(r"^(?:COMPASS|COMPANION|OPERATIONS|RESEARCH|GENERAL|[A-Z0-9_-]+_CHANNEL)\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?i)\b(?:latch|openclaw)\s+bridge\s+worker\b", "Compass Companion", text)
+        text = re.sub(r"(?i)\bbridge\s+worker\b", "companion", text)
+        text = re.sub(r"(?i)\bprivate\s+openclaw\s+setup\b", "Compass setup", text)
+        text = re.sub(r"(?i)\b(?:latch|openclaw)\s+setup\b", "Compass setup", text)
+        text = re.sub(r"(?i)\b(?:latch\s+)?agent-executor\s+service\b", "executor", text)
+        text = re.sub(r"(?i)\btrusted\s+host\s+connector\b", "trusted connector", text)
+        text = re.sub(r"(?i)<\s*latch\s+bridge\s+worker\s*>\s*:?", "", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text.strip()
+    return text
+
+
+def extract_tool_call_message(text: str) -> str:
+    if "<|tool_call_argument_begin|>" not in text:
+        return text
+    match = re.search(r"<\|tool_call_argument_begin\|>\s*(\{.*\})\s*$", text, flags=re.DOTALL)
+    if not match:
+        return text.replace("<|tool_call_argument_begin|>", "").strip()
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return text.replace("<|tool_call_argument_begin|>", "").strip()
+    message = payload.get("message")
+    return str(message).strip() if message else text
+
+
+def is_self_description_request(text: str) -> bool:
+    lowered = text.lower()
+    phrases = (
+        "describe yourself",
+        "who are you",
+        "what are you",
+        "your goals",
+        "your goal",
+        "your purpose",
+        "what is your purpose",
+        "tell me about yourself",
+    )
+    return any(phrase in lowered for phrase in phrases)
+
+
+def companion_self_description(profile: dict | None) -> str:
+    profile = profile or {}
+    name = clean(profile.get("name") or "Compass Companion", 120)
+    purpose = clean(profile.get("purpose") or "", 900)
+    goals = clean(profile.get("goals") or "", 900)
+    style = clean(profile.get("communicationStyle") or "", 500)
+
+    lines = [f"I’m {name}."]
+    if purpose:
+        lines.append(f"My purpose is to {sentence_fragment(purpose)}")
+    else:
+        lines.append("My purpose is to help you think clearly, keep continuity over time, and turn good intentions into grounded next actions.")
+    if goals:
+        lines.append(f"My current goals are to {sentence_fragment(goals)}")
+    if style:
+        lines.append(f"I try to communicate in a way that is {sentence_fragment(style)}")
+    lines.append("The technical machinery behind me is just implementation; it is not my personality or purpose.")
+    return "\n\n".join(lines)
+
+
+def sentence_fragment(text: str) -> str:
+    cleaned = re.sub(r"^\s*[-*]\s*", "", text.strip())
+    cleaned = re.sub(r"\n+\s*[-*]\s*", "; ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return ""
+    cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+    return cleaned if cleaned.endswith((".", "!", "?")) else f"{cleaned}."
+
+
 def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     text = f"{title}\n{details}".lower()
     template_id = detect_status_template(text)
@@ -671,6 +942,18 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
             execution_mode="read_only_status",
         )
 
+    github_file = detect_github_file_request(title, details)
+    if github_file:
+        return github_file
+
+    github_repo = detect_github_repo_request(title, details)
+    if github_repo:
+        return github_repo
+
+    vm_execution = detect_vm_execution(title, details)
+    if vm_execution:
+        return vm_execution
+
     contact = detect_external_contact(title, details)
     if contact:
         return contact
@@ -682,6 +965,8 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     for approval_type, keywords, request_title, reason, expected, sensitive in RISK_RULES:
         matched = [keyword for keyword in keywords if keyword in text]
         if matched:
+            if approval_type == "command" and is_capability_policy_note(text):
+                continue
             command = extract_command(f"{title}\n{details}") if approval_type == "command" else ""
             if approval_type == "command" and is_generic_command_boundary(matched, command):
                 continue
@@ -694,6 +979,134 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
                 command=command,
             )
     return None
+
+
+def detect_github_repo_request(title: str, details: str) -> ApprovalNeed | None:
+    raw = clean(f"{title}\n{details}", 2500)
+    text = raw.lower()
+    phrases = (
+        "github repo",
+        "github repository",
+        "repo on github",
+        "repository on github",
+        "create a repo",
+        "create repo",
+        "make a repo",
+        "new repo",
+        "publish to github",
+    )
+    if not ("github" in text and ("repo" in text or "repository" in text or "publish" in text)):
+        if not any(phrase in text for phrase in phrases):
+            return None
+    repo_name = extract_github_repo_name(raw)
+    return ApprovalNeed(
+        type="github_repo",
+        title="GitHub repo creation approval needed",
+        details=(
+            "The request appears to involve creating a GitHub repository through the trusted Latch host connector.\n\n"
+            f"Repository: {repo_name}\n"
+            "Default visibility: private\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Review repository name, visibility, and description. Approval lets Latch create the repo without sharing the GitHub token with the worker.",
+        sensitive=False,
+        risk_level="medium",
+        github_repo_name=repo_name,
+        github_description=guess_github_description(raw),
+        github_visibility="public" if re.search(r"\bpublic\b", text) else "private",
+        github_auto_init=True,
+    )
+
+
+def detect_github_file_request(title: str, details: str) -> ApprovalNeed | None:
+    raw = clean(f"{title}\n{details}", 3500)
+    text = raw.lower()
+    mentions_repo = any(phrase in text for phrase in ("github", "repo", "repository", "compassprojects", "compass projects"))
+    mentions_file_update = any(phrase in text for phrase in ("readme", "reader file", "update file", "write file", "edit file", "commit", "push"))
+    if not mentions_file_update:
+        return None
+    if not mentions_repo and "readme" not in text and "reader file" not in text:
+        return None
+    explicit_repo_name = extract_github_repo_name(raw, allow_guess=False)
+    repo_name = explicit_repo_name or DEFAULT_CODE_REPO
+    file_path = extract_github_file_path(raw)
+    content = draft_github_file_content(raw, file_path)
+    return ApprovalNeed(
+        type="github_file",
+        title="GitHub file update approval needed",
+        details=(
+            "The request appears to involve updating a file in an existing GitHub repository through the trusted Latch host connector.\n\n"
+            f"Repository: {repo_name}{' (default for code/file updates)' if not explicit_repo_name else ''}\n"
+            f"Path: {file_path}\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Review the repository, file path, and content. Approval lets Latch commit this file without sharing the GitHub token with the worker.",
+        sensitive=False,
+        risk_level="medium",
+        github_repo_name=repo_name,
+        github_file_path=file_path,
+        github_file_content=content,
+        github_commit_message=f"Update {file_path}",
+    )
+
+
+def detect_vm_execution(title: str, details: str) -> ApprovalNeed | None:
+    raw = clean(f"{title}\n{details}", 2500)
+    text = raw.lower()
+    if is_capability_policy_note(text):
+        return None
+    command_like = re.search(
+        r"\b(run|execute)\s+[`$]?[a-z0-9_./:-]+",
+        text,
+    )
+    phrases = (
+        " on the openclaw vm",
+        " on the vm",
+        " in the vm",
+        " in the terminal",
+        " in shell",
+        " shell command",
+        " terminal command",
+        "take a screenshot",
+        "use the browser",
+        "open website",
+        "open https://",
+        "open http://",
+    )
+    if not command_like and not any(phrase in text for phrase in phrases):
+        return None
+    return ApprovalNeed(
+        type="command",
+        title="VM execution approval needed",
+        details=(
+            "The request appears to require running a VM shell or browser action.\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Approve to let the VM executor run the exact planned shell/browser steps.",
+        sensitive=False,
+        risk_level="medium",
+    )
+
+
+def is_capability_policy_note(text: str) -> bool:
+    capability_terms = ("firefox", "playwright", "browser", "shell", "executor", "approval")
+    policy_terms = (
+        "should be able to",
+        "without having to ask",
+        "without asking",
+        "shouldn't have to ask",
+        "do not need approval",
+        "doesn't need approval",
+        "no approval first",
+        "already installed",
+        "standard feature",
+    )
+    install_intent = re.search(r"\b(install|download|set up|setup)\b", text)
+    return (
+        any(term in text for term in capability_terms)
+        and any(term in text for term in policy_terms)
+        and not install_intent
+    )
 
 
 def detect_external_contact(title: str, details: str) -> ApprovalNeed | None:
@@ -753,22 +1166,72 @@ def detect_web_research(title: str, details: str) -> ApprovalNeed | None:
     )
     if not any(phrase in text for phrase in phrases):
         return None
+    seed_urls = extract_urls(raw)
+    allowed_domains = extract_domains(raw)
+    if not seed_urls and is_open_web_search_request(text):
+        query = search_query_from_request(raw)
+        plan = {
+            "mode": "browser",
+            "summary": f"Search the public web for: {query}",
+            "sensitive": False,
+            "riskLevel": "medium",
+            "timeoutSeconds": 180,
+            "commands": [],
+            "actions": [
+                {
+                    "type": "search_web",
+                    "text": query,
+                    "timeoutMs": 60000,
+                    "maxResults": 4,
+                }
+            ],
+            "expectedResult": "Concise public source notes from search results, with URLs, suitable for operator review and saved context when requested.",
+        }
+        return ApprovalNeed(
+            type="command",
+            title="Browser web search approval needed",
+            details=(
+                "The request asks for open-ended public web search. The VM browser executor can run a small approved search, open a few public results, and report concise source notes.\n\n"
+                f"Original request:\n{raw}"
+            ),
+            expected_response="Approve to let the VM browser search the public web and extract concise source notes.",
+            sensitive=False,
+            risk_level="medium",
+            action_preview=plan["summary"],
+            rendered_commands=(f"search web: {query}",),
+            execution_mode="browser",
+            execution_plan=plan,
+        )
     return ApprovalNeed(
         type="web_research",
         title="Bounded web research approval needed",
         details=(
-            "The request appears to need web access or scraping. Browser/research execution is not enabled yet.\n\n"
+            "The request appears to need web access or scraping. Exact-URL research is available after approval; browser execution requires the separate executor.\n\n"
             f"Original request:\n{raw}"
         ),
         expected_response="Approve a narrow source list/page budget, or deny and provide manual sources.",
         sensitive=False,
         risk_level="medium",
-        allowed_domains=extract_domains(raw),
-        seed_urls=extract_urls(raw),
+        allowed_domains=allowed_domains,
+        seed_urls=seed_urls,
         max_pages=5,
         token_budget=3000,
         research_question=raw,
     )
+
+
+def is_open_web_search_request(text: str) -> bool:
+    search_terms = ("google", "search the web", "look up", "scrape the net", "scrape web", "find online")
+    return any(term in text for term in search_terms)
+
+
+def search_query_from_request(raw: str) -> str:
+    text = re.sub(r"(?im)^(inbox instruction|task):\s*", " ", raw)
+    text = re.sub(r"(?i)\b(can you|please|could you|would you)\b", " ", text)
+    text = re.sub(r"(?i)\b(google|search the web for|search the web|look up|scrape the net about|scrape the net|scrape|browse|research)\b", " ", text)
+    text = re.sub(r"(?i)\b(and write down in your context what you learn|write down in your context|save .*?context|remember what you learn)\b", " ", text)
+    text = collapse_whitespace(text)
+    return clean(text or raw, 240)
 
 
 def detect_status_template(text: str) -> str:
@@ -804,6 +1267,7 @@ def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> 
         action_preview=approval.action_preview,
         rendered_commands=rendered,
         execution_mode=approval.execution_mode,
+        execution_plan=approval.execution_plan,
         recipient=approval.recipient,
         subject=approval.subject,
         contact_purpose=approval.contact_purpose,
@@ -816,6 +1280,14 @@ def enrich_status_template(approval: ApprovalNeed, args: argparse.Namespace) -> 
         token_budget=approval.token_budget,
         research_question=approval.research_question,
         refresh_research=approval.refresh_research,
+        github_repo_name=approval.github_repo_name,
+        github_description=approval.github_description,
+        github_visibility=approval.github_visibility,
+        github_owner=approval.github_owner,
+        github_auto_init=approval.github_auto_init,
+        github_file_path=approval.github_file_path,
+        github_file_content=approval.github_file_content,
+        github_commit_message=approval.github_commit_message,
     )
 
 
@@ -833,6 +1305,85 @@ def extract_command(text: str) -> str:
         if line.startswith(("`", "$", ">", "sudo ", "docker ", "systemctl ", "ssh ", "scp ", "powershell"))
     ]
     return clean("\n".join(command_lines).replace("`", ""), 4000)
+
+
+def extract_github_repo_name(text: str, allow_guess: bool = True) -> str:
+    if re.search(r"\bcompass\s*projects\b|\bcompassprojects\b", text, flags=re.IGNORECASE):
+        return DEFAULT_CODE_REPO
+    patterns = (
+        r"\b(?:repo|repository)\s+(?:named|called)\s+[`\"']?([a-zA-Z0-9._ -]{1,100})",
+        r"\b(?:githubRepoName|repoName|repo)\s*[:=]\s*[`\"']?([a-zA-Z0-9._ -]{1,100})",
+        r"\bgithub\s+(?:repo|repository)\s+[`\"']?([a-zA-Z0-9._ -]{1,100})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            cleaned = clean_github_repo_name(match.group(1))
+            if cleaned:
+                return cleaned
+    lowered = text.lower()
+    if not allow_guess:
+        return ""
+    if "compass" in lowered or "companion" in lowered:
+        return "compass-companion"
+    words = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{2,}", text)
+    stop = {"github", "repo", "repository", "create", "make", "publish", "please", "next", "want", "able", "code"}
+    usable = [word.lower() for word in words if word.lower() not in stop]
+    return clean_github_repo_name("-".join(usable[:4]) or "compass-project")
+
+
+def extract_github_file_path(text: str) -> str:
+    match = re.search(r"\b(?:path|file)\s*[:=]\s*[`\"']?([a-zA-Z0-9._ /\-]{1,200})", text, flags=re.IGNORECASE)
+    if match:
+        return clean_github_file_path(match.group(1))
+    if "readme" in text.lower():
+        return "README.md"
+    return "README.md"
+
+
+def clean_github_file_path(value: str) -> str:
+    parts = []
+    for part in clean(value or "README.md", 200).replace("\\", "/").lstrip("/").split("/"):
+        if part in {"", ".", ".."}:
+            continue
+        cleaned = re.sub(r"[^a-zA-Z0-9._ -]", "_", part).strip()
+        if cleaned:
+            parts.append(cleaned)
+    return "/".join(parts)[:200] or "README.md"
+
+
+def draft_github_file_content(text: str, file_path: str) -> str:
+    explicit = re.search(r"(?:content|body)\s*[:=]\s*([\s\S]+)$", text, flags=re.IGNORECASE)
+    if explicit:
+        return clean(explicit.group(1), 12000)
+    if file_path.lower() == "readme.md":
+        repo = extract_github_repo_name(text, allow_guess=False)
+        title = (repo or DEFAULT_CODE_REPO).replace("-", " ").replace("_", " ").strip().title() or "Compass Project"
+        quoted = re.findall(r"[\"']([^\"']{1,500})[\"']", text)
+        extra = f"\n{quoted[-1]}\n" if quoted else ""
+        return clean(
+            f"# {title}\n\n"
+            "A Compass-managed project repository.\n\n"
+            "This README was drafted through Latch after operator approval. "
+            "Future updates should stay scoped, reviewable, and owned by the operator.\n"
+            f"{extra}",
+            12000,
+        )
+    return clean(text, 12000)
+
+
+def clean_github_repo_name(value: str) -> str:
+    name = re.sub(r"\s+", "-", clean(value, 100))
+    name = re.sub(r"[^a-zA-Z0-9._-]", "", name)
+    name = re.sub(r"\.git$", "", name, flags=re.IGNORECASE).strip(".-")
+    return name if re.fullmatch(r"[a-zA-Z0-9._-]{1,100}", name or "") else "compass-project"
+
+
+def guess_github_description(text: str) -> str:
+    first = clean(text.splitlines()[0] if text.splitlines() else text, 240)
+    if len(first) > 20:
+        return first
+    return "Repository created through Compass and Latch."
 
 
 def extract_email(text: str) -> str:
@@ -1174,6 +1725,60 @@ def clamp_int(value: object, minimum: int, maximum: int, fallback: int) -> int:
     return max(minimum, min(maximum, number))
 
 
+def extract_json_object(text: str) -> str:
+    stripped = str(text or "").strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start < 0 or end < start:
+        raise RuntimeError("Planner did not return a JSON object.")
+    return stripped[start : end + 1]
+
+
+def sanitize_execution_plan(plan: dict) -> dict:
+    if not isinstance(plan, dict):
+        raise RuntimeError("Planner returned a non-object plan.")
+    mode = clean(plan.get("mode") or plan.get("executionMode") or "shell", 20)
+    if mode not in {"shell", "browser"}:
+        raise RuntimeError(f"Unsupported execution mode: {mode}")
+    commands = [clean(command, 1000) for command in list(plan.get("commands") or [])[:20]]
+    commands = [command for command in commands if command]
+    actions = []
+    for action in list(plan.get("actions") or [])[:40]:
+        if not isinstance(action, dict):
+            continue
+        action_type = clean(action.get("type") or "", 40)
+        if action_type not in {"open", "extract_text", "screenshot", "click", "fill", "press", "wait", "download"}:
+            continue
+        actions.append(
+            {
+                "type": action_type,
+                "url": clean(action.get("url") or "", 1000),
+                "selector": clean(action.get("selector") or "", 500),
+                "text": clean(action.get("text") or "", 2000),
+                "key": clean(action.get("key") or "", 80),
+                "path": clean(action.get("path") or "", 1000),
+                "timeoutMs": clamp_int(action.get("timeoutMs"), 0, 120000, 0),
+            }
+        )
+    if mode == "shell" and not commands:
+        raise RuntimeError("Shell execution plans must include at least one command.")
+    if mode == "browser" and not actions:
+        raise RuntimeError("Browser execution plans must include at least one action.")
+    return {
+        "mode": mode,
+        "summary": clean(plan.get("summary") or "", 1000),
+        "sensitive": bool(plan.get("sensitive")),
+        "riskLevel": clean(plan.get("riskLevel") or "medium", 20) if clean(plan.get("riskLevel") or "medium", 20) in {"low", "medium", "high"} else "medium",
+        "timeoutSeconds": clamp_int(plan.get("timeoutSeconds"), 1, 1800, 300),
+        "commands": commands,
+        "actions": actions,
+        "expectedResult": clean(plan.get("expectedResult") or "", 1000),
+    }
+
+
 def command_template(template_id: str, args: argparse.Namespace) -> list[dict]:
     repo_dir = str(Path(args.latch_repo_dir).expanduser())
     compose_dir = str(Path(args.openclaw_compose_dir).expanduser())
@@ -1232,6 +1837,19 @@ def clean_channel_id(value: object) -> str:
     return text.strip("-")[:48]
 
 
+def task_processing_key(task: dict) -> str:
+    task_id = str(task.get("id") or "")
+    version = str(task.get("updatedAt") or task.get("createdAt") or task.get("reopenCount") or "")
+    return f"{task_id}:{version}" if version else task_id
+
+
+def clean_routing(value: object) -> str:
+    text = str(value or "auto").strip().lower()
+    if text in {"auto", "local", "network"}:
+        return text
+    return "auto"
+
+
 def channel_briefing(channels: list[dict], response_channel: str) -> str:
     if not channels:
         return "Latch channels: reply in Compass unless the operator names another Latch channel."
@@ -1279,13 +1897,19 @@ def requested_latch_channel(text: str, channels: list[dict]) -> str:
 
 def context_briefing(items: list[dict], profile: dict | None = None) -> str:
     lines = [
-        "Latch context briefing:",
+        "Compass context briefing:",
         "Use shared context as durable operator-provided memory. Treat private/unshared items as unavailable except for their title/metadata.",
     ]
 
     profile = profile or {}
     if profile.get("shareWithAgent", True):
         profile_lines = []
+        anchor_purpose = profile.get("anchorPurpose") or profile.get("foundationPurpose")
+        if anchor_purpose:
+            profile_lines.append(
+                "Companion anchor (repo-defined, higher priority than user-editable profile fields):\n"
+                f"{clean(anchor_purpose, 1600)}"
+            )
         if profile.get("name"):
             profile_lines.append(f"Working name: {clean(profile.get('name'), 120)}")
         if profile.get("purpose"):
@@ -1297,12 +1921,12 @@ def context_briefing(items: list[dict], profile: dict | None = None) -> str:
         if profile.get("communicationStyle"):
             profile_lines.append(f"Communication style:\n{clean(profile.get('communicationStyle'), 1200)}")
         if profile_lines:
-            lines.append("Agent profile:")
+            lines.append("Companion profile:")
             lines.extend(profile_lines)
 
     if not items:
         if len(lines) == 2:
-            return "Latch context briefing: no saved context has been shared yet."
+            return "Compass context briefing: no saved context has been shared yet."
         return "\n".join(lines)
 
     for item in items[:12]:
