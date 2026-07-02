@@ -285,6 +285,39 @@ try {
   assert(taskSeedMessage?.channel === task.channel, "task brief should be seeded into the task channel");
   assert(taskSeedMessage.agentHandledAt, "task brief seed should not be re-polled as a separate inbox instruction");
 
+  const steeringTask = await request("/api/tasks", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: {
+      title: "Create Compass website on GitHub",
+      goal: "Can you make a simple website on the compassprojject github repo?",
+      details: "Task:\nCan you make a simple website on the compassprojject github repo?",
+      priority: "normal"
+    }
+  });
+  await request(`/api/tasks/${steeringTask.id}`, {
+    method: "PATCH",
+    headers: agentHeaders,
+    body: { status: "failed", note: "Approval denied by operator." }
+  });
+  const steeringFeedback = await request("/api/messages", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: {
+      text: "Just continue and make a small hello work website in there :)",
+      channel: steeringTask.channel
+    }
+  });
+  assert(steeringFeedback.taskId === steeringTask.id, "task-channel feedback should stay linked to the failed task");
+  assert(steeringFeedback.agentHandledAt, "task-channel feedback that reopens a task should not be treated as generic chat");
+  const afterSteeringFeedback = await request("/api/state", { headers: operatorHeaders });
+  const reopenedSteeringTask = afterSteeringFeedback.tasks.find((item) => item.id === steeringTask.id);
+  assert(reopenedSteeringTask.status === "queued", "feedback in an active failed task channel should reopen the task");
+  assert(reopenedSteeringTask.instructions.includes("hello work website"), "active task-channel feedback should become task follow-up context");
+  const feedbackPoll = await request("/api/agent/poll", { headers: agentHeaders });
+  assert(feedbackPoll.tasks.some((item) => item.id === steeringTask.id), "reopened feedback task should be available to the agent as task work");
+  assert(!feedbackPoll.messages.some((item) => item.id === steeringFeedback.id), "reopening feedback should not also appear as a generic inbox message");
+
   const approval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
@@ -1072,6 +1105,7 @@ try {
   assert(reviewedShopping.status === "approved", "simple user should approve own review request");
 
   const appJs = await readFile(path.join(root, "public", "app.js"), "utf8");
+  const serverJs = await readFile(path.join(root, "server.js"), "utf8");
   const indexHtml = await readFile(path.join(root, "public", "index.html"), "utf8");
   const stylesCss = await readFile(path.join(root, "public", "styles.css"), "utf8");
   assert(appJs.includes("if (!pro) {\n    state.activeChannel = \"compass\";"), "simple mode should force the single Compass inbox");
@@ -1095,6 +1129,8 @@ try {
   assert(appJs.includes("taskFilterPreference"), "task attention defaults should preserve the last selected task filter");
   assert(appJs.includes("approvalsFilterPreference"), "review attention defaults should preserve the last selected review filter");
   assert(appJs.includes('if (state.tab === "inbox") markChannelSeen'), "hidden inbox renders should not consume unread badges");
+  assert(appJs.includes("sort(compareMessagesChronologically)"), "chat rendering should sort messages chronologically");
+  assert(serverJs.includes("messages: newestFirst(activeItems(db.messages)).slice(0, 100)"), "API state should return messages in deterministic newest-first order");
   assert(appJs.includes('tabId === "credits") return creditBalance() <= 0 ? "!" : "";'), "credits tab should warn when no credits remain");
   assert(indexHtml.includes("moreTabsButton"), "mobile nav should include a More tab control");
   assert(indexHtml.includes("channelResizer"), "inbox should include a channel resize handle");
@@ -1253,37 +1289,45 @@ try {
     body: JSON.stringify({ question: "operator should not report research" })
   }, 403);
 
+  const researchResultBody = {
+    approvalId: researchApproval.id,
+    taskId: task.id,
+    question: "How should Latch add a browser sandbox?",
+    allowedDomains: ["example.com"],
+    seedUrls: ["https://example.com/docs"],
+    pagesFetched: 1,
+    tokenBudget: 3000,
+    status: "completed",
+    summary: "Use a bounded read-only browser sandbox.",
+    sources: [{
+      requestedUrl: "https://example.com/docs",
+      finalUrl: "https://example.com/docs",
+      url: "https://example.com/docs",
+      title: "Docs",
+      status: 200,
+      summary: "A compact source note",
+      excerpt: "Short excerpt",
+      fetchedAt: new Date().toISOString(),
+      cached: true
+    }],
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString()
+  };
   const researchRun = await request("/api/agent/research-results", {
     method: "POST",
     headers: agentHeaders,
-    body: {
-      approvalId: researchApproval.id,
-      taskId: task.id,
-      question: "How should Latch add a browser sandbox?",
-      allowedDomains: ["example.com"],
-      seedUrls: ["https://example.com/docs"],
-      pagesFetched: 1,
-      tokenBudget: 3000,
-      status: "completed",
-      summary: "Use a bounded read-only browser sandbox.",
-      sources: [{
-        requestedUrl: "https://example.com/docs",
-        finalUrl: "https://example.com/docs",
-        url: "https://example.com/docs",
-        title: "Docs",
-        status: 200,
-        summary: "A compact source note",
-        excerpt: "Short excerpt",
-        fetchedAt: new Date().toISOString(),
-        cached: true
-      }],
-      startedAt: new Date().toISOString(),
-      finishedAt: new Date().toISOString()
-    }
+    body: researchResultBody
   });
   assert(researchRun.status === "completed", "research result status should be stored");
   assert(researchRun.sources[0].summary.includes("compact"), "research source summary should be stored");
   assert(researchRun.sources[0].cached === true, "research source cache marker should be stored");
+  const duplicateResearchRun = await request("/api/agent/research-results", {
+    method: "POST",
+    headers: agentHeaders,
+    body: researchResultBody
+  });
+  assert(duplicateResearchRun.id === researchRun.id, "duplicate research reports should return the original run");
+  assert(duplicateResearchRun.deduped === true, "duplicate research reports should be marked as deduped");
 
   const visible = await request("/api/state", { headers: operatorHeaders });
   assert(visible.contextItems.some((item) => item.id === fileItem.id), "operator state should include context items");

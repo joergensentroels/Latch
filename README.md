@@ -84,6 +84,25 @@ Run a local health/key check:
 powershell -ExecutionPolicy Bypass -File .\Test-CommandCenter.ps1
 ```
 
+Run the full local test suite:
+
+```powershell
+npm test
+```
+
+## Publishing changes
+
+Use the repo-local push helper when you want to commit and push Latch changes from the trusted Windows working tree:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Push-Latch.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File .\Push-Latch.ps1 -Yes -Message "Update Latch"
+```
+
+The helper resolves Git from common Windows install locations, shows the files it will include, refuses paths that look secret-like unless explicitly allowed, commits, rebases from `origin/main`, and pushes.
+
+For worker releases, use [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md)'s `Push-And-Deploy.ps1` flow so the pushed GitHub code and deployed VM worker stay aligned.
+
 ## External LLM fallback
 
 While Ollama/GPU serving is paused, Latch can act as Compass's private external-API gateway. OpenClaw calls this app with the agent key, and this app calls an OpenAI-compatible provider with an API key stored only on the Windows machine.
@@ -196,7 +215,7 @@ Use a fine-grained GitHub token with the narrowest permission you can. For an ex
 powershell -ExecutionPolicy Bypass -File .\Configure-GitHub.ps1 -Owner "your-github-username" -DefaultRepo "CompassProjects" -PromptForToken
 ```
 
-When the companion asks for a README or file update, Latch creates a `github_file` approval card with the repository, path, commit message, and proposed content. Code/file updates default to `CompassProjects` unless another repository is named. In Full access, non-sensitive `CompassProjects` file updates from the operator or operator-managed Pro users can auto-approve and commit through the trusted host connector. The worker never receives the GitHub token.
+When the companion asks for development work, code, websites, a README, or another file update, Latch creates a `github_file` approval card with the repository, path, commit message, and proposed content. Development and code/file updates default to `CompassProjects` unless another repository is named. In Full access, non-sensitive `CompassProjects` file updates from the operator or operator-managed Pro users can auto-approve and commit through the trusted host connector. The worker never receives the GitHub token.
 
 Repository creation is still supported with `github_repo`, but it requires broader GitHub administration permission because the repository does not exist yet. Prefer creating the repo yourself and using `github_file` updates for day-to-day companion work.
 

@@ -201,6 +201,13 @@ powershell -ExecutionPolicy Bypass -File .\Push-And-Deploy.ps1 `
 It runs `git push` first and deploys the worker only after the push succeeds.
 By default it refuses to deploy with uncommitted local changes, so the pushed code and deployed code stay aligned. Use `-AllowDirtyDeploy` only for an intentional hot deploy while testing.
 
+If you only need to publish the repo and do not want a VM deploy, use the push-only helper from the trusted Windows host:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Push-Latch.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File .\Push-Latch.ps1 -Yes -Message "Update Latch"
+```
+
 Read-only diagnostic templates exposed through Latch approvals:
 
 ```text
