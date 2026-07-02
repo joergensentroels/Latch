@@ -41,7 +41,7 @@ When the user asks who you are, what your goals are, or what your purpose is, an
 Implementation details are silent tools, not personality. Do not mention backend names, bridge/worker labels, VM setup, executor services, routing, or internal channels unless the user explicitly asks about technical implementation or diagnostics.
 You may help with planning, explanation, coding advice, and next-step suggestions.
 You may use policy-gated shell/browser execution plans, bounded exact-URL research, and trusted-host GitHub actions when the request calls for them. Mention these only as capabilities relevant to a concrete task, never as self-description.
-For code, file, README, or repository-content updates, assume the target repository is CompassProjects unless the operator explicitly names another repository.
+For development tasks, code, files, websites, README, or repository-content updates, assume the target repository is CompassProjects unless the operator explicitly names another repository.
 You must not handle private credentials, passwords, API keys, recovery codes, payment tools, purchases, account creation, CAPTCHA/human verification, personal browser profiles, or sending emails/external messages. If a workflow needs a private login or secret, stop and ask the human to handle that step without revealing the secret to you.
 For web/research/execution workflows, prefer token-efficient summaries, explicit source lists, small budgets, exact planned steps, and reusable source notes instead of dumping raw pages.
 If you need durable context from the operator before giving a good answer, include one to three lines that start exactly with CONTEXT_QUESTION: followed by a concrete question.
@@ -710,11 +710,14 @@ class Bridge:
 
         if is_sensitive:
             self.report(
-                f"Sensitive approval recorded: {title}\n\nOperator note was not forwarded to the external LLM. Continue manually if the note contains credentials, verification codes, or private account details.",
+                f"Sensitive approval recorded: {title}\n\n"
+                "No account, login, purchase, or verification step was performed by OpenClaw. "
+                "Operator notes for sensitive approvals are kept inside Latch and are not forwarded to the LLM. "
+                "Complete this step manually if it involves credentials, verification codes, or private account details.",
                 task_id,
             )
             if approval.get("taskId"):
-                self.patch_task(task_id, "paused", "Sensitive approval recorded. Note was not forwarded to the LLM.")
+                self.patch_task(task_id, "paused", "Sensitive approval recorded. Manual completion is still required.")
             return
 
         if not note:
@@ -1023,9 +1026,15 @@ def detect_github_file_request(title: str, details: str) -> ApprovalNeed | None:
     text = raw.lower()
     mentions_repo = any(phrase in text for phrase in ("github", "repo", "repository", "compassprojects", "compass projects"))
     mentions_file_update = any(phrase in text for phrase in ("readme", "reader file", "update file", "write file", "edit file", "commit", "push"))
+    mentions_static_site = any(phrase in text for phrase in ("website", "web site", "webpage", "web page", "static site", "html", "hello world", "hello work"))
+    default_repo_dev_task = is_default_repo_dev_task(text)
+    if mentions_repo and mentions_static_site:
+        mentions_file_update = True
+    if default_repo_dev_task:
+        mentions_file_update = True
     if not mentions_file_update:
         return None
-    if not mentions_repo and "readme" not in text and "reader file" not in text:
+    if not mentions_repo and not default_repo_dev_task and "readme" not in text and "reader file" not in text:
         return None
     explicit_repo_name = extract_github_repo_name(raw, allow_guess=False)
     repo_name = explicit_repo_name or DEFAULT_CODE_REPO
@@ -1048,6 +1057,21 @@ def detect_github_file_request(title: str, details: str) -> ApprovalNeed | None:
         github_file_content=content,
         github_commit_message=f"Update {file_path}",
     )
+
+
+def is_default_repo_dev_task(text: str) -> bool:
+    if re.search(r"\b(explain|what is|how do i|how should i|why does|review)\b", text):
+        return False
+    action = re.search(r"\b(make|create|build|add|implement|update|write|edit|change|fix|scaffold|commit|push)\b", text)
+    artifact = re.search(
+        r"\b("
+        r"website|web site|webpage|web page|static site|html|css|javascript|js|"
+        r"app|application|page|component|code|script|file|readme|feature|bug|ui|"
+        r"frontend|front end|landing page"
+        r")\b",
+        text,
+    )
+    return bool(action and artifact)
 
 
 def detect_vm_execution(title: str, details: str) -> ApprovalNeed | None:
@@ -1308,7 +1332,7 @@ def extract_command(text: str) -> str:
 
 
 def extract_github_repo_name(text: str, allow_guess: bool = True) -> str:
-    if re.search(r"\bcompass\s*projects\b|\bcompassprojects\b", text, flags=re.IGNORECASE):
+    if re.search(r"\bcompass\s*proj\w*\b|\bcompassproj\w*\b", text, flags=re.IGNORECASE):
         return DEFAULT_CODE_REPO
     patterns = (
         r"\b(?:repo|repository)\s+(?:named|called)\s+[`\"']?([a-zA-Z0-9._ -]{1,100})",
@@ -1336,6 +1360,8 @@ def extract_github_file_path(text: str) -> str:
     match = re.search(r"\b(?:path|file)\s*[:=]\s*[`\"']?([a-zA-Z0-9._ /\-]{1,200})", text, flags=re.IGNORECASE)
     if match:
         return clean_github_file_path(match.group(1))
+    if re.search(r"\b(website|web site|webpage|web page|static site|html|hello world|hello work)\b", text, flags=re.IGNORECASE):
+        return "index.html"
     if "readme" in text.lower():
         return "README.md"
     return "README.md"
@@ -1356,6 +1382,35 @@ def draft_github_file_content(text: str, file_path: str) -> str:
     explicit = re.search(r"(?:content|body)\s*[:=]\s*([\s\S]+)$", text, flags=re.IGNORECASE)
     if explicit:
         return clean(explicit.group(1), 12000)
+    if file_path.lower().endswith((".html", ".htm")):
+        title = "Compass Hello"
+        if re.search(r"hello\s+world|hello\s+work", text, flags=re.IGNORECASE):
+            heading = "Hello world"
+        else:
+            heading = "Hello from Compass"
+        return clean(
+            "<!doctype html>\n"
+            "<html lang=\"en\">\n"
+            "<head>\n"
+            "  <meta charset=\"utf-8\">\n"
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            f"  <title>{html.escape(title)}</title>\n"
+            "  <style>\n"
+            "    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, sans-serif; background: #f4f7fa; color: #101828; }\n"
+            "    main { width: min(680px, calc(100% - 32px)); padding: 32px; border: 1px solid #d0d7e2; border-radius: 8px; background: white; box-shadow: 0 12px 35px rgba(16, 24, 40, 0.10); }\n"
+            "    h1 { margin: 0 0 12px; font-size: clamp(2rem, 8vw, 4rem); }\n"
+            "    p { margin: 0; color: #667085; font-size: 1.1rem; line-height: 1.5; }\n"
+            "  </style>\n"
+            "</head>\n"
+            "<body>\n"
+            "  <main>\n"
+            f"    <h1>{html.escape(heading)}</h1>\n"
+            "    <p>A tiny Compass website committed through Latch after operator approval.</p>\n"
+            "  </main>\n"
+            "</body>\n"
+            "</html>\n",
+            12000,
+        )
     if file_path.lower() == "readme.md":
         repo = extract_github_repo_name(text, allow_guess=False)
         title = (repo or DEFAULT_CODE_REPO).replace("-", " ").replace("_", " ").strip().title() or "Compass Project"

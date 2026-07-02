@@ -1212,7 +1212,7 @@ function renderMessages() {
   const channelMessages = (isProMode()
     ? messages.filter((message) => messageChannel(message) === active.id)
     : messages
-  ).slice().reverse();
+  ).slice().sort(compareMessagesChronologically);
   const messageList = lists.messages;
   const priorScrollTop = messageList.scrollTop;
   const priorChannel = messageList.dataset.channel || "";
@@ -1262,6 +1262,13 @@ function renderMessages() {
     }
   });
   renderTabBadges();
+}
+
+function compareMessagesChronologically(left, right) {
+  const leftTime = Date.parse(left.createdAt || 0);
+  const rightTime = Date.parse(right.createdAt || 0);
+  if (leftTime !== rightTime) return leftTime - rightTime;
+  return String(left.id || "").localeCompare(String(right.id || ""));
 }
 
 function isNearScrollBottom(target, threshold = 80) {
@@ -1508,7 +1515,7 @@ function taskBodyMarkup(task) {
     return `
       <p class="item-body">${escapeHtml(task.goal || task.title || "")}</p>
       ${task.instructions ? `
-        <details class="command-details task-instructions">
+        <details class="command-details task-instructions" ${detailsAttributes("task:instructions", task.id || task.title || task.instructions)}>
           <summary>Instructions</summary>
           <p class="item-body">${escapeHtml(task.instructions)}</p>
         </details>
@@ -1568,6 +1575,7 @@ function renderTasks() {
   bindArchiveButtons(lists.tasks);
   bindTaskLinks(lists.tasks);
   bindReopenTaskForms(lists.tasks);
+  bindDisclosureState(lists.tasks);
 }
 
 function renderApprovals() {
@@ -1617,12 +1625,12 @@ function renderApprovals() {
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
       ${executionPlanMarkup(approval)}
       ${approval.renderedCommands?.length ? `
-        <details class="command-details">
+        <details class="command-details" ${detailsAttributes("approval:commands", approval.id || approval.renderedCommands.join("\n"))}>
           <summary>Show exact command${approval.renderedCommands.length === 1 ? "" : "s"}</summary>
           <pre class="item-body">${escapeHtml(approval.renderedCommands.join("\n"))}</pre>
         </details>
       ` : approval.command ? `
-        <details class="command-details">
+        <details class="command-details" ${detailsAttributes("approval:commands", approval.id || approval.command)}>
           <summary>Show exact command</summary>
           <pre class="item-body">${escapeHtml(approval.command)}</pre>
         </details>
@@ -1652,6 +1660,7 @@ function renderApprovals() {
     button.addEventListener("click", () => copyContactDraft(button.dataset.copyContact));
   });
   bindArchiveButtons(lists.approvals);
+  bindDisclosureState(lists.approvals);
   focusHighlightedApproval();
 }
 
@@ -1680,6 +1689,7 @@ function renderSimpleApprovals(approvals) {
   lists.approvals.querySelectorAll("[data-approval]").forEach((button) => {
     button.addEventListener("click", () => openApprovalDialog(button.dataset.approval, button.dataset.status));
   });
+  bindDisclosureState(lists.approvals);
   focusHighlightedApproval();
 }
 
@@ -2066,7 +2076,7 @@ function contactApprovalSummary(approval) {
         <dt>Attachments</dt><dd>${attachments.length ? escapeHtml(attachments.join(", ")) : "None"}</dd>
       </dl>
       ${approval.bodyPreview ? `
-        <details class="command-details">
+        <details class="command-details" ${detailsAttributes("approval:draft", approval.id || approval.bodyPreview)}>
           <summary>Show draft preview</summary>
           <pre class="item-body">${escapeHtml(approval.bodyPreview)}</pre>
         </details>
@@ -2126,7 +2136,7 @@ function githubFileApprovalSummary(approval) {
         ${fileUrl ? `<dt>Updated</dt><dd><a href="${escapeHtml(fileUrl)}" rel="noreferrer">${escapeHtml(fileUrl)}</a></dd>` : ""}
       </dl>
       ${approval.githubFileContent ? `
-        <details class="command-details">
+        <details class="command-details" ${detailsAttributes("approval:github-file", approval.id || approval.githubFilePath || approval.githubFileContent)}>
           <summary>Show proposed content</summary>
           <pre class="item-body">${escapeHtml(approval.githubFileContent)}</pre>
         </details>
@@ -2150,7 +2160,7 @@ function executionPlanMarkup(approval) {
     });
   }
   return `
-    <details class="command-details">
+    <details class="command-details" ${detailsAttributes("approval:execution-plan", approval.id || lines.join("\n"))}>
       <summary>Show execution plan</summary>
       <pre class="item-body">${escapeHtml(lines.join("\n"))}</pre>
     </details>
@@ -2199,7 +2209,7 @@ function timelineBundleMarkup(bundle) {
     `;
   }
 
-  const key = `timeline:bundle:${bundle.key}`;
+  const key = stableDisclosureKey("timeline:bundle", bundle.key);
   return `
     <details class="item timeline-event timeline-bundle" data-disclosure-key="${escapeHtml(key)}" ${disclosureOpen(key, false) ? "open" : ""}>
       <summary>
@@ -2251,7 +2261,7 @@ function groupedEventsByDay(events) {
 function collapsedEventBundles(events) {
   const bundles = new Map();
   for (const item of events) {
-    const key = `${item.type || "event"}\u0000${item.summary || ""}`;
+    const key = timelineEventBundleKey(item);
     if (!bundles.has(key)) {
       bundles.set(key, {
         key,
@@ -2276,6 +2286,19 @@ function collapsedEventBundles(events) {
       };
     })
     .sort((left, right) => Date.parse(right.latestAt || 0) - Date.parse(left.latestAt || 0));
+}
+
+function timelineEventBundleKey(item) {
+  if (item.type === "research.reported") {
+    const run = researchRunById(item.targetId);
+    if (run?.approvalId) return `${item.type}\u0000approval:${run.approvalId}\u0000${run.status || ""}\u0000${researchRunResultKey(run)}`;
+    if (run?.taskId) return `${item.type}\u0000task:${run.taskId}\u0000${run.status || ""}\u0000${researchRunResultKey(run)}`;
+  }
+  if (item.type === "execution.reported") {
+    const execution = executionById(item.targetId);
+    if (execution?.approvalId) return `${item.type}\u0000approval:${execution.approvalId}\u0000${execution.template || ""}\u0000${execution.exitCode ?? ""}`;
+  }
+  return `${item.type || "event"}\u0000${canonicalBundleText(item.summary || "")}`;
 }
 
 function eventBundleTimeRange(items) {
@@ -3037,7 +3060,43 @@ function renderOperations() {
     ...executions.map((item) => ({ ...item, operationKind: "execution", sortTime: item.finishedAt || item.createdAt })),
     ...researchRuns.map((item) => ({ ...item, operationKind: "research", sortTime: item.finishedAt || item.createdAt }))
   ].sort((left, right) => String(right.sortTime || "").localeCompare(String(left.sortTime || "")));
-  renderList(lists.operations, operations.slice(0, 10), (item) => item.operationKind === "research" ? researchOperationCard(item) : `
+  const bundles = collapsedOperationBundles(operations);
+  renderList(lists.operations, bundles.slice(0, 10), operationBundleCard);
+  bindDisclosureState(lists.operations);
+}
+
+function operationBundleCard(bundle) {
+  if (bundle.items.length === 1) return operationCard(bundle.items[0]);
+  const item = bundle.items[0];
+  const key = stableDisclosureKey("operation:bundle", bundle.key);
+  return `
+    <details class="item timeline-event timeline-bundle" data-disclosure-key="${escapeHtml(key)}" ${disclosureOpen(key, false) ? "open" : ""}>
+      <summary>
+        <span>
+          <strong>${escapeHtml(operationTitle(item))}</strong>
+          <small>${escapeHtml(operationMetaText(item))}</small>
+        </span>
+        <span class="badge">${bundle.items.length}</span>
+      </summary>
+      ${operationDetailMarkup(item)}
+      <div class="timeline-bundle-items">
+        ${bundle.items.map((row) => `
+          <div class="timeline-bundle-row">
+            <span class="item-meta">${formatTime(row.finishedAt || row.createdAt)}</span>
+            <span>${escapeHtml(operationRowSummary(row))}</span>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function operationCard(item) {
+  return item.operationKind === "research" ? researchOperationCard(item) : executionOperationCard(item);
+}
+
+function executionOperationCard(item) {
+  return `
     <article class="item">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(commandTemplateLabel(item.template))}</h2>
@@ -3048,7 +3107,7 @@ function renderOperations() {
         <span class="item-meta">${formatTime(item.finishedAt || item.createdAt)}</span>
       </div>
       ${(item.commands || []).length ? `
-        <details class="command-details">
+        <details class="command-details" ${detailsAttributes("operation:commands", item.id || item.approvalId || item.commands.join("\n"))}>
           <summary>Show exact command${item.commands.length === 1 ? "" : "s"}</summary>
           <pre class="item-body">${escapeHtml(item.commands.join("\n"))}</pre>
         </details>
@@ -3056,7 +3115,7 @@ function renderOperations() {
       ${item.stdout ? `<pre class="item-body">${escapeHtml(item.stdout)}</pre>` : ""}
       ${item.stderr ? `<p class="approval-advice">${escapeHtml(item.stderr)}</p>` : ""}
     </article>
-  `);
+  `;
 }
 
 function researchOperationCard(item) {
@@ -3075,7 +3134,7 @@ function researchOperationCard(item) {
       <p class="item-body">${escapeHtml(item.question || "Research result")}</p>
       ${item.summary ? `<pre class="item-body">${escapeHtml(item.summary)}</pre>` : ""}
       ${sources.length ? `
-        <details class="command-details">
+        <details class="command-details" ${detailsAttributes("operation:sources", item.id || item.approvalId || item.question)}>
           <summary>Show sources</summary>
           ${sources.map((source) => `
             <div class="source-note">
@@ -3089,6 +3148,113 @@ function researchOperationCard(item) {
       ${(item.errors || []).length ? `<p class="approval-advice">${escapeHtml(item.errors.join("\\n"))}</p>` : ""}
     </article>
   `;
+}
+
+function collapsedOperationBundles(operations) {
+  const bundles = new Map();
+  for (const item of operations) {
+    const key = operationBundleKey(item);
+    if (!bundles.has(key)) bundles.set(key, { key, items: [] });
+    bundles.get(key).items.push(item);
+  }
+  return Array.from(bundles.values()).map((bundle) => ({
+    ...bundle,
+    items: bundle.items.slice().sort((left, right) => String(right.sortTime || "").localeCompare(String(left.sortTime || ""))),
+    latestAt: bundle.items[0]?.sortTime || ""
+  })).sort((left, right) => String(right.latestAt || "").localeCompare(String(left.latestAt || "")));
+}
+
+function operationBundleKey(item) {
+  if (item.operationKind === "research") {
+    const source = item.approvalId ? `approval:${item.approvalId}` : item.taskId ? `task:${item.taskId}` : canonicalBundleText(item.question || "");
+    return `research\u0000${source}\u0000${item.status || ""}\u0000${researchRunResultKey(item)}`;
+  }
+  if (item.operationKind === "execution") {
+    const source = item.approvalId ? `approval:${item.approvalId}` : item.taskId ? `task:${item.taskId}` : canonicalBundleText((item.commands || []).join("\n"));
+    return `execution\u0000${source}\u0000${item.template || ""}\u0000${item.exitCode ?? ""}`;
+  }
+  return `${item.operationKind || "operation"}\u0000${canonicalBundleText(operationRowSummary(item))}`;
+}
+
+function operationTitle(item) {
+  return item.operationKind === "research" ? "Read-only research" : commandTemplateLabel(item.template);
+}
+
+function operationMetaText(item) {
+  if (item.operationKind === "research") {
+    return `${item.status || "reported"} - ${formatTime(item.finishedAt || item.createdAt)} - ${String(item.pagesFetched || 0)} pages`;
+  }
+  return `${item.exitCode ?? ""} - ${formatTime(item.finishedAt || item.createdAt)}`;
+}
+
+function operationRowSummary(item) {
+  if (item.operationKind === "research") return `${item.status || "reported"}: ${item.question || item.seedUrls?.[0] || "research"}`;
+  return `${commandTemplateLabel(item.template)}: ${item.exitCode ?? ""}`;
+}
+
+function operationDetailMarkup(item) {
+  if (item.operationKind === "research") {
+    const sources = item.sources || [];
+    return `
+      <div class="meta-row">
+        <span class="type-pill web_research">Web research</span>
+        <span class="item-meta">${formatTime(item.finishedAt || item.createdAt)}</span>
+        <span class="item-meta">${escapeHtml(String(item.pagesFetched || 0))} pages</span>
+      </div>
+      <p class="item-body">${escapeHtml(item.question || "Research result")}</p>
+      ${item.summary ? `<pre class="item-body">${escapeHtml(item.summary)}</pre>` : ""}
+      ${sources.length ? `
+        <details class="command-details" ${detailsAttributes("operation:sources", item.id || item.approvalId || item.question)}>
+          <summary>Show sources</summary>
+          ${sources.map((source) => `
+            <div class="source-note">
+              <strong>${escapeHtml(source.title || source.url)}</strong>
+              <p class="item-meta">${escapeHtml(source.finalUrl || source.url)}${source.requestedUrl && source.requestedUrl !== (source.finalUrl || source.url) ? ` / from ${escapeHtml(source.requestedUrl)}` : ""}${source.status ? ` / ${escapeHtml(String(source.status))}` : ""}${source.cached ? " / cached" : ""}</p>
+              <p class="item-body">${escapeHtml(source.summary || source.excerpt || "")}</p>
+            </div>
+          `).join("")}
+        </details>
+      ` : ""}
+      ${(item.errors || []).length ? `<p class="approval-advice">${escapeHtml(item.errors.join("\\n"))}</p>` : ""}
+    `;
+  }
+  return `
+    <div class="meta-row">
+      <span class="type-pill shared">Read-only</span>
+      <span class="item-meta">${formatTime(item.finishedAt || item.createdAt)}</span>
+    </div>
+    ${(item.commands || []).length ? `
+      <details class="command-details" ${detailsAttributes("operation:commands", item.id || item.approvalId || item.commands.join("\n"))}>
+        <summary>Show exact command${item.commands.length === 1 ? "" : "s"}</summary>
+        <pre class="item-body">${escapeHtml(item.commands.join("\n"))}</pre>
+      </details>
+    ` : ""}
+    ${item.stdout ? `<pre class="item-body">${escapeHtml(item.stdout)}</pre>` : ""}
+    ${item.stderr ? `<p class="approval-advice">${escapeHtml(item.stderr)}</p>` : ""}
+  `;
+}
+
+function researchRunById(id) {
+  return (state.data?.researchRuns || []).find((item) => item.id === id);
+}
+
+function executionById(id) {
+  return (state.data?.executions || []).find((item) => item.id === id);
+}
+
+function researchRunResultKey(run) {
+  const errors = (run.errors || []).join("\n");
+  const sources = (run.sources || []).map((source) => source.finalUrl || source.url || source.requestedUrl || "").join("\n");
+  return [
+    run.pagesFetched || 0,
+    canonicalBundleText(errors),
+    canonicalBundleText(sources),
+    canonicalBundleText(run.seedUrls?.join("\n") || "")
+  ].join("\u0000");
+}
+
+function canonicalBundleText(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 async function copyContactDraft(id) {
@@ -3195,6 +3361,25 @@ function disclosureOpen(key, defaultOpen = false) {
     return Boolean(state.disclosureState[key]);
   }
   return Boolean(defaultOpen);
+}
+
+function detailsAttributes(scope, value, defaultOpen = false) {
+  const key = stableDisclosureKey(scope, value);
+  return `data-disclosure-key="${escapeHtml(key)}" ${disclosureOpen(key, defaultOpen) ? "open" : ""}`;
+}
+
+function stableDisclosureKey(scope, value) {
+  return `${scope}:${hashDisclosureKey(value)}`;
+}
+
+function hashDisclosureKey(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function bindDisclosureState(target) {

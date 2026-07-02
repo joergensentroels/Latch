@@ -134,6 +134,30 @@ whoami = bridge.detect_approval_need(
 assert whoami.type == "command"
 assert whoami.title == "VM execution approval needed"
 
+website_update = bridge.detect_approval_need(
+    "Create Compass website on GitHub",
+    "Task:\nCan you make a simple website on the compassprojject github repo?\n\nFollow-up:\nJust continue and make a small hello work website in there :)",
+)
+assert website_update.type == "github_file"
+assert website_update.github_repo_name == "CompassProjects"
+assert website_update.github_file_path == "index.html"
+assert "<!doctype html>" in website_update.github_file_content.lower()
+assert "hello world" in website_update.github_file_content.lower()
+
+default_repo_dev_update = bridge.detect_approval_need(
+    "Build a tiny app",
+    "Please make a small static HTML app that says hello from Compass.",
+)
+assert default_repo_dev_update.type == "github_file"
+assert default_repo_dev_update.github_repo_name == "CompassProjects"
+assert default_repo_dev_update.github_file_path == "index.html"
+
+coding_advice = bridge.detect_approval_need(
+    "Explain CSS",
+    "Can you explain how I should structure the CSS for a small app?",
+)
+assert coding_advice is None
+
 capability_note = bridge.detect_approval_need(
     "Inbox instruction",
     "You should be able to use firefox and playwright without having to ask for approval first.",

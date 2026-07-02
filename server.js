@@ -1373,6 +1373,11 @@ async function handleApi(req, res, url) {
       requestedBy: role,
       createdAt: new Date().toISOString()
     };
+    const existingRun = findDuplicateResearchRun(db.researchRuns, run);
+    if (existingRun) {
+      sendJson(res, 200, { ...existingRun, deduped: true });
+      return;
+    }
     db.researchRuns.unshift(run);
     db.events.unshift(event("research.reported", role, run.id, `${run.status}: ${run.question || run.seedUrls[0] || "research"}`));
     await writeDb(db);
@@ -2858,7 +2863,7 @@ function visibleState(db) {
     autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
     users: db.users.slice(0, 100).map(publicUser),
     purchases: db.purchases.slice(0, 100).map(publicPurchase),
-    messages: activeItems(db.messages).slice(0, 100),
+    messages: newestFirst(activeItems(db.messages)).slice(0, 100),
     channels: activeItems(db.channels).slice(0, 100).map(publicChannel),
     tasks: activeItems(db.tasks).slice(0, 100),
     approvals: activeItems(db.approvals).slice(0, 100),
@@ -3890,6 +3895,15 @@ function activeItems(items) {
   return (items || []).filter((item) => !item.archivedAt);
 }
 
+function newestFirst(items) {
+  return [...(items || [])].sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || left.updatedAt || 0);
+    const rightTime = Date.parse(right.createdAt || right.updatedAt || 0);
+    if (leftTime !== rightTime) return rightTime - leftTime;
+    return String(right.id || "").localeCompare(String(left.id || ""));
+  });
+}
+
 function archivedItems(items) {
   return (items || []).filter((item) => item.archivedAt);
 }
@@ -4903,8 +4917,8 @@ function restoreArchivedChannelForMessage(db, value, messageText, actor) {
     channel.archivedAt = "";
     channel.updatedAt = new Date().toISOString();
     db.events.unshift(event("channel.updated", actor, channel.id, channel.label));
-    reopenedTaskId = reopenTaskForRestoredChannel(db, channel, messageText, actor);
   }
+  reopenedTaskId = reopenTaskForRestoredChannel(db, channel, messageText, actor);
   return {
     channelId: channel.id,
     taskId: channel.taskId || "",
@@ -5122,6 +5136,41 @@ function cleanResearchSources(value) {
     fetchedAt: cleanText(source?.fetchedAt || "", 80),
     cached: Boolean(source?.cached)
   })).filter((source) => source.url);
+}
+
+function findDuplicateResearchRun(runs, run) {
+  if (!run.approvalId) return null;
+  const signature = researchRunSignature(run);
+  return (Array.isArray(runs) ? runs : []).find((item) => (
+    !item.archivedAt
+    && item.approvalId === run.approvalId
+    && researchRunSignature(item) === signature
+  )) || null;
+}
+
+function researchRunSignature(run) {
+  return JSON.stringify({
+    approvalId: run.approvalId || "",
+    taskId: run.taskId || "",
+    question: run.question || "",
+    allowedDomains: run.allowedDomains || [],
+    seedUrls: run.seedUrls || [],
+    pagesFetched: run.pagesFetched || 0,
+    tokenBudget: run.tokenBudget || 0,
+    status: run.status || "",
+    summary: run.summary || "",
+    sources: (run.sources || []).map((source) => ({
+      requestedUrl: source.requestedUrl || "",
+      finalUrl: source.finalUrl || "",
+      url: source.url || "",
+      title: source.title || "",
+      status: source.status || 0,
+      summary: source.summary || "",
+      excerpt: source.excerpt || "",
+      cached: Boolean(source.cached)
+    })),
+    errors: run.errors || []
+  });
 }
 
 function cleanCategory(value) {
