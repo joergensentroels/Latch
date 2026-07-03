@@ -9,7 +9,8 @@ const candidates = [
 
 const tests = [
   "test/worker-readonly-templates.py",
-  "test/executor.py"
+  "test/executor.py",
+  "test/worker-ssrf.py"
 ];
 
 let selected = null;
