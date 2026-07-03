@@ -278,6 +278,11 @@ def run_browser_plan(plan: dict, browser_dir: Path, default_download_dir: Path) 
             for action in plan["actions"]:
                 action_type = action["type"]
                 if action_type == "open":
+                    # SECURITY (pre-public review H3): only search_web checked for private/local
+                    # targets before; "open" let an approved plan's URL reach the internal network
+                    # unchecked. Approval still gates the plan itself -- this stops a plan whose URL
+                    # was rewritten or misjudged from reaching an internal/metadata address.
+                    reject_private_url(action["url"])
                     page.goto(action["url"], wait_until="domcontentloaded", timeout=action["timeoutMs"] or 30000)
                     notes.append(f"Opened {page.url}")
                 elif action_type == "extract_text":
@@ -305,6 +310,7 @@ def run_browser_plan(plan: dict, browser_dir: Path, default_download_dir: Path) 
                     target = Path(action["path"] or str(default_download_dir / "download"))
                     target.parent.mkdir(parents=True, exist_ok=True)
                     if action["url"]:
+                        reject_private_url(action["url"])
                         page.goto(action["url"], wait_until="domcontentloaded", timeout=action["timeoutMs"] or 30000)
                     with page.expect_download(timeout=action["timeoutMs"] or 30000) as download_info:
                         if action["selector"]:

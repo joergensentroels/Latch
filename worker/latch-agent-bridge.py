@@ -1541,6 +1541,12 @@ def perform_read_only_research(approval: dict, args: argparse.Namespace) -> dict
 
 
 def fetch_source_note(url: str, allowed_domains: list[str], question: str, summary_limit: int) -> dict:
+    # SECURITY (pre-public review H3): validate BEFORE the network call, not after. The previous
+    # order fetched first and validated the final URL second, so the initial request itself (and,
+    # via redirects, any later one) reached the network unchecked. fetch_research_page additionally
+    # refuses to follow redirects at all, so this one validated URL is the only address ever
+    # contacted for this request.
+    validate_research_url(url, allowed_domains)
     page = fetch_research_page(url)
     validate_research_url(page["url"], allowed_domains)
     text = extract_readable_text(page["body"], page["contentType"])
@@ -1649,6 +1655,17 @@ def is_private_ip(ip: ipaddress._BaseAddress) -> bool:
     )
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # SECURITY (pre-public review H3): returning None here tells urllib not to follow the
+    # redirect. urllib's default behaviour re-requests the Location target with no revalidation,
+    # which is exactly the SSRF bypass this closes -- a validated, allow-listed URL could 302 to an
+    # internal/metadata address and urllib would fetch it transparently. Research fetch is
+    # documented as "exact approved URLs only", so refusing redirects outright (rather than trying
+    # to safely re-validate and follow each hop) is both the simplest fix and the correct behavior.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def fetch_research_page(url: str) -> dict:
     request = urllib.request.Request(
         url,
@@ -1659,18 +1676,35 @@ def fetch_research_page(url: str) -> dict:
         },
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=12) as response:
-        content_type = response.headers.get("content-type", "")
-        if not is_textual_content_type(content_type):
-            raise RuntimeError(f"Unsupported content type: {content_type or 'unknown'}")
-        body = response.read(500_000)
-        charset = response.headers.get_content_charset() or "utf-8"
-        return {
-            "url": response.geturl(),
-            "status": response.status,
-            "contentType": content_type,
-            "body": body.decode(charset, errors="replace"),
-        }
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    try:
+        with opener.open(request, timeout=12) as response:
+            status = getattr(response, "status", None) or response.getcode()
+            if 300 <= status < 400:
+                raise RuntimeError(
+                    f"Refusing to follow a redirect from {url}. Research fetch only supports "
+                    "exact approved URLs, not redirects."
+                )
+            content_type = response.headers.get("content-type", "")
+            if not is_textual_content_type(content_type):
+                raise RuntimeError(f"Unsupported content type: {content_type or 'unknown'}")
+            body = response.read(500_000)
+            charset = response.headers.get_content_charset() or "utf-8"
+            return {
+                "url": response.geturl(),
+                "status": status,
+                "contentType": content_type,
+                "body": body.decode(charset, errors="replace"),
+            }
+    except urllib.error.HTTPError as exc:
+        # Defensive fallback: on some redirect status codes / Python versions the chain above
+        # raises HTTPError instead of returning the raw response. Treat that the same way.
+        if 300 <= exc.code < 400:
+            raise RuntimeError(
+                f"Refusing to follow a redirect from {url}. Research fetch only supports exact "
+                "approved URLs, not redirects."
+            ) from exc
+        raise
 
 
 def is_textual_content_type(content_type: str) -> bool:
