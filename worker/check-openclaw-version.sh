@@ -19,7 +19,7 @@ STATE_FILE="${OPENCLAW_VERSION_STATE_FILE:-$HOME/.cache/openclaw-version-check-l
 mkdir -p "$(dirname "$STATE_FILE")"
 
 running_version=$(docker exec "$CONTAINER" sh -c "grep -m1 '\"version\"' package.json" \
-  | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+  | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/') || true
 if [ -z "$running_version" ]; then
   echo "Could not read the running OpenClaw version from container $CONTAINER." >&2
   exit 1
@@ -28,7 +28,7 @@ fi
 latest_stable_tag=$(git ls-remote --tags --refs "$REPO_URL" \
   | awk '{print $2}' | sed 's#refs/tags/##' \
   | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+$' \
-  | sort -V | tail -1)
+  | sort -V | tail -1) || true
 if [ -z "$latest_stable_tag" ]; then
   echo "Could not determine the latest stable OpenClaw release from $REPO_URL." >&2
   exit 1
