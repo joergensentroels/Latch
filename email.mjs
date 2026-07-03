@@ -245,13 +245,7 @@ async function pollViaImap(config, options = {}) {
       } catch {
         body = "";
       }
-      messages.push({
-        uid: id,
-        from: fetch.match(/^From:\s*(.+)$/mi)?.[1]?.trim() || "",
-        subject: fetch.match(/^Subject:\s*(.+)$/mi)?.[1]?.trim() || "",
-        messageId: fetch.match(/^Message-ID:\s*(.+)$/mi)?.[1]?.trim() || "",
-        body
-      });
+      messages.push({ uid: id, ...parseImapHeaders(fetch), body });
     }
     await conn.imap("a9", "LOGOUT").catch(() => {});
     return { ok: true, transport: "imap", messages };
@@ -273,6 +267,32 @@ function hostnameLabel(address) {
 // lightweight (no full MIME tree parsing): it pulls the literal, undoes quoted-printable, drops MIME
 // boundary/Content-* lines and quoted reply history, and collapses whitespace - enough to feed an LLM
 // for a reply draft. Rich MIME/HTML handling is a later enhancement.
+// Decode RFC 2047 encoded-words (=?charset?B/Q?...?=) in a header value, best-effort.
+export function decodeMimeWords(value) {
+  return String(value || "").replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (whole, charset, enc, data) => {
+    try {
+      const cs = /iso-8859-1|latin1|windows-1252/i.test(charset) ? "latin1" : "utf8";
+      if (enc.toUpperCase() === "B") return Buffer.from(data, "base64").toString(cs);
+      const bytes = data.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+      return Buffer.from(bytes, "latin1").toString(cs);
+    } catch {
+      return whole;
+    }
+  });
+}
+
+// Parse From/Subject/Message-ID out of an IMAP FETCH header response. Unfolds RFC 5322 folded
+// headers first (a CRLF + leading whitespace is a continuation) so a wrapped "From:" line keeps
+// its <address> - otherwise a long display name pushes the address onto the next line and it is lost.
+export function parseImapHeaders(raw) {
+  const headers = String(raw || "").replace(/\r?\n[ \t]+/g, " ");
+  return {
+    from: decodeMimeWords((headers.match(/^From:\s*(.+)$/mi)?.[1] || "").trim()),
+    subject: decodeMimeWords((headers.match(/^Subject:\s*(.+)$/mi)?.[1] || "").trim()),
+    messageId: (headers.match(/^Message-ID:\s*(.+)$/mi)?.[1] || "").trim()
+  };
+}
+
 export function decodeImapText(resp) {
   const literal = String(resp || "").match(/\{(\d+)\}\r?\n([\s\S]*)/);
   let text = literal ? literal[2].slice(0, Number(literal[1])) : String(resp || "");
