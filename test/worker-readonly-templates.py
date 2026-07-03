@@ -323,7 +323,7 @@ assert bridge.is_automated_or_self("troels@pdc.com", "a@b.com") is False
 
 _eb = bridge.Bridge(argparse.Namespace(
     state_path=str(Path(tempfile.gettempdir()) / "latch-test-inbox-state.json"),
-    worker_name="test", email_poll_interval=60, email_reply_channel="operations",
+    worker_name="test", email_poll_interval=60, email_reply_channel="operations", email_reply_cap=3,
 ))
 if Path(_eb.state_path).exists():
     Path(_eb.state_path).unlink()
@@ -331,7 +331,7 @@ _eb.ask_llm = lambda messages, **k: "Thanks - noted, I'll follow up."
 _reports = []
 _eb.report = lambda text, task_id="", channel="": _reports.append((channel, text))
 _sent = []
-
+_approvals = []
 _INBOX = {"messages": []}
 
 
@@ -342,38 +342,73 @@ def _fake_request(method, path, body=None):
         _sent.append(body)
         # simulate server known-contact gating: only troels@pdc.com is a known contact
         return {"ok": True, "to": body["to"]} if body["to"] == "troels@pdc.com" else {"status": "needs_approval"}
+    if path == "/api/approvals":
+        _approvals.append(body)
+        return {"id": "appr_test"}
     return {}
 
 
 _eb.request_json = _fake_request
 
+
+def _poll_one(mid, sender, subject="Re: Hello", text="ok"):
+    _eb.state["lastEmailPollAt"] = 0
+    _INBOX["messages"] = [{"messageId": mid, "from": sender, "subject": subject, "body": text}]
+    _eb.process_inbound_email({})
+
+
 # 1) known sender -> auto-reply sent, threaded, surfaced
-_INBOX["messages"] = [{"messageId": "<m1>", "from": "Troels <troels@pdc.com>", "subject": "Re: Hello", "body": "Sounds good."}]
-_eb.process_inbound_email({})
-assert len(_sent) == 1 and _sent[0]["to"] == "troels@pdc.com", _sent
-assert _sent[0]["subject"] == "Re: Hello" and _sent[0]["inReplyTo"] == "<m1>", _sent[0]
+_poll_one("<m1>", "Troels <troels@pdc.com>")
+assert len(_sent) == 1 and _sent[0]["to"] == "troels@pdc.com" and _sent[0]["inReplyTo"] == "<m1>", _sent
 assert any("Replied to troels@pdc.com" in t for _c, t in _reports), _reports
 
-# 2) same message again -> deduped (reset throttle so it actually polls)
-_eb.state["lastEmailPollAt"] = 0
-_eb.process_inbound_email({})
+# 2) same message id again -> deduped
+_poll_one("<m1>", "troels@pdc.com")
 assert len(_sent) == 1, "an already-seen email must not be answered twice"
 
 # 3) unknown sender -> NOT auto-replied; surfaced for approval
-_eb.state["lastEmailPollAt"] = 0
-_INBOX["messages"] = [{"messageId": "<m2>", "from": "stranger@example.com", "subject": "Hi", "body": "cold"}]
-_eb.process_inbound_email({})
+_poll_one("<u1>", "stranger@example.com", subject="Hi", text="cold")
 assert any("have not emailed them first" in t for _c, t in _reports), _reports
 
 # 4) self/automated senders -> skipped entirely (no send attempt)
-_eb.state["lastEmailPollAt"] = 0
 _before = len(_sent)
+_eb.state["lastEmailPollAt"] = 0
 _INBOX["messages"] = [
-    {"messageId": "<m3>", "from": "compass_companion@fastmail.com", "subject": "loop", "body": "x"},
-    {"messageId": "<m4>", "from": "no-reply@svc.com", "subject": "auto", "body": "y"},
+    {"messageId": "<self1>", "from": "compass_companion@fastmail.com", "subject": "loop", "body": "x"},
+    {"messageId": "<auto1>", "from": "no-reply@svc.com", "subject": "auto", "body": "y"},
 ]
 _eb.process_inbound_email({})
 assert len(_sent) == _before, "self/automated senders must be skipped"
+
+# 5) per-thread cap: 3 auto-replies, then pause + file a continue approval, no 4th send
+_sent.clear()
+_reports.clear()
+_approvals.clear()
+_eb.state["email_threads"] = {}
+_eb.state["seen_emails"] = []
+for _i in range(1, 4):
+    _poll_one(f"<t{_i}>", "troels@pdc.com")
+assert len(_sent) == 3, f"should auto-reply up to the cap (3), got {len(_sent)}"
+_poll_one("<t4>", "troels@pdc.com")
+assert len(_sent) == 3, "must NOT send a 4th auto-reply past the cap"
+assert any(a.get("type") == "email_thread_continue" and a.get("emailTo") == "troels@pdc.com" for a in _approvals), _approvals
+assert _eb.state["email_threads"]["troels@pdc.com"]["paused"] is True
+
+# paused thread: further inbound -> no send, no duplicate continue approval
+_appr_before = len(_approvals)
+_poll_one("<t5>", "troels@pdc.com")
+assert len(_sent) == 3 and len(_approvals) == _appr_before, "paused thread must not reply or re-ask"
+
+# 6) operator approves the continue -> thread resumes
+_eb.handle_approved_decision(
+    {"type": "email_thread_continue", "status": "approved", "emailTo": "troels@pdc.com", "title": "continue"},
+    "continue", "", "t", {}, {}, [], {},
+)
+assert _eb.state["email_threads"]["troels@pdc.com"]["paused"] is False
+assert _eb.state["email_threads"]["troels@pdc.com"]["count"] == 0
+_poll_one("<t6>", "troels@pdc.com")
+assert len(_sent) == 4, "after approving continue, auto-replies resume"
+
 Path(_eb.state_path).unlink()
 
 print("Worker read-only template tests passed.")

@@ -46,7 +46,7 @@ const defaultMessageChannels = [
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
-const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "email_thread_continue", "other"];
 const executionModes = ["none", "read_only_status", "shell", "browser"];
 const riskLevels = ["low", "medium", "high"];
 const contactSendModes = ["manual", "approved_connector"];
