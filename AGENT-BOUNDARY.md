@@ -1,53 +1,73 @@
 # Agent Boundary
 
-OpenClaw agents should interact with a deployed Latch instance through authenticated API endpoints. They do not need source repository access to do that.
+Latch's safety rests on two independent axes. Keep them separate in your head — most confusion comes from mixing them.
 
-## Allowed For Agents
+## Axis 1 — Autonomy tier (how much the agent does without asking)
 
-- Latch base URL over Tailscale
-- Agent key only
-- `GET /api/agent/poll`
-- `POST /api/agent/report`
-- `POST /api/approvals`
+The operator picks one tier (and only the operator can — `/api/autonomy` is operator-gated; the agent can never raise its own level). Default is **Approve everything**.
+
+| Tier | The agent may do, unattended | Still always asks the operator |
+|------|------------------------------|-------------------------------|
+| **Approve everything** (`default_permissions`) | Plan, draft, suggest | Every real action |
+| **Auto read-only** (`auto_review`) | Read-only diagnostics; tightly bounded exact-URL public research | Anything that changes state |
+| **Auto-browse** (`auto_browse`) | The above **plus** navigate/read/extract on HTTPS sites unattended | Shell, commits, using your accounts, and any login/credential/HTTP step |
+| **Full auto** (`full_access`) | Non-sensitive shell + browser plans + CompassProjects commits | The hard boundaries in Axis 2 below |
+
+> ⚠️ **Full auto** lets a compromised or prompt-injected agent run code on the worker without asking. It is an explicit operator opt-in — only enable it on the disposable, network-isolated worker (see [SECURITY.md](./SECURITY.md) → Deployment Topology).
+
+## Axis 2 — Whose account an action uses (a hard boundary at *every* tier)
+
+This axis does not relax as you raise the tier. It is about **identity**, not volume.
+
+### The agent's own accounts — the agent controls these
+The agent may be given its **own** dedicated, low-trust, revocable accounts (e.g. its own email mailbox, its own scratch logins). It operates them itself, governed by the autonomy tier above. Its email is *its* email.
+
+### The operator's ("your") accounts — the agent may never hold these
+Your personal email, your GitHub token, provider API keys, notification tokens, bank/finance sessions, your main logins. The agent **never receives these credentials**. When a task needs one, the agent creates an approval; after you approve, the **credentials machine** (the trusted host) performs the action with your credential and returns only the result. The worker never sees the secret.
+
+**The template already exists: GitHub.** The agent asks for a `github_file`/`github_repo` approval; the host commits with the token; the worker never touches it. Every operator-owned account follows this same broker pattern.
+
+## Allowed For Agents (via the agent API, agent key only)
+
+- Latch base URL over Tailscale; agent key only
+- `GET /api/agent/poll`, `POST /api/agent/report`, `POST /api/approvals`, `POST /api/agent/executions`
 - `POST /api/llm/chat` if external LLM fallback is enabled
-- human verification requests through `POST /api/approvals` with `type: "human_verification"`
-- approval requests for commands, credentials, account setup, purchases, and other sensitive actions
-- approved non-sensitive `shell` and `browser` execution plans through the separate VM executor service
+- Approval requests for commands, browser/research plans, human verification, and other sensitive actions
+- Approved execution plans (per the active tier) through the separate VM executor service
+- Its **own** accounts (e.g. the agent mailbox), operated per the tier and the agent-email rules below
 
-## Keep Away From Agents
+## Keep Away From Agents (operator-owned — broker via approval instead)
 
 - Operator key
+- Your email account credentials (as opposed to the agent's own mailbox)
 - External provider API keys
 - GitHub personal access tokens
 - SSH deploy keys with write access
 - `data/` directory contents
 - Windows user profile files
 - Tailscale admin credentials
-- Browser sessions or password managers
-- Revolut or bank sessions
+- Your browser sessions or password managers
+- Revolut / bank sessions
+
+## Agent email (agent-owned mailbox)
+
+The agent may operate its **own** mailbox. Rules:
+
+- **Host-brokered:** the mailbox credentials live on the credentials machine, not the worker. The agent calls the host to send/read; the worker never holds SMTP/IMAP credentials.
+- **Never your mailbox:** sending as *you* remains an operator-owned action (broker + approval). The agent sends only as itself.
+- **Cold first-contact needs approval with a stated plan:** before the first message to a *new* recipient, the agent files an approval that states the outreach plan — how many recipients it expects to contact and why. The operator approves the campaign scope; the agent then sends first-contacts within that approved scope and handles the ongoing reply threads autonomously (subject to the tier). Exceeding the approved count/scope needs a new approval.
+- **Rate-limited and audited:** even on its own account, the host enforces a send rate limit and logs every send/read, so a compromised agent cannot quietly blast mail.
+- Reputational/legal note: autonomous outreach still carries real-world constraints (GDPR consent, CAN-SPAM, deliverability). Those are policy decisions layered on top of this technical boundary.
 
 ## If The Project Becomes Public
 
-Open source means the source code can be read by anyone, including an internet-capable agent. Security must not depend on hiding the code.
-
-The real boundary is capability:
+Open source means anyone — including an internet-capable agent — can read every line. Security must not depend on hiding code. The real boundary is capability:
 
 - An agent can know how the API works.
-- An agent must not have secrets that grant operator, provider, GitHub, finance, or host-admin powers.
-- GitHub publishing should happen from a trusted human workstation, not from the disposable OpenClaw VM.
-- If OpenClaw needs code context later, give it a read-only checkout or a specific exported task bundle, never a write-capable GitHub token.
+- An agent must not hold secrets that grant operator, provider, GitHub, finance, or host-admin powers, nor your account credentials.
+- Publishing happens from a trusted human workstation, not the disposable worker.
+- If the worker needs source context, give it a read-only checkout, never a write-capable credential.
 
 ## Good Default
 
-Run OpenClaw with:
-
-- no GitHub credentials
-- no provider API key
-- only the Latch agent key
-- network access limited to what the task needs
-- approval-gated executor plans for VM shell/browser actions
-- human approval for purchases, infrastructure changes, credential changes, and sensitive account steps
-- human presence for CAPTCHA, account creation, and email verification steps
-- separate bridge and executor services so chat/planning stays distinct from root VM execution
-
-If OpenClaw needs project source context, give it a VM-local read-only checkout. Do not let it use the trusted Windows working tree or a write-capable GitHub credential.
+Run the worker with: no GitHub credentials, no provider API key, only the Latch agent key, its own dedicated low-trust accounts (never yours), network access limited to what the task needs, approval-gated executor plans for VM shell/browser actions, and human approval for anything using your accounts, purchases, infrastructure changes, credential changes, and account/verification steps. Keep bridge and executor as separate services so chat/planning stays distinct from VM execution.

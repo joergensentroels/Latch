@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy to data/agent-email.json (gitignored) and fill in the AGENT's own mailbox. These credentials live only on the trusted host; the worker never receives them. Set transport to 'mock' for a no-network dry run, or 'smtp_imap' for real send/receive. The agent sends only as itself; sending as YOU stays an approval + host-brokered action.",
+  "enabled": false,
+  "transport": "smtp_imap",
+  "fromAddress": "agent@your-domain.example",
+  "fromName": "Compass Agent",
+  "smtp": {
+    "host": "smtp.your-provider.example",
+    "port": 465,
+    "user": "agent@your-domain.example",
+    "pass": "REPLACE_WITH_APP_PASSWORD"
+  },
+  "imap": {
+    "host": "imap.your-provider.example",
+    "port": 993,
+    "user": "agent@your-domain.example",
+    "pass": "REPLACE_WITH_APP_PASSWORD"
+  },
+  "limits": {
+    "maxSendsPerHour": 20,
+    "maxSendsPerDay": 100
+  },
+  "timeoutMs": 30000
+}

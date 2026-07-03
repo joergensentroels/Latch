@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { loadEmailConfig, sendEmail, pollInbox, classifySend } from "./email.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
@@ -15,6 +16,7 @@ const llmConfigPath = path.join(dataDir, "llm-provider.json");
 const notificationConfigPath = path.join(dataDir, "notifications.json");
 const localSettingsPath = path.join(dataDir, "local-settings.json");
 const githubConfigPath = path.join(dataDir, "github.json");
+const agentEmailConfigPath = path.join(dataDir, "agent-email.json");
 const companionAnchorPath = path.join(__dirname, "COMPANION-ANCHOR.md");
 const contextFilesDir = path.join(dataDir, "context-files");
 const backupsDir = path.join(dataDir, "backups");
@@ -28,21 +30,23 @@ const simplePlannerIntervalMs = Number(process.env.LATCH_SIMPLE_PLANNER_INTERVAL
 const defaultNetworkCredits = Number(process.env.LATCH_DEFAULT_NETWORK_CREDITS || 10_000);
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
 const routingPreferences = ["auto", "local", "network"];
-const autonomyModes = ["default_permissions", "auto_review", "full_access"];
+const autonomyModes = ["default_permissions", "auto_review", "auto_browse", "full_access"];
 const workerBackendTypes = ["ollama", "openai-compatible"];
 const networkWorkerStatuses = ["active", "paused"];
 const networkJobStatuses = ["queued", "assigned", "completed", "failed", "timed_out"];
 const agencyWorkerStatuses = ["online", "offline", "degraded"];
 const purchaseStatuses = ["pending", "completed", "cancelled", "failed"];
 const sessionTtlMs = Number(process.env.LATCH_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
-const devUserLoginEnabled = process.env.LATCH_ENABLE_DEV_LOGIN !== "0";
+// Default OFF for a public build: dev login mints a real session with no credential, so it must
+// be an explicit opt-in (LATCH_ENABLE_DEV_LOGIN=1) rather than an opt-out.
+const devUserLoginEnabled = process.env.LATCH_ENABLE_DEV_LOGIN === "1";
 const defaultMessageChannels = [
   { id: "compass", label: "Companion", description: "Direct chat with Compass Companion", builtIn: true },
   { id: "general", label: "General", description: "Loose notes", builtIn: true },
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
-const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "other"];
 const executionModes = ["none", "read_only_status", "shell", "browser"];
 const riskLevels = ["low", "medium", "high"];
 const contactSendModes = ["manual", "approved_connector"];
@@ -106,6 +110,8 @@ const emptyDb = {
   contextItems: [],
   executions: [],
   researchRuns: [],
+  emailCampaigns: [],
+  emailLog: [],
   users: [],
   sessions: [],
   purchases: [],
@@ -321,6 +327,8 @@ function mergeConcurrentDb(current, incoming) {
   merged.contextItems = mergeRecordsById(current.contextItems, merged.contextItems, "contextItems", deleted);
   merged.executions = mergeRecordsById(current.executions, merged.executions, "executions", deleted);
   merged.researchRuns = mergeRecordsById(current.researchRuns, merged.researchRuns, "researchRuns", deleted);
+  merged.emailCampaigns = mergeRecordsById(current.emailCampaigns, merged.emailCampaigns, "emailCampaigns", deleted);
+  merged.emailLog = mergeRecordsById(current.emailLog, merged.emailLog, "emailLog", deleted);
   merged.users = mergeRecordsById(current.users, merged.users, "users", deleted);
   merged.sessions = mergeRecordsById(current.sessions, merged.sessions, "sessions", deleted);
   merged.purchases = mergeRecordsById(current.purchases, merged.purchases, "purchases", deleted);
@@ -1025,6 +1033,9 @@ async function handleApi(req, res, url) {
       tokenBudget: cleanInteger(body.tokenBudget, 0, 20000, 0),
       researchQuestion: cleanText(body.researchQuestion || "", 1000),
       refreshResearch: cleanBoolean(body.refreshResearch, false),
+      plannedRecipients: approvalType === "email_campaign" ? cleanInteger(body.plannedRecipients, 1, 1000, 1) : 0,
+      campaignPurpose: approvalType === "email_campaign" ? cleanText(body.campaignPurpose || body.purpose || "", 1000) : "",
+      campaignRecipients: approvalType === "email_campaign" ? cleanTextArray(body.campaignRecipients, 200, 320) : [],
       githubRepoName: githubApprovalRepoName(approvalType, suppliedGithubRepoName, body.title, body.details, githubConfigForApproval?.defaultRepo || ""),
       githubDescription: approvalType === "github_repo" ? cleanText(body.githubDescription || body.description || "", 500) : "",
       githubVisibility: approvalType === "github_repo" ? cleanChoice(body.githubVisibility || body.visibility, ["private", "public"], "private") : "private",
@@ -1382,6 +1393,82 @@ async function handleApi(req, res, url) {
     db.events.unshift(event("research.reported", role, run.id, `${run.status}: ${run.question || run.seedUrls[0] || "research"}`));
     await writeDb(db);
     sendJson(res, 201, run);
+    return;
+  }
+
+  if (url.pathname === "/api/agent/email/send" && req.method === "POST") {
+    requireAgent(role, res);
+    if (res.writableEnded) return;
+    const config = await loadEmailConfig(agentEmailConfigPath);
+    if (!config.enabled) {
+      sendJson(res, 400, { error: "email_not_configured", detail: "Create data/agent-email.json (see agent-email.example.json) and enable it. The agent mailbox is host-brokered; the worker never holds the credentials." });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const to = String(body.to || "").trim().toLowerCase();
+    const subject = cleanText(body.subject || "", 300);
+    const messageBody = cleanText(body.body || body.text || "", 20000);
+    const db = await readDb();
+    const approvedContacts = db.emailCampaigns.flatMap((campaign) => Array.isArray(campaign.contacts) ? campaign.contacts : []);
+    const sendTimestamps = db.emailLog.map((entry) => entry.at).filter(Boolean);
+    const decision = classifySend({ to, approvedContacts, sendTimestamps, limits: config.limits, nowMs: Date.now() });
+    if (decision.action === "blocked") {
+      sendJson(res, 429, { error: "email_send_blocked", detail: decision.reason });
+      return;
+    }
+    if (decision.action === "needs_approval") {
+      const campaign = db.emailCampaigns.find((item) => (item.usedCount || 0) < (item.approvedCount || 0));
+      if (!campaign) {
+        sendJson(res, 202, { status: "needs_approval", detail: "First contact with a new recipient needs an approved outreach plan. Create an email_campaign approval stating how many recipients you expect to contact." });
+        return;
+      }
+      campaign.contacts = Array.isArray(campaign.contacts) ? campaign.contacts : [];
+      campaign.contacts.push(to);
+      campaign.usedCount = (campaign.usedCount || 0) + 1;
+      campaign.updatedAt = new Date().toISOString();
+    }
+    let result;
+    try {
+      result = await sendEmail(config, {
+        to,
+        subject,
+        body: messageBody,
+        inReplyTo: cleanText(body.inReplyTo || "", 300),
+        references: cleanText(body.references || "", 1000)
+      });
+    } catch (error) {
+      db.events.unshift(event("email.send.failed", "agent", "", cleanText(error.message, 300)));
+      await writeDb(db);
+      sendJson(res, 502, { error: "email_send_failed", detail: cleanText(error.message, 500) });
+      return;
+    }
+    db.emailLog.unshift({ id: newId("elog"), to, subject, at: new Date().toISOString() });
+    db.events.unshift(event("email.sent", "agent", result.id || "", `${to}: ${subject}`.slice(0, 200)));
+    await writeDb(db);
+    sendJson(res, 200, { ok: true, to, transport: result.transport || config.transport });
+    return;
+  }
+
+  if (url.pathname === "/api/agent/email/poll" && req.method === "POST") {
+    requireAgent(role, res);
+    if (res.writableEnded) return;
+    const config = await loadEmailConfig(agentEmailConfigPath);
+    if (!config.enabled) {
+      sendJson(res, 400, { error: "email_not_configured" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    let result;
+    try {
+      result = await pollInbox(config, {
+        limit: cleanInteger(body.limit, 1, 50, 20),
+        unseenOnly: cleanBoolean(body.unseenOnly, true)
+      });
+    } catch (error) {
+      sendJson(res, 502, { error: "email_poll_failed", detail: cleanText(error.message, 500) });
+      return;
+    }
+    sendJson(res, 200, { ok: true, messages: result.messages || [], transport: result.transport || config.transport });
     return;
   }
 
@@ -2118,6 +2205,24 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
       db.events.unshift(event("github.file.failed", actor, approval.id, `${approval.githubRepoName}:${approval.githubFilePath}`));
     }
   }
+  if (approval.type === "email_campaign") {
+    const budget = cleanInteger(approval.plannedRecipients, 1, 1000, 1);
+    const seededContacts = (Array.isArray(approval.campaignRecipients) ? approval.campaignRecipients : [])
+      .map((address) => String(address || "").trim().toLowerCase())
+      .filter((address) => address.includes("@"));
+    db.emailCampaigns.unshift({
+      id: newId("campaign"),
+      approvalId: approval.id,
+      purpose: cleanText(approval.campaignPurpose || approval.title || "", 1000),
+      approvedCount: budget,
+      usedCount: 0,
+      contacts: seededContacts,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    approval.responseNote = approval.responseNote || `Outreach plan approved for up to ${budget} new recipient(s).`;
+    db.events.unshift(event("email.campaign.approved", actor, approval.id, `up to ${budget} recipient(s)`));
+  }
 }
 
 async function createGithubRepoFromApproval(approval) {
@@ -2600,11 +2705,21 @@ async function authenticateNetworkWorker(req) {
   return { db, worker };
 }
 
+// Constant-time comparison: hash both sides to a fixed-length digest before comparing, so
+// crypto.timingSafeEqual never sees mismatched buffer lengths (which would otherwise throw or,
+// with a naive ===, leak the secret's length/prefix through response timing).
+function safeEqual(a, b) {
+  const bufA = crypto.createHash("sha256").update(String(a ?? "")).digest();
+  const bufB = crypto.createHash("sha256").update(String(b ?? "")).digest();
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function authenticate(req) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : req.headers["x-command-token"];
-  if (token === auth.operatorToken) return "operator";
-  if (token === auth.agentToken) return "agent";
+  if (!token) return null;
+  if (safeEqual(token, auth.operatorToken)) return "operator";
+  if (safeEqual(token, auth.agentToken)) return "agent";
   return null;
 }
 
@@ -2897,6 +3012,8 @@ function normalizeDb(db) {
   db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
   db.executions = Array.isArray(db.executions) ? db.executions : [];
   db.researchRuns = Array.isArray(db.researchRuns) ? db.researchRuns : [];
+  db.emailCampaigns = Array.isArray(db.emailCampaigns) ? db.emailCampaigns : [];
+  db.emailLog = Array.isArray(db.emailLog) ? db.emailLog : [];
   db.users = normalizeUsers(db.users);
   db.sessions = normalizeSessions(db.sessions);
   db.purchases = normalizePurchases(db.purchases);
@@ -3227,9 +3344,10 @@ function publicAutonomyPolicy(policy = {}) {
 
 function autonomyModeLabel(mode) {
   const labels = {
-    default_permissions: "Default permissions",
-    auto_review: "Auto review",
-    full_access: "Full access"
+    default_permissions: "Approve everything",
+    auto_review: "Auto read-only",
+    auto_browse: "Auto-browse",
+    full_access: "Full auto"
   };
   return labels[mode] || labels.default_permissions;
 }
@@ -3277,6 +3395,38 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false) {
     return { decisionMode: "human", reason: "Auto review did not match a low-risk allow rule." };
   }
 
+  if (mode === "auto_browse") {
+    if (approval.executionMode === "read_only_status" && approval.riskLevel === "low") {
+      return {
+        status: "approved",
+        decisionMode: "auto",
+        reason: "Auto-browse approved a low-risk read-only diagnostic.",
+        note: "Auto-approved by autonomy policy: low-risk read-only diagnostic."
+      };
+    }
+    if (approval.type === "web_research" && canAutoApproveResearch(approval)) {
+      return {
+        status: "approved",
+        decisionMode: "auto",
+        reason: "Auto-browse approved bounded exact-URL public research.",
+        note: "Auto-approved by autonomy policy: bounded public research."
+      };
+    }
+    // Unattended HTTPS browsing. Risky browser plans (plain HTTP, embedded URL credentials, or
+    // login/credential/2FA steps) were already routed to the operator by humanBoundaryReason above,
+    // so any browser plan reaching here is a non-credential HTTPS plan. Shell execution, repo
+    // commits, and contacting people still require a human in this tier.
+    if (approval.type === "command" && approval.executionMode === "browser" && !approval.sensitive && proEligible) {
+      return {
+        status: "approved",
+        decisionMode: "auto",
+        reason: "Auto-browse approved an unattended non-credential HTTPS browser plan.",
+        note: "Auto-approved by autonomy policy: HTTPS browser automation."
+      };
+    }
+    return { decisionMode: "human", reason: "Auto-browse requires review for anything beyond read-only steps and HTTPS browsing (e.g. shell, commits, or contacting people)." };
+  }
+
   if (mode === "full_access") {
     if (isOwnRepoGithubFileApproval(approval) && proEligible) {
       return {
@@ -3286,6 +3436,11 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false) {
         note: "Auto-approved by full access policy: CompassProjects file update."
       };
     }
+    // Full auto is an explicit, operator-only opt-in (the agent cannot raise the autonomy level —
+    // /api/autonomy is operator-gated). In this tier non-sensitive shell/browser execution plans
+    // auto-approve; the hard human boundaries (credentials, purchases, contacting people via YOUR
+    // accounts, account/repo creation, HTTP/login browser steps) still require the operator. Only
+    // enable this on the disposable, network-isolated worker.
     if (approval.type === "command" && !approval.sensitive && proEligible) {
       return {
         status: "approved",
@@ -3331,7 +3486,7 @@ function humanBoundaryReason(approval) {
     return "Human boundary: browser/research plans using HTTP URLs, embedded URL credentials, or login/credential steps require operator approval.";
   }
   if (approval.type === "github_file" && isOwnRepoGithubFileApproval(approval)) return false;
-  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file"].includes(approval.type)) {
+  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "email_campaign"].includes(approval.type)) {
     return "Human boundary: credentials, purchases, external contact, GitHub repo creation, account setup, verification, or context answers require the operator.";
   }
   return "";
