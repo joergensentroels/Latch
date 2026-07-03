@@ -1110,7 +1110,9 @@ def detect_github_file_request(title: str, details: str) -> ApprovalNeed | None:
 
 
 def is_default_repo_dev_task(text: str) -> bool:
-    if re.search(r"\b(explain|what is|how do i|how should i|why does|review)\b", text):
+    # Non-dev intents that happen to contain a dev verb+noun ("write a summary ... from their
+    # website", "email me a description of the app") must NOT be treated as file/commit work.
+    if re.search(r"\b(explain|what is|what does|how do i|how should i|why does|review|summariz\w*|summary|describe|email|e-mail)\b", text):
         return False
     action = re.search(r"\b(make|create|build|add|implement|update|write|edit|change|fix|scaffold|commit|push)\b", text)
     artifact = re.search(

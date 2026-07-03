@@ -120,6 +120,18 @@ no_address = bridge.detect_approval_need(
 )
 assert no_address is None or no_address.type != "email_campaign"
 
+# A "write a summary ... from their website" request must NOT be mis-detected as a github_file
+# commit (regression: dev verb "write" + noun "website" used to trip is_default_repo_dev_task).
+summary_req = bridge.detect_approval_need(
+    "Summarize",
+    "Please write a clean 3-4 sentence summary of what this company does, based only on the raw text I gathered from their website. Return just the summary.",
+)
+assert summary_req is None or summary_req.type != "github_file", f"summary request must not be github_file, got {summary_req and summary_req.type}"
+
+# But a genuine file/dev task in the default repo still routes to github_file.
+dev_task = bridge.detect_approval_need("Update site", "Please update the README file in the repo with a hello world landing page.")
+assert dev_task is not None and dev_task.type == "github_file", f"real dev task should be github_file, got {dev_task and dev_task.type}"
+
 research = bridge.detect_approval_need(
     "Research docs",
     "Please browse https://example.com/docs and summarize the install path without scraping too much.",
