@@ -293,4 +293,24 @@ _state_file.unlink()
 # sd_notify must be a safe no-op when not running under a systemd watchdog
 bridge.sd_notify("WATCHDOG=1")
 
+# --- LLM-composed email body: a send with no explicit "Body:" defers composition to the LLM ---
+compose_need = bridge.detect_approval_need("Email", "Send an email to dan@example.com summarizing the latest project news.")
+assert compose_need is not None and compose_need.type == "email_campaign", f"expected email_campaign, got {compose_need and compose_need.type}"
+assert compose_need.email_to == "dan@example.com"
+assert compose_need.email_body == "", "no explicit body should defer to LLM composition"
+assert compose_need.email_compose_brief, "a compose brief should be captured for the LLM"
+
+# an explicit "Body:" is used verbatim (no composition)
+verbatim_need = bridge.detect_approval_need("Email", "Send an email to dan@example.com. Body: Ship it today.")
+assert verbatim_need.email_body == "Ship it today." and verbatim_need.email_compose_brief == "", "explicit body must stay verbatim"
+
+# compose_email_if_needed fills the body via the LLM and surfaces it in the review details
+_cb = bridge.Bridge(argparse.Namespace(state_path=str(Path(tempfile.gettempdir()) / "latch-test-compose-state.json"), worker_name="test"))
+_cb.ask_llm = lambda messages, **k: "Here is a short, professional summary of the project news."
+_composed = _cb.compose_email_if_needed(compose_need)
+assert _composed.email_body == "Here is a short, professional summary of the project news.", _composed.email_body
+assert _composed.email_body in _composed.details, "composed body should appear in the review details"
+# verbatim approvals are left untouched by the composer
+assert _cb.compose_email_if_needed(verbatim_need).email_body == "Ship it today.", "verbatim body must not be recomposed"
+
 print("Worker read-only template tests passed.")

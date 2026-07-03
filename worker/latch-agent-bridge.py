@@ -104,6 +104,7 @@ class ApprovalNeed:
     email_to: str = ""
     email_subject: str = ""
     email_body: str = ""
+    email_compose_brief: str = ""
 
 
 READ_ONLY_TEMPLATE_LABELS = {
@@ -315,6 +316,7 @@ class Bridge:
                     if approval.type == "command" and approval.execution_mode == "none":
                         approval = self.plan_execution_approval(title, details, approval, routing_preference, allow_network)
                     approval = enrich_status_template(approval, self.args)
+                    approval = self.compose_email_if_needed(approval)
                     self.patch_task(task_id, "waiting", "Waiting for operator approval or human help.")
                     created = self.create_approval(approval, task_id=task_id)
                     suffix = f" ({created.get('id')})" if created else ""
@@ -398,6 +400,7 @@ class Bridge:
                     if approval.type == "command" and approval.execution_mode == "none":
                         approval = self.plan_execution_approval("Inbox instruction", text, approval, routing_preference, allow_network)
                     approval = enrich_status_template(approval, self.args)
+                    approval = self.compose_email_if_needed(approval)
                     created = self.create_approval(approval, message_id=message_id)
                     suffix = f" ({created.get('id')})" if created else ""
                     self.report(f"Approval requested for inbox instruction{suffix}.", message_id)
@@ -517,6 +520,47 @@ class Bridge:
             execution_mode=plan.get("mode") or "shell",
             execution_plan=plan,
         )
+
+    def compose_email_if_needed(self, approval: "ApprovalNeed | None") -> "ApprovalNeed | None":
+        """For an agent-mailbox send with no operator-dictated body, have the LLM draft the
+        email body from the request, and fold it into the approval so the operator reviews the
+        real message before approving. No-op for anything else or when a body was given."""
+        if not approval or approval.type != "email_campaign":
+            return approval
+        if approval.email_body or not approval.email_compose_brief:
+            return approval
+        composed = ""
+        try:
+            composed = self.ask_llm(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You draft short, professional email bodies. Output ONLY the body text - "
+                            "no 'Subject:' line, no code fences. Keep it to 3-6 sentences, base it strictly "
+                            "on the material provided, and do not invent facts or add placeholders."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Write the body of an email to {approval.email_to}. "
+                            f"Base it only on this request and any source text it contains:\n\n{approval.email_compose_brief}"
+                        ),
+                    },
+                ]
+            )
+        except Exception as exc:  # noqa: BLE001 - fall back to a reviewable draft rather than failing the send
+            print(f"email body compose failed: {exc}", file=sys.stderr)
+        body = clean((composed or "").strip(), 8000) or clean(approval.email_compose_brief, 8000)
+        details = (
+            "The companion wants to send an email from its OWN dedicated mailbox "
+            "(host-brokered — the worker never holds the mailbox credentials). "
+            "The body below was drafted by the companion; review it before approving. "
+            "Approving sends this exact message and authorizes 1 new recipient.\n\n"
+            f"To: {approval.email_to}\nSubject: {approval.email_subject}\n\n{body}"
+        )
+        return replace(approval, email_body=body, details=details)
 
     def create_approval(self, approval: ApprovalNeed, task_id: str = "", message_id: str = "") -> dict:
         response = self.request_json(
@@ -1185,9 +1229,12 @@ def is_capability_policy_note(text: str) -> bool:
     )
 
 
-def parse_email_message(raw: str) -> tuple[str, str]:
-    """Pull an explicit subject/body out of a send request. Falls back to a guessed
-    subject and the raw request text as the body (the operator reviews before approving)."""
+def parse_email_message(raw: str) -> tuple[str, str, bool]:
+    """Pull an explicit subject/body out of a send request.
+
+    Returns (subject, body, body_is_explicit). If the request gives an explicit "Body:" /
+    "saying ..." the body is used verbatim and body_is_explicit is True. Otherwise body is ""
+    and the caller should have the LLM compose it from the request (body_is_explicit False)."""
     subject = ""
     body = ""
     subject_match = re.search(
@@ -1201,13 +1248,12 @@ def parse_email_message(raw: str) -> tuple[str, str]:
     body_match = re.search(r"(?:\bbody\b|\bmessage\b|\btext\b)\s*[:\-]\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
     if not body_match:
         body_match = re.search(r"(?:\bsaying\b|\bthat says\b|\bwhich says\b|\bthat reads\b)\s+(.+)", raw, re.IGNORECASE | re.DOTALL)
+    body_is_explicit = bool(body_match)
     if body_match:
         body = clean(body_match.group(1).strip().strip("\"'"), 8000)
     if not subject:
         subject = guess_subject(raw) or "Message from the Compass companion"
-    if not body:
-        body = clean(raw, 8000)
-    return subject, body
+    return subject, body, body_is_explicit
 
 
 def detect_agent_email_send(title: str, details: str) -> ApprovalNeed | None:
@@ -1250,7 +1296,12 @@ def detect_agent_email_send(title: str, details: str) -> ApprovalNeed | None:
     recipient = extract_email(raw)
     if not recipient:
         return None
-    subject, body = parse_email_message(raw)
+    subject, body, body_is_explicit = parse_email_message(raw)
+    # When the operator didn't dictate a literal body, the companion composes one with the LLM
+    # (see Bridge.compose_email_if_needed). Detection stays a pure function, so we only stash the
+    # brief here; the composed body is filled in and shown for review before the approval is created.
+    compose_brief = "" if body_is_explicit else raw
+    body_block = body if body_is_explicit else "(the companion will draft the message body from your request — review it below before approving)"
     return ApprovalNeed(
         type="email_campaign",
         title=f"Send email from agent mailbox to {recipient}",
@@ -1258,7 +1309,7 @@ def detect_agent_email_send(title: str, details: str) -> ApprovalNeed | None:
             "The companion wants to send an email from its OWN dedicated mailbox "
             "(host-brokered — the worker never holds the mailbox credentials). "
             "Approving sends this exact message and authorizes 1 new recipient.\n\n"
-            f"To: {recipient}\nSubject: {subject}\n\n{body}\n\n"
+            f"To: {recipient}\nSubject: {subject}\n\n{body_block}\n\n"
             f"Original request:\n{raw}"
         ),
         expected_response="Approve to send this message from the agent mailbox, or deny / return edits.",
@@ -1269,6 +1320,7 @@ def detect_agent_email_send(title: str, details: str) -> ApprovalNeed | None:
         email_to=recipient,
         email_subject=subject,
         email_body=body,
+        email_compose_brief=compose_brief,
     )
 
 
