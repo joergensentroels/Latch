@@ -313,4 +313,67 @@ assert _composed.email_body in _composed.details, "composed body should appear i
 # verbatim approvals are left untouched by the composer
 assert _cb.compose_email_if_needed(verbatim_need).email_body == "Ship it today.", "verbatim body must not be recomposed"
 
+# --- Inbound email: auto-reply only to senders the companion emailed first ---
+assert bridge.reply_subject("Hello") == "Re: Hello"
+assert bridge.reply_subject("Re: Hello") == "Re: Hello"
+assert bridge.reply_subject("") == "Re: your message"
+assert bridge.is_automated_or_self("compass_companion@fastmail.com", "compass_companion@fastmail.com") is True
+assert bridge.is_automated_or_self("no-reply@svc.com", "a@b.com") is True
+assert bridge.is_automated_or_self("troels@pdc.com", "a@b.com") is False
+
+_eb = bridge.Bridge(argparse.Namespace(
+    state_path=str(Path(tempfile.gettempdir()) / "latch-test-inbox-state.json"),
+    worker_name="test", email_poll_interval=60, email_reply_channel="operations",
+))
+if Path(_eb.state_path).exists():
+    Path(_eb.state_path).unlink()
+_eb.ask_llm = lambda messages, **k: "Thanks - noted, I'll follow up."
+_reports = []
+_eb.report = lambda text, task_id="", channel="": _reports.append((channel, text))
+_sent = []
+
+_INBOX = {"messages": []}
+
+
+def _fake_request(method, path, body=None):
+    if path == "/api/agent/email/poll":
+        return {"ok": True, "fromAddress": "compass_companion@fastmail.com", "messages": _INBOX["messages"]}
+    if path == "/api/agent/email/send":
+        _sent.append(body)
+        # simulate server known-contact gating: only troels@pdc.com is a known contact
+        return {"ok": True, "to": body["to"]} if body["to"] == "troels@pdc.com" else {"status": "needs_approval"}
+    return {}
+
+
+_eb.request_json = _fake_request
+
+# 1) known sender -> auto-reply sent, threaded, surfaced
+_INBOX["messages"] = [{"messageId": "<m1>", "from": "Troels <troels@pdc.com>", "subject": "Re: Hello", "body": "Sounds good."}]
+_eb.process_inbound_email({})
+assert len(_sent) == 1 and _sent[0]["to"] == "troels@pdc.com", _sent
+assert _sent[0]["subject"] == "Re: Hello" and _sent[0]["inReplyTo"] == "<m1>", _sent[0]
+assert any("Replied to troels@pdc.com" in t for _c, t in _reports), _reports
+
+# 2) same message again -> deduped (reset throttle so it actually polls)
+_eb.state["lastEmailPollAt"] = 0
+_eb.process_inbound_email({})
+assert len(_sent) == 1, "an already-seen email must not be answered twice"
+
+# 3) unknown sender -> NOT auto-replied; surfaced for approval
+_eb.state["lastEmailPollAt"] = 0
+_INBOX["messages"] = [{"messageId": "<m2>", "from": "stranger@example.com", "subject": "Hi", "body": "cold"}]
+_eb.process_inbound_email({})
+assert any("have not emailed them first" in t for _c, t in _reports), _reports
+
+# 4) self/automated senders -> skipped entirely (no send attempt)
+_eb.state["lastEmailPollAt"] = 0
+_before = len(_sent)
+_INBOX["messages"] = [
+    {"messageId": "<m3>", "from": "compass_companion@fastmail.com", "subject": "loop", "body": "x"},
+    {"messageId": "<m4>", "from": "no-reply@svc.com", "subject": "auto", "body": "y"},
+]
+_eb.process_inbound_email({})
+assert len(_sent) == _before, "self/automated senders must be skipped"
+Path(_eb.state_path).unlink()
+
 print("Worker read-only template tests passed.")
