@@ -228,6 +228,9 @@ class Bridge:
             return
         sd_notify("WATCHDOG=1")
 
+        # Operator-adjustable settings delivered via the poll (fall back to CLI/env defaults).
+        self.remote_email_reply_cap = (payload.get("agentEmailPolicy") or {}).get("replyCap")
+
         tasks = payload.get("tasks", [])
         messages = payload.get("messages", [])
         channels = payload.get("channels", [])
@@ -548,7 +551,8 @@ class Bridge:
         own = str(resp.get("fromAddress") or "").strip().lower()
         seen = set(self.state.setdefault("seen_emails", []))
         threads = self.state.setdefault("email_threads", {})
-        cap = max(1, int(getattr(self.args, "email_reply_cap", 3) or 3))
+        remote_cap = getattr(self, "remote_email_reply_cap", None)
+        cap = remote_cap if isinstance(remote_cap, int) and remote_cap >= 1 else max(1, int(getattr(self.args, "email_reply_cap", 3) or 3))
         channel = clean(getattr(self.args, "email_reply_channel", "") or "operations", 60)
         for msg in resp.get("messages", []):
             mid = str(msg.get("messageId") or msg.get("uid") or "")

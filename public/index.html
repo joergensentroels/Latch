@@ -444,6 +444,22 @@ The companion should help the user think clearly and act responsibly; it should 
             </div>
             <p id="autonomyStatus" class="form-status" aria-live="polite"></p>
           </form>
+          <form id="agentEmailForm" class="ops-panel autonomy-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Agent email</p>
+                <h2 class="section-title">Auto-reply limit</h2>
+              </div>
+            </div>
+            <div class="form-row autonomy-row">
+              <label for="emailReplyCap">
+                Auto-replies per thread before pausing
+                <input id="emailReplyCap" type="number" min="1" max="20" step="1" inputmode="numeric" />
+              </label>
+              <div id="emailReplyCapSummary" class="approval-summary"></div>
+            </div>
+            <p id="emailReplyCapStatus" class="form-status" aria-live="polite"></p>
+          </form>
           <div class="ops-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>

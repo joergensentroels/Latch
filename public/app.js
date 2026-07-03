@@ -112,6 +112,10 @@ const autonomyForm = document.querySelector("#autonomyForm");
 const autonomyMode = document.querySelector("#autonomyMode");
 const autonomySummary = document.querySelector("#autonomySummary");
 const autonomyStatus = document.querySelector("#autonomyStatus");
+const agentEmailForm = document.querySelector("#agentEmailForm");
+const emailReplyCap = document.querySelector("#emailReplyCap");
+const emailReplyCapSummary = document.querySelector("#emailReplyCapSummary");
+const emailReplyCapStatus = document.querySelector("#emailReplyCapStatus");
 const refreshButton = document.querySelector("#refreshButton");
 const lockButton = document.querySelector("#lockButton");
 const appLockButton = document.querySelector("#appLockButton");
@@ -502,6 +506,8 @@ networkInviteForm?.addEventListener("submit", createNetworkInvite);
 purchaseForm?.addEventListener("submit", createPurchaseRequest);
 autonomyForm?.addEventListener("submit", (event) => event.preventDefault());
 autonomyMode?.addEventListener("change", updateAutonomyPolicy);
+agentEmailForm?.addEventListener("submit", (event) => event.preventDefault());
+emailReplyCap?.addEventListener("change", updateAgentEmailPolicy);
 appLockButton.addEventListener("click", () => {
   if (!state.token) return;
   if (!isAppLockConfigured()) {
@@ -793,6 +799,7 @@ function render() {
     renderDiagnostics();
     renderDoctor();
     renderAutonomyPolicy();
+    renderAgentEmailPolicy();
   renderNetwork();
   renderCredits();
   renderSimpleSettings();
@@ -2517,6 +2524,48 @@ async function updateAutonomyPolicy() {
     renderAutonomyPolicy();
   } finally {
     autonomyMode.disabled = false;
+  }
+}
+
+function renderAgentEmailPolicy() {
+  if (!agentEmailForm || !emailReplyCap) return;
+  const policy = state.data?.agentEmailPolicy || state.about?.agentEmailPolicy || {};
+  const cap = Number(policy.replyCap) || 3;
+  if (!agentEmailForm.contains(document.activeElement)) emailReplyCap.value = cap;
+  renderEmailReplyCapSummary(Number(emailReplyCap.value) || cap, policy.updatedAt);
+}
+
+function renderEmailReplyCapSummary(cap, updatedAt = "") {
+  if (!emailReplyCapSummary) return;
+  emailReplyCapSummary.innerHTML = `
+    <strong>${escapeHtml(String(cap))} repl${cap === 1 ? "y" : "ies"} per thread</strong>
+    <p>The companion auto-replies up to ${escapeHtml(String(cap))} time(s) to a contact it emailed first, then pauses that thread and asks you whether to continue.</p>
+    ${updatedAt ? `<p>Updated ${escapeHtml(formatTime(updatedAt))}</p>` : ""}
+  `;
+}
+
+async function updateAgentEmailPolicy() {
+  if (!emailReplyCap) return;
+  let cap = Math.round(Number(emailReplyCap.value));
+  if (!Number.isFinite(cap)) cap = 3;
+  cap = Math.min(20, Math.max(1, cap));
+  emailReplyCap.value = cap;
+  renderEmailReplyCapSummary(cap, state.data?.agentEmailPolicy?.updatedAt || "");
+  setFormStatus(emailReplyCapStatus, "Saving...", "");
+  emailReplyCap.disabled = true;
+  try {
+    const policy = await api("/api/agent-email/policy", {
+      method: "PATCH",
+      body: JSON.stringify({ replyCap: cap })
+    });
+    setFormStatus(emailReplyCapStatus, "Auto-reply limit saved.", "success");
+    state.data = { ...(state.data || {}), agentEmailPolicy: policy };
+    await refresh();
+  } catch (error) {
+    setFormStatus(emailReplyCapStatus, `Could not save: ${error.message}`, "error");
+    renderAgentEmailPolicy();
+  } finally {
+    emailReplyCap.disabled = false;
   }
 }
 
