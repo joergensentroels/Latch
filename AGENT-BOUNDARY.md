@@ -59,6 +59,8 @@ The agent may operate its **own** mailbox. Rules:
 - **Rate-limited and audited:** even on its own account, the host enforces a send rate limit and logs every send/read, so a compromised agent cannot quietly blast mail.
 - Reputational/legal note: autonomous outreach still carries real-world constraints (GDPR consent, CAN-SPAM, deliverability). Those are policy decisions layered on top of this technical boundary.
 
+**Mailbox provider is your choice, not Latch's.** `email.mjs` speaks generic SMTP + IMAP and nothing else — it has no code path specific to any provider. Gmail/Fastmail/Zoho with an app password, Proton via Bridge, a self-hosted Mailu/Mail-in-a-Box instance, anything that speaks standard SMTP+IMAP over TLS: all equally supported, none of them "the intended way." The maintainer's own instance currently uses a standard hosted mailbox with an app password, picked for zero setup friction and reliable delivery. A fully self-hosted mailbox (matching this project's not-for-profit/self-hosting spirit more completely) is a real candidate for later, once the tradeoffs are worth it — chiefly, outbound deliverability from a residential IP to large providers (e.g. Microsoft) is unreliable regardless of correct configuration, and receiving mail requires exposing something to the public internet on port 25, unlike every other Latch/OpenClaw component. Pick whatever fits your own values, budget, and deliverability needs; `agent-email.example.json` only needs a host/port/user/pass, same as any other mail client would.
+
 ## If The Project Becomes Public
 
 Open source means anyone — including an internet-capable agent — can read every line. Security must not depend on hiding code. The real boundary is capability:
