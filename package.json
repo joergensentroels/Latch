@@ -2,9 +2,22 @@
   "name": "latch-agent-gateway",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-or-later",
+  "description": "Compass / Latch — a self-hosted, approval-gated gateway for operating a disposable AI agent worker (OpenClaw) from your phone or desktop, where the control plane holds the secrets and the worker never does.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joergensentroels/Latch.git"
+  },
+  "homepage": "https://github.com/joergensentroels/Latch#readme",
+  "bugs": {
+    "url": "https://github.com/joergensentroels/Latch/issues"
+  },
   "scripts": {
     "start": "node server.js",
-    "test": "node test/secret-scan.mjs && node test/run-python-tests.mjs && node test/smoke.mjs"
+    "test": "node test/secret-scan.mjs && node test/run-python-tests.mjs && node test/agent-email.mjs && node test/smoke.mjs"
   }
 }
