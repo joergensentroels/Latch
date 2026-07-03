@@ -114,12 +114,12 @@ assert research.token_budget == 3000
 
 open_search = bridge.detect_approval_need(
     "Inbox instruction",
-    "Can you Google Troels Anker Jørgensen working at PDC a/s and write down in your context what you learn about me?",
+    "Can you Google Jane Doe working at Example Corp and write down in your context what you learn about me?",
 )
 assert open_search.type == "command"
 assert open_search.execution_mode == "browser"
 assert open_search.execution_plan["actions"][0]["type"] == "search_web"
-assert "Troels Anker" in open_search.execution_plan["actions"][0]["text"]
+assert "Jane Doe" in open_search.execution_plan["actions"][0]["text"]
 
 browser_install = bridge.detect_approval_need(
     "Download Firefox",
