@@ -102,6 +102,24 @@ assert contact.recipient == "reviewer@example.com"
 assert contact.send_mode == "manual"
 assert "security review" in contact.contact_purpose.lower()
 
+# Generic "send an email to X" routes to the agent's OWN mailbox (host-brokered), not draft-only.
+agent_send = bridge.detect_approval_need(
+    "Send an email",
+    "Send an email to jane@example.com. Subject: Hello from Compass. Body: Hi Jane, the companion is confirming its mailbox works.",
+)
+assert agent_send.type == "email_campaign"
+assert agent_send.email_to == "jane@example.com"
+assert agent_send.email_subject == "Hello from Compass"
+assert "confirming its mailbox works" in agent_send.email_body
+assert agent_send.planned_recipients == 1
+
+# A send with no concrete address yet must NOT become a send (it needs a scrape/lookup step first).
+no_address = bridge.detect_approval_need(
+    "Find and email",
+    "Browse https://example.com/about, find my email address, then send me an email.",
+)
+assert no_address is None or no_address.type != "email_campaign"
+
 research = bridge.detect_approval_need(
     "Research docs",
     "Please browse https://example.com/docs and summarize the install path without scraping too much.",
