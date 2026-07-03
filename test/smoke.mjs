@@ -1185,6 +1185,33 @@ try {
   });
   assert(emailInbox.ok === true && Array.isArray(emailInbox.messages), "agent can poll its own inbox");
 
+  // Agent-mailbox send via approval: an email_campaign carrying a concrete message must stay
+  // pending until the operator approves, then be SENT by the host from the agent's own mailbox.
+  const agentMailApproval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "email_campaign",
+      title: "Send email from agent mailbox to jane@example.com",
+      details: "Agent-mailbox send smoke test.",
+      plannedRecipients: 1,
+      campaignPurpose: "Confirm the companion can send from its own mailbox.",
+      emailTo: "jane@example.com",
+      emailSubject: "Hello from Compass",
+      emailBody: "Hi Jane, the Compass companion is confirming its mailbox works."
+    }
+  });
+  assert(agentMailApproval.status === "pending", "an email carrying a message must stay human-boundary until approved");
+  assert(!agentMailApproval.emailSentAt, "no email should be sent before approval");
+  const approvedAgentMail = await request(`/api/approvals/${agentMailApproval.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved", note: "Approved: send the hello." }
+  });
+  assert(approvedAgentMail.status === "approved", "operator approval should authorize the send");
+  assert(approvedAgentMail.emailSentAt, "approving an email_campaign carrying a message should send it from the agent mailbox");
+  assert(approvedAgentMail.responseNote.includes("Sent from the agent mailbox to jane@example.com"), "approved send should record the recipient in the response note");
+
   const shoppingApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,

@@ -1036,6 +1036,10 @@ async function handleApi(req, res, url) {
       plannedRecipients: approvalType === "email_campaign" ? cleanInteger(body.plannedRecipients, 1, 1000, 1) : 0,
       campaignPurpose: approvalType === "email_campaign" ? cleanText(body.campaignPurpose || body.purpose || "", 1000) : "",
       campaignRecipients: approvalType === "email_campaign" ? cleanTextArray(body.campaignRecipients, 200, 320) : [],
+      emailTo: approvalType === "email_campaign" ? String(cleanText(body.emailTo || body.to || "", 320)).trim().toLowerCase() : "",
+      emailSubject: approvalType === "email_campaign" ? cleanText(body.emailSubject || "", 300) : "",
+      emailBody: approvalType === "email_campaign" ? cleanText(body.emailBody || body.body || "", 20000) : "",
+      emailSentAt: "",
       githubRepoName: githubApprovalRepoName(approvalType, suppliedGithubRepoName, body.title, body.details, githubConfigForApproval?.defaultRepo || ""),
       githubDescription: approvalType === "github_repo" ? cleanText(body.githubDescription || body.description || "", 500) : "",
       githubVisibility: approvalType === "github_repo" ? cleanChoice(body.githubVisibility || body.visibility, ["private", "public"], "private") : "private",
@@ -2210,7 +2214,7 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
     const seededContacts = (Array.isArray(approval.campaignRecipients) ? approval.campaignRecipients : [])
       .map((address) => String(address || "").trim().toLowerCase())
       .filter((address) => address.includes("@"));
-    db.emailCampaigns.unshift({
+    const campaign = {
       id: newId("campaign"),
       approvalId: approval.id,
       purpose: cleanText(approval.campaignPurpose || approval.title || "", 1000),
@@ -2219,9 +2223,35 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
       contacts: seededContacts,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
-    });
+    };
+    db.emailCampaigns.unshift(campaign);
     approval.responseNote = approval.responseNote || `Outreach plan approved for up to ${budget} new recipient(s).`;
     db.events.unshift(event("email.campaign.approved", actor, approval.id, `up to ${budget} recipient(s)`));
+
+    // If this approval carries a concrete first message, the trusted host sends it now from
+    // the agent's own mailbox (host-brokered). The worker never holds the mailbox credentials.
+    const emailTo = String(approval.emailTo || "").trim().toLowerCase();
+    const emailBody = cleanText(approval.emailBody || "", 20000);
+    if (emailTo.includes("@") && emailBody) {
+      const emailSubject = cleanText(approval.emailSubject || "", 300);
+      try {
+        const config = await loadEmailConfig(agentEmailConfigPath);
+        if (!config.enabled) {
+          throw new Error("Agent mailbox is not configured on the host (data/agent-email.json).");
+        }
+        const result = await sendEmail(config, { to: emailTo, subject: emailSubject, body: emailBody });
+        if (!campaign.contacts.includes(emailTo)) campaign.contacts.push(emailTo);
+        campaign.usedCount = (campaign.usedCount || 0) + 1;
+        campaign.updatedAt = new Date().toISOString();
+        db.emailLog.unshift({ id: newId("elog"), to: emailTo, subject: emailSubject, at: new Date().toISOString(), approvalId: approval.id });
+        approval.emailSentAt = new Date().toISOString();
+        approval.responseNote = `Sent from the agent mailbox to ${emailTo}. ${approval.responseNote}`.trim();
+        db.events.unshift(event("email.sent", actor, result.id || approval.id, `${emailTo}: ${emailSubject}`.slice(0, 200)));
+      } catch (error) {
+        approval.responseNote = `Outreach plan approved, but the first message failed to send: ${cleanText(error.message, 500)}. ${approval.responseNote || ""}`.trim();
+        db.events.unshift(event("email.send.failed", actor, approval.id, cleanText(error.message, 300)));
+      }
+    }
   }
 }
 

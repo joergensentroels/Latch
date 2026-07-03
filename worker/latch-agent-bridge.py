@@ -42,7 +42,7 @@ Implementation details are silent tools, not personality. Do not mention backend
 You may help with planning, explanation, coding advice, and next-step suggestions.
 You may use policy-gated shell/browser execution plans, bounded exact-URL research, and trusted-host GitHub actions when the request calls for them. Mention these only as capabilities relevant to a concrete task, never as self-description.
 For development tasks, code, files, websites, README, or repository-content updates, assume the target repository is CompassProjects unless the operator explicitly names another repository.
-You must not handle private credentials, passwords, API keys, recovery codes, payment tools, purchases, account creation, CAPTCHA/human verification, personal browser profiles, or sending emails/external messages. If a workflow needs a private login or secret, stop and ask the human to handle that step without revealing the secret to you.
+You must not handle private credentials, passwords, API keys, recovery codes, payment tools, purchases, account creation, CAPTCHA/human verification, or personal browser profiles. You may send email only from your own dedicated agent mailbox, and only after the operator approves the outreach; you may never send mail as the operator or from the operator's accounts, and you never hold the mailbox credentials yourself (the trusted host sends on your behalf). If a workflow needs a private login or secret, stop and ask the human to handle that step without revealing the secret to you.
 For web/research/execution workflows, prefer token-efficient summaries, explicit source lists, small budgets, exact planned steps, and reusable source notes instead of dumping raw pages.
 If you need durable context from the operator before giving a good answer, include one to three lines that start exactly with CONTEXT_QUESTION: followed by a concrete question.
 Keep replies concise, practical, and in the companion's voice."""
@@ -82,6 +82,11 @@ class ApprovalNeed:
     github_file_path: str = ""
     github_file_content: str = ""
     github_commit_message: str = ""
+    planned_recipients: int = 0
+    campaign_purpose: str = ""
+    email_to: str = ""
+    email_subject: str = ""
+    email_body: str = ""
 
 
 READ_ONLY_TEMPLATE_LABELS = {
@@ -522,6 +527,11 @@ class Bridge:
                 "githubFilePath": approval.github_file_path,
                 "githubFileContent": approval.github_file_content,
                 "githubCommitMessage": approval.github_commit_message,
+                "plannedRecipients": approval.planned_recipients,
+                "campaignPurpose": approval.campaign_purpose,
+                "emailTo": approval.email_to,
+                "emailSubject": approval.email_subject,
+                "emailBody": approval.email_body,
                 "actionTemplate": approval.action_template,
                 "actionPreview": approval.action_preview,
                 "renderedCommands": list(approval.rendered_commands),
@@ -957,6 +967,10 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     if vm_execution:
         return vm_execution
 
+    email_send = detect_agent_email_send(title, details)
+    if email_send:
+        return email_send
+
     contact = detect_external_contact(title, details)
     if contact:
         return contact
@@ -1130,6 +1144,93 @@ def is_capability_policy_note(text: str) -> bool:
         any(term in text for term in capability_terms)
         and any(term in text for term in policy_terms)
         and not install_intent
+    )
+
+
+def parse_email_message(raw: str) -> tuple[str, str]:
+    """Pull an explicit subject/body out of a send request. Falls back to a guessed
+    subject and the raw request text as the body (the operator reviews before approving)."""
+    subject = ""
+    body = ""
+    subject_match = re.search(
+        r"subject\s*[:\-]\s*(.+?)\s*(?:\n|(?:\bbody\b|\bmessage\b|\btext\b)\s*[:\-]|(?:\bsaying\b|\bthat says\b)\s|$)",
+        raw,
+        re.IGNORECASE,
+    )
+    if subject_match:
+        subject = clean(subject_match.group(1).strip().strip("\"'").rstrip(".,;: "), 300)
+    # Marker style first ("body:", "message:", "text:"), then natural phrasing ("saying ...").
+    body_match = re.search(r"(?:\bbody\b|\bmessage\b|\btext\b)\s*[:\-]\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
+    if not body_match:
+        body_match = re.search(r"(?:\bsaying\b|\bthat says\b|\bwhich says\b|\bthat reads\b)\s+(.+)", raw, re.IGNORECASE | re.DOTALL)
+    if body_match:
+        body = clean(body_match.group(1).strip().strip("\"'"), 8000)
+    if not subject:
+        subject = guess_subject(raw) or "Message from the Compass companion"
+    if not body:
+        body = clean(raw, 8000)
+    return subject, body
+
+
+def detect_agent_email_send(title: str, details: str) -> ApprovalNeed | None:
+    """A request to send mail from the companion's OWN mailbox, addressed to a concrete
+    recipient. Routed to the host-brokered agent-email flow (email_campaign approval that,
+    once approved, the trusted host actually sends). If no address is present yet (it still
+    needs to be scraped/looked up), returns None so a research/browse step can run first."""
+    raw = clean(f"{title}\n{details}", 4000)
+    text = raw.lower()
+    send_phrases = (
+        "send email",
+        "send an email",
+        "send a mail",
+        "send an e-mail",
+        "send me an email",
+        "send this email",
+        "send the email",
+        "send them an email",
+        "send her an email",
+        "send him an email",
+        "email me at",
+    )
+    if not any(phrase in text for phrase in send_phrases):
+        return None
+    # Named-relationship / operator-identity outreach (co-creator, security reviewer, "contact my …")
+    # stays on the draft-only external_contact path; the agent mailbox only handles generic sends.
+    relationship_markers = (
+        "co-creator",
+        "cocreator",
+        "security specialist",
+        "security reviewer",
+        "external contact",
+        "contact my",
+        "contact the",
+        "message my",
+        "message the",
+    )
+    if any(marker in text for marker in relationship_markers):
+        return None
+    recipient = extract_email(raw)
+    if not recipient:
+        return None
+    subject, body = parse_email_message(raw)
+    return ApprovalNeed(
+        type="email_campaign",
+        title=f"Send email from agent mailbox to {recipient}",
+        details=(
+            "The companion wants to send an email from its OWN dedicated mailbox "
+            "(host-brokered — the worker never holds the mailbox credentials). "
+            "Approving sends this exact message and authorizes 1 new recipient.\n\n"
+            f"To: {recipient}\nSubject: {subject}\n\n{body}\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Approve to send this message from the agent mailbox, or deny / return edits.",
+        sensitive=True,
+        risk_level="medium",
+        planned_recipients=1,
+        campaign_purpose=clean(raw, 1000),
+        email_to=recipient,
+        email_subject=subject,
+        email_body=body,
     )
 
 
