@@ -180,6 +180,9 @@ def main() -> int:
     # known-contact gating); mail from anyone else is surfaced to the operator, not answered.
     parser.add_argument("--email-poll-interval", type=int, default=int(os.getenv("LATCH_EMAIL_POLL_INTERVAL", "60")))
     parser.add_argument("--email-reply-channel", default=os.getenv("LATCH_EMAIL_REPLY_CHANNEL", "operations"))
+    # Max consecutive auto-replies to one contact before pausing that thread and asking the
+    # operator (via an email_thread_continue review) whether to keep going. Bounds bot/auto-reply loops.
+    parser.add_argument("--email-reply-cap", type=int, default=int(os.getenv("LATCH_EMAIL_REPLY_CAP", "3")))
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
@@ -544,6 +547,8 @@ class Bridge:
             return
         own = str(resp.get("fromAddress") or "").strip().lower()
         seen = set(self.state.setdefault("seen_emails", []))
+        threads = self.state.setdefault("email_threads", {})
+        cap = max(1, int(getattr(self.args, "email_reply_cap", 3) or 3))
         channel = clean(getattr(self.args, "email_reply_channel", "") or "operations", 60)
         for msg in resp.get("messages", []):
             mid = str(msg.get("messageId") or msg.get("uid") or "")
@@ -559,6 +564,36 @@ class Bridge:
             if not sender or is_automated_or_self(sender, own):
                 continue
             body = clean(msg.get("body", ""), 4000)
+            thread = threads.setdefault(sender, {"count": 0, "paused": False, "log": []})
+            thread["log"] = (thread.get("log", []) + [f"From {sender}: {subject} - {body[:300]}"])[-8:]
+
+            # Thread already paused pending your go-ahead: don't reply, don't re-ask (no spam).
+            if thread.get("paused"):
+                self.save_state()
+                continue
+
+            # Hit the per-thread auto-reply cap: pause, summarize, and ask the operator to continue.
+            if int(thread.get("count", 0)) >= cap:
+                thread["paused"] = True
+                self.save_state()
+                summary = self.summarize_email_thread(sender, thread, profile)
+                self.create_approval(ApprovalNeed(
+                    type="email_thread_continue",
+                    title=f"Continue email thread with {sender}?",
+                    details=(
+                        f"The companion has auto-replied {cap} time(s) in its thread with {sender} and paused "
+                        "before replying again. Approve to let it keep auto-replying to this contact, or deny "
+                        "to keep the thread paused.\n\n"
+                        f"Thread summary:\n{summary}"
+                    ),
+                    expected_response="Approve to resume auto-replies to this contact; deny to keep the thread paused.",
+                    sensitive=True,
+                    risk_level="medium",
+                    email_to=sender,
+                ))
+                self.report(f"Paused auto-replies to {sender} after {cap} reply(ies). Sent you a 'continue?' review with a summary.", channel=channel)
+                continue
+
             try:
                 draft = self.ask_llm(
                     [
@@ -593,7 +628,11 @@ class Bridge:
                 },
             )
             if send and send.get("ok"):
-                self.report(f"Replied to {sender} (re: {subject}):\n\n{reply_body}", channel=channel)
+                thread["count"] = int(thread.get("count", 0)) + 1
+                thread["lastAt"] = now
+                thread["log"] = (thread.get("log", []) + [f"Companion reply: {reply_body[:300]}"])[-8:]
+                self.save_state()
+                self.report(f"Replied to {sender} (re: {subject}) [{thread['count']}/{cap} in this thread]:\n\n{reply_body}", channel=channel)
             elif send and send.get("status") == "needs_approval":
                 self.report(
                     f"New email from {sender} (re: {subject}) - I have not emailed them first, so I did not auto-reply. "
@@ -602,6 +641,26 @@ class Bridge:
                 )
             else:
                 self.report(f"New email from {sender} (re: {subject}) - reply could not be sent (rate limit or transport error).", channel=channel)
+
+    def summarize_email_thread(self, sender: str, thread: dict, profile: dict) -> str:
+        log = "\n".join(thread.get("log", []) or [])
+        try:
+            return clean(clean_visible_report_text(self.ask_llm(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Summarize this email thread in 2-4 sentences for the operator: who the contact is, "
+                            "what they want, where the exchange stands, and whether a human should step in. Be "
+                            "concise and factual; do not invent details."
+                        ),
+                    },
+                    {"role": "user", "content": f"Thread with {sender}:\n{log or '(no captured history)'}"},
+                ]
+            )), 2000)
+        except Exception as exc:  # noqa: BLE001 - fall back to the raw log rather than failing the pause
+            print(f"thread summary failed for {sender}: {exc}", file=sys.stderr)
+            return clean(log, 2000)
 
     def compose_email_if_needed(self, approval: "ApprovalNeed | None") -> "ApprovalNeed | None":
         """For an agent-mailbox send with no operator-dictated body, have the LLM draft the
@@ -778,6 +837,16 @@ class Bridge:
     ) -> None:
         approval_type = str(approval.get("type", "other"))
         is_sensitive = bool(approval.get("sensitive"))
+
+        if approval_type == "email_thread_continue":
+            contact = clean(approval.get("emailTo") or "", 320).strip().lower()
+            threads = self.state.setdefault("email_threads", {})
+            if contact and contact in threads:
+                threads[contact]["count"] = 0
+                threads[contact]["paused"] = False
+                self.save_state()
+            self.report(f"Resuming auto-replies to {contact}." if contact else "Email thread continue approved.", task_id)
+            return
         task = tasks_by_id.get(str(approval.get("taskId", "")))
         message = messages_by_id.get(str(approval.get("messageId", "")))
 
