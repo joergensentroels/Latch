@@ -238,11 +238,19 @@ async function pollViaImap(config, options = {}) {
     const messages = [];
     for (const id of pick) {
       const fetch = await conn.imap(`f${id}`, `FETCH ${id} (BODY.PEEK[HEADER.FIELDS (FROM SUBJECT MESSAGE-ID)])`);
+      let body = "";
+      try {
+        const bodyResp = await conn.imap(`b${id}`, `FETCH ${id} BODY.PEEK[TEXT]`);
+        body = decodeImapText(bodyResp).slice(0, 4000);
+      } catch {
+        body = "";
+      }
       messages.push({
         uid: id,
         from: fetch.match(/^From:\s*(.+)$/mi)?.[1]?.trim() || "",
         subject: fetch.match(/^Subject:\s*(.+)$/mi)?.[1]?.trim() || "",
-        messageId: fetch.match(/^Message-ID:\s*(.+)$/mi)?.[1]?.trim() || ""
+        messageId: fetch.match(/^Message-ID:\s*(.+)$/mi)?.[1]?.trim() || "",
+        body
       });
     }
     await conn.imap("a9", "LOGOUT").catch(() => {});
@@ -259,6 +267,24 @@ function imapQuote(value) {
 function hostnameLabel(address) {
   const domain = String(address || "").split("@")[1] || "localhost";
   return domain.replace(/[^A-Za-z0-9.-]/g, "") || "localhost";
+}
+
+// Best-effort plain-text extraction from an IMAP FETCH BODY[TEXT] response. This is intentionally
+// lightweight (no full MIME tree parsing): it pulls the literal, undoes quoted-printable, drops MIME
+// boundary/Content-* lines and quoted reply history, and collapses whitespace - enough to feed an LLM
+// for a reply draft. Rich MIME/HTML handling is a later enhancement.
+export function decodeImapText(resp) {
+  const literal = String(resp || "").match(/\{(\d+)\}\r?\n([\s\S]*)/);
+  let text = literal ? literal[2].slice(0, Number(literal[1])) : String(resp || "");
+  text = text.replace(/=\r?\n/g, "").replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  const lines = text.split(/\r?\n/).filter((line) => {
+    const t = line.trimStart();
+    if (t.startsWith(">")) return false; // quoted reply history
+    if (t.startsWith("--")) return false; // MIME boundaries
+    if (/^Content-(Type|Transfer-Encoding|Disposition):/i.test(t)) return false;
+    return true;
+  });
+  return lines.join("\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // Minimal promise-based TLS line client shared by SMTP and IMAP.

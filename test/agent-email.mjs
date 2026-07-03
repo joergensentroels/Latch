@@ -10,6 +10,7 @@ import {
   sendEmail,
   pollInbox,
   loadEmailConfig,
+  decodeImapText,
   __mockReset,
   __mockSent
 } from "../email.mjs";
@@ -82,5 +83,25 @@ const cfgSmtp = await loadEmailConfig("/nonexistent/agent-email.json", {
   AGENT_EMAIL_FROM: "agent@x.com"
 });
 assert.equal(cfgSmtp.enabled, false, "smtp_imap stays disabled without real host/credentials");
+
+// decodeImapText: pulls the literal body, undoes quoted-printable, drops MIME boundaries,
+// Content-* headers, and quoted reply history.
+const imapBody = [
+  "--bnd",
+  "Content-Type: text/plain; charset=utf-8",
+  "Content-Transfer-Encoding: quoted-printable",
+  "",
+  "Thanks for the note =E2=80=94 sounds good.",
+  "> On Tue you wrote:",
+  "> earlier stuff",
+  "--bnd--"
+].join("\r\n");
+const imapResp = `* 5 FETCH (BODY[TEXT] {${imapBody.length}}\r\n${imapBody})\r\na9 OK FETCH completed\r\n`;
+const decoded = decodeImapText(imapResp);
+assert.ok(decoded.includes("Thanks for the note"), "decodeImapText should surface the plain body");
+assert.ok(decoded.includes("sounds good"), "decodeImapText should keep the reply text");
+assert.ok(!decoded.includes(">"), "decodeImapText should drop quoted reply history");
+assert.ok(!decoded.includes("Content-Type"), "decodeImapText should drop MIME headers");
+assert.ok(!decoded.includes("--bnd"), "decodeImapText should drop MIME boundaries");
 
 console.log("Agent-email unit tests passed.");

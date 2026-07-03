@@ -1472,7 +1472,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 502, { error: "email_poll_failed", detail: cleanText(error.message, 500) });
       return;
     }
-    sendJson(res, 200, { ok: true, messages: result.messages || [], transport: result.transport || config.transport });
+    sendJson(res, 200, { ok: true, messages: result.messages || [], transport: result.transport || config.transport, fromAddress: config.fromAddress });
     return;
   }
 

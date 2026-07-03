@@ -175,6 +175,11 @@ def main() -> int:
     parser.add_argument("--max-tasks-per-tick", type=int, default=int(os.getenv("LATCH_MAX_TASKS_PER_TICK", "1")))
     parser.add_argument("--max-messages-per-tick", type=int, default=int(os.getenv("LATCH_MAX_MESSAGES_PER_TICK", "1")))
     parser.add_argument("--process-existing-messages", action="store_true", default=env_bool("LATCH_PROCESS_EXISTING_MESSAGES", False))
+    # Agent mailbox monitoring: 0 disables it. When enabled, the bridge polls its own inbox and
+    # auto-replies ONLY to senders it has already emailed first (the server enforces this via
+    # known-contact gating); mail from anyone else is surfaced to the operator, not answered.
+    parser.add_argument("--email-poll-interval", type=int, default=int(os.getenv("LATCH_EMAIL_POLL_INTERVAL", "60")))
+    parser.add_argument("--email-reply-channel", default=os.getenv("LATCH_EMAIL_REPLY_CHANNEL", "operations"))
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
@@ -234,6 +239,7 @@ class Bridge:
             return
         self.process_tasks(tasks, context_items, network_context_items, profile, channels)
         self.process_messages(messages, context_items, network_context_items, profile, channels)
+        self.process_inbound_email(profile)
         self.save_state()
 
     def heartbeat(self, gateway: str = "") -> None:
@@ -520,6 +526,82 @@ class Bridge:
             execution_mode=plan.get("mode") or "shell",
             execution_plan=plan,
         )
+
+    def process_inbound_email(self, profile: dict) -> None:
+        """Poll the companion's OWN mailbox and auto-reply to senders it has already emailed
+        first. The "first-contact" rule is enforced by the server: a reply to a known contact
+        sends; any other sender comes back needs_approval and is only surfaced to the operator,
+        never auto-answered. Throttled, deduplicated, and loop-guarded (skips self/automated mail)."""
+        interval = max(0, int(getattr(self.args, "email_poll_interval", 0) or 0))
+        if interval <= 0:
+            return
+        now = time.time()
+        if now - float(self.state.get("lastEmailPollAt", 0) or 0) < interval:
+            return
+        self.state["lastEmailPollAt"] = now
+        resp = self.request_json("POST", "/api/agent/email/poll", {"unseenOnly": True, "limit": 10})
+        if not resp or not resp.get("ok"):
+            return
+        own = str(resp.get("fromAddress") or "").strip().lower()
+        seen = set(self.state.setdefault("seen_emails", []))
+        channel = clean(getattr(self.args, "email_reply_channel", "") or "operations", 60)
+        for msg in resp.get("messages", []):
+            mid = str(msg.get("messageId") or msg.get("uid") or "")
+            if not mid or mid in seen:
+                continue
+            # Mark seen + persist before acting: at-most-once, so a restart never re-replies.
+            seen.add(mid)
+            self.state["seen_emails"] = sorted(seen)[-500:]
+            self.save_state()
+
+            sender = extract_email(msg.get("from", ""))
+            subject = clean(msg.get("subject", ""), 200)
+            if not sender or is_automated_or_self(sender, own):
+                continue
+            body = clean(msg.get("body", ""), 4000)
+            try:
+                draft = self.ask_llm(
+                    [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": context_briefing([], profile)},
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are replying to an email in the companion's own voice. Output ONLY the reply "
+                                "body - no 'Subject:' line, no quoted history, no signature block beyond a simple "
+                                "sign-off. Keep it concise and professional, answer what the sender actually wrote, "
+                                "and do not invent facts or make commitments."
+                            ),
+                        },
+                        {"role": "user", "content": f"Email from {sender}\nSubject: {subject}\n\n{body or '(no readable body)'}"},
+                    ]
+                )
+            except Exception as exc:  # noqa: BLE001 - never let a mailbox hiccup break the tick
+                print(f"email reply draft failed for {sender}: {exc}", file=sys.stderr)
+                self.report(f"New email from {sender} (re: {subject}) - could not draft a reply automatically.", channel=channel)
+                continue
+            reply_body = clean(clean_visible_report_text(draft), 8000)
+            send = self.request_json(
+                "POST",
+                "/api/agent/email/send",
+                {
+                    "to": sender,
+                    "subject": reply_subject(subject),
+                    "body": reply_body,
+                    "inReplyTo": msg.get("messageId", ""),
+                    "references": msg.get("messageId", ""),
+                },
+            )
+            if send and send.get("ok"):
+                self.report(f"Replied to {sender} (re: {subject}):\n\n{reply_body}", channel=channel)
+            elif send and send.get("status") == "needs_approval":
+                self.report(
+                    f"New email from {sender} (re: {subject}) - I have not emailed them first, so I did not auto-reply. "
+                    f"Approve an outreach plan if you want me to respond.\n\nTheir message:\n{body[:1000]}",
+                    channel=channel,
+                )
+            else:
+                self.report(f"New email from {sender} (re: {subject}) - reply could not be sent (rate limit or transport error).", channel=channel)
 
     def compose_email_if_needed(self, approval: "ApprovalNeed | None") -> "ApprovalNeed | None":
         """For an agent-mailbox send with no operator-dictated body, have the LLM draft the
@@ -1635,6 +1717,24 @@ def guess_github_description(text: str) -> str:
 def extract_email(text: str) -> str:
     match = re.search(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", text)
     return clean(match.group(0), 300) if match else ""
+
+
+def reply_subject(subject: str) -> str:
+    s = clean(subject or "", 200).strip()
+    if not s:
+        return "Re: your message"
+    return s if re.match(r"(?i)^re:", s) else f"Re: {s}"
+
+
+def is_automated_or_self(sender: str, own_address: str) -> bool:
+    """Guard against mail loops: never auto-reply to our own address or to automated senders."""
+    s = (sender or "").strip().lower()
+    if not s:
+        return True
+    if own_address and s == own_address.strip().lower():
+        return True
+    local = s.split("@")[0]
+    return any(marker in local for marker in ("mailer-daemon", "no-reply", "noreply", "donotreply", "do-not-reply", "postmaster", "bounce"))
 
 
 def extract_domains(text: str) -> tuple[str, ...]:
