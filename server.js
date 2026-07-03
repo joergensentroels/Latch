@@ -511,6 +511,7 @@ async function handleApi(req, res, url) {
         archived: countArchived(db)
       },
       autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
+      agentEmailPolicy: publicAgentEmailPolicy(db.meta.agentEmailPolicy),
       productContract: publicProductContract(),
       agencyWorkers: publicAgencyWorkers(db),
       llm: publicLlmConfig(llm),
@@ -582,6 +583,23 @@ async function handleApi(req, res, url) {
     db.events.unshift(event("autonomy.updated", "operator", "autonomyPolicy", autonomyModeLabel(db.meta.autonomyPolicy.mode)));
     await writeDb(db);
     sendJson(res, 200, publicAutonomyPolicy(db.meta.autonomyPolicy));
+    return;
+  }
+
+  if (url.pathname === "/api/agent-email/policy" && req.method === "PATCH") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    db.meta.agentEmailPolicy = {
+      ...publicAgentEmailPolicy(db.meta.agentEmailPolicy),
+      replyCap: cleanInteger(body.replyCap, 1, 20, publicAgentEmailPolicy(db.meta.agentEmailPolicy).replyCap),
+      updatedAt: new Date().toISOString()
+    };
+    db.events.unshift(event("agentEmail.policy.updated", "operator", "agentEmailPolicy", `reply cap ${db.meta.agentEmailPolicy.replyCap}`));
+    await writeDb(db);
+    sendJson(res, 200, publicAgentEmailPolicy(db.meta.agentEmailPolicy));
     return;
   }
 
@@ -1343,6 +1361,7 @@ async function handleApi(req, res, url) {
       channels: activeItems(db.channels).slice(0, 100).map(publicChannel),
       approvals: activeItems(db.approvals).slice(0, 50),
       autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
+      agentEmailPolicy: publicAgentEmailPolicy(db.meta.agentEmailPolicy),
       profile: publicAgentProfile(db.meta.agentProfile),
       contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50)),
       networkContextItems: await networkContextItems(activeItems(db.contextItems).filter((item) => item.shareWithNetwork).slice(0, 50)),
@@ -3006,6 +3025,7 @@ function visibleState(db) {
     meta: db.meta,
     profile: publicAgentProfile(db.meta.agentProfile),
     autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
+    agentEmailPolicy: publicAgentEmailPolicy(db.meta.agentEmailPolicy),
     users: db.users.slice(0, 100).map(publicUser),
     purchases: db.purchases.slice(0, 100).map(publicPurchase),
     messages: newestFirst(activeItems(db.messages)).slice(0, 100),
@@ -3368,6 +3388,13 @@ function publicAgentProfile(profile = {}) {
 function publicAutonomyPolicy(policy = {}) {
   return {
     mode: cleanChoice(policy.mode, autonomyModes, "default_permissions"),
+    updatedAt: cleanText(policy.updatedAt || "", 80)
+  };
+}
+
+function publicAgentEmailPolicy(policy = {}) {
+  return {
+    replyCap: cleanInteger(policy.replyCap, 1, 20, 3),
     updatedAt: cleanText(policy.updatedAt || "", 80)
   };
 }

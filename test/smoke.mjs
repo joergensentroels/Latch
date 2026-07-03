@@ -1145,6 +1145,30 @@ try {
   });
   assert(restoreFullAccess.mode === "full_access", "restore full access for the remaining checks");
 
+  // --- Agent-email reply cap is operator-settable and surfaced to state + the agent poll ---
+  const defaultEmailPolicy = await request("/api/state", { headers: operatorHeaders });
+  assert(defaultEmailPolicy.agentEmailPolicy?.replyCap === 3, "reply cap defaults to 3");
+  const savedEmailPolicy = await request("/api/agent-email/policy", {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { replyCap: 5 }
+  });
+  assert(savedEmailPolicy.replyCap === 5, "operator can set the reply cap");
+  const clampedEmailPolicy = await request("/api/agent-email/policy", {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { replyCap: 999 }
+  });
+  assert(clampedEmailPolicy.replyCap === 20, "reply cap is clamped to a sane max");
+  const agentSeesPolicy = await request("/api/agent/poll", { headers: agentHeaders });
+  assert(agentSeesPolicy.agentEmailPolicy?.replyCap === 20, "agent poll carries the reply cap");
+  await expectStatus("/api/agent-email/policy", {
+    method: "PATCH",
+    headers: { ...agentHeaders, "content-type": "application/json" },
+    body: JSON.stringify({ replyCap: 1 })
+  }, 403);
+  await request("/api/agent-email/policy", { method: "PATCH", headers: operatorHeaders, body: { replyCap: 3 } });
+
   // --- Agent email (host-brokered, mock transport): cold-contact needs an approved plan ---
   const coldSend = await request("/api/agent/email/send", {
     method: "POST",
