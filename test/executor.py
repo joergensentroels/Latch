@@ -44,7 +44,7 @@ browser_plan = executor.sanitize_execution_plan(
             {"type": "open", "url": "https://example.com"},
             {"type": "extract_text"},
             {"type": "screenshot", "path": "/tmp/example.png"},
-            {"type": "search_web", "text": "Troels Anker Jorgensen PDC", "maxResults": 4},
+            {"type": "search_web", "text": "Jane Doe Example Corp", "maxResults": 4},
             {"type": "unknown"},
         ],
     }
@@ -82,7 +82,7 @@ assert parsed["commands"] == ["id"]
 
 github_file = bridge.detect_github_file_request(
     "Inbox instruction",
-    "Let's have you write hello troels somewhere in the readme file",
+    "Let's have you write hello there somewhere in the readme file",
 )
 assert github_file is not None
 assert github_file.github_repo_name == "CompassProjects"
@@ -91,7 +91,7 @@ assert "inbox-instruction" not in github_file.details
 
 explicit_github_file = bridge.detect_github_file_request(
     "Inbox instruction",
-    "Update README in repo CompassProjects with hello troels",
+    "Update README in repo CompassProjects with hello there",
 )
 assert explicit_github_file is not None
 assert explicit_github_file.github_repo_name == "CompassProjects"

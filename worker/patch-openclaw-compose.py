@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 
-project_dir = Path(os.environ.get("OPENCLAW_PROJECT_DIR", "/home/troels/apps/openclaw"))
+project_dir = Path(os.environ.get("OPENCLAW_PROJECT_DIR", "/home/user/apps/openclaw"))
 compose_path = project_dir / "docker-compose.yml"
 env_path = project_dir / ".env"
 tailscale_ip = os.environ.get("OPENCLAW_GATEWAY_HOST", "")

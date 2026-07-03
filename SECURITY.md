@@ -1,5 +1,13 @@
 # Security Notes
 
+## Reporting a Vulnerability
+
+Please report security vulnerabilities privately through **[GitHub Security Advisories](https://github.com/joergensentroels/Latch/security/advisories/new)** rather than a public issue. This keeps the details private between you and the maintainer until a fix is ready.
+
+Include, if possible: the affected file/endpoint, a reproduction, and the impact you believe it has. There's no bug bounty here — this is a solo/community project — but every report will get a response and, once fixed, credit in the release notes if you'd like it.
+
+This is a young project (first public release) with a single maintained line (`main`); there isn't yet a versioned support policy beyond "the latest commit on `main`."
+
 ## Intended Exposure
 
 Latch is intended for private use over Tailscale.
@@ -18,6 +26,32 @@ Avoid:
 - public reverse proxies
 - sharing keys in chat apps
 - giving OpenClaw GitHub write credentials
+
+## Deployment Topology and Isolation
+
+Latch's safety comes from an *isolation boundary*, not from any particular hardware. The control plane (this Latch app) holds the secrets — operator/agent keys, provider keys, GitHub token, and `data/` — while the OpenClaw worker holds none of them and reaches the control plane only through the authenticated agent API. That invariant is what contains a compromised or prompt-injected agent, and it holds whether the two sides run on two physical machines or two VMs.
+
+**The reference setup (two separate machines) is a choice, not a requirement.** It is the maximum-isolation end of a spectrum. Pick the point that fits your threat model:
+
+- **Separate physical machines** — strongest. No shared hypervisor or host, so an escape from the worker cannot reach the control plane.
+- **Two VMs on one host** — recommended default for most users. Same *logical* boundary (separate OS, kernel, and memory; the worker is confined to its guest), and effectively as safe against the threat Latch is built for: a misbehaving or prompt-injected agent trying to reach credentials.
+- **Worker in a microVM (e.g. Firecracker) or gVisor sandbox** — a middle ground with a much smaller escape surface than a plain container, close to VM-grade isolation on a single host.
+- **Containers or same-host processes** — weakest; a container escape is a lower bar. Suitable only for low-risk local experimentation.
+
+**Caveats when the control plane and worker share one machine (VMs or containers):**
+
+- **Shared hypervisor** — a VM-escape vulnerability (guest → hypervisor → other guest) collapses the boundary. Rare and high-severity, but a vector that separate hardware does not have.
+- **Shared host** — if the host OS is compromised by another route, both sides fall together.
+- **Side channels** — co-resident guests share CPU/cache hardware. Largely irrelevant to the agent threat model; relevant only against a sophisticated co-resident attacker.
+
+**To keep the boundary intact on a single host:**
+
+- Put the worker on a host-only or internal network that can reach only the Latch control plane's endpoint — not the wider LAN or the internet unless a task requires it.
+- Do not enable shared folders or a shared clipboard between the worker and the control plane. Shared folders are the usual accidental hole that exposes `data/`.
+- Give the worker no host-management access — no host agent, no back-channel to the hypervisor.
+- Keep the "worker never holds secrets" rule (see Keys below and [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md)) regardless of topology. Isolation is the second line of defence, not the first.
+
+**Bottom line:** run on separate hardware for maximum separation; two VMs on one host is a reasonable and far more accessible default; do not run the worker as an unisolated same-host process for anything you would not hand a stranger.
 
 ## Keys
 

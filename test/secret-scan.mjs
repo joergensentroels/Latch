@@ -8,8 +8,9 @@ const binaryExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".ico"]);
 
 const patterns = [
   {
-    name: "local Tailscale IP",
-    regex: /\b100\.(98\.130\.94|67\.106\.85)\b/g
+    // Tailscale's whole CGNAT allocation (RFC 6598, /10 block), not one operator's specific address.
+    name: "Tailscale IP",
+    regex: /\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/g
   },
   {
     name: "operator token",
@@ -25,10 +26,13 @@ const patterns = [
     name: "common API key",
     regex: /\b(sk-[A-Za-z0-9_-]{16,}|mistral_[A-Za-z0-9_-]{16,})\b/g
   },
-  {
-    name: "temporary setup password",
-    regex: new RegExp(`LatchSetup${"4"}Water`, "g")
-  }
+  // Local, machine-specific secrets that must never be baked into a tracked pattern go in
+  // data/secret-scan-denylist.txt (one literal string per line). That file lives under the
+  // gitignored data/ dir, so it never ships with the repo.
+  ...(await loadLocalDenylist()).map((secret) => ({
+    name: "locally denylisted secret",
+    regex: new RegExp(escapeRegExp(secret), "g")
+  }))
 ];
 
 const findings = [];
@@ -71,4 +75,18 @@ async function* walk(dir) {
 
 function lineNumber(text, index) {
   return text.slice(0, index).split("\n").length;
+}
+
+async function loadLocalDenylist() {
+  try {
+    const text = await readFile(path.join(root, "data", "secret-scan-denylist.txt"), "utf8");
+    return text.split("\n").map((line) => line.trim()).filter(Boolean);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

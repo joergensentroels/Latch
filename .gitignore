@@ -5,6 +5,10 @@ data-dev/
 !.env.example
 *.log
 *.tmp
+*.pid
+.DS_Store
+Thumbs.db
+Desktop.ini
 .tmp-browser-check-*/
 node_modules/
 __pycache__/

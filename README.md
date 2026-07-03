@@ -20,6 +20,8 @@ Product tiers:
 
 Credits and Latch Network compute can make reasoning stronger, but they are not an agent runtime. Real action requires a worker somewhere: self-hosted, community-operated, or future hosted.
 
+> ⚠️ **Security first.** Latch is designed so the worker running your AI agent never holds your credentials — but it is still early software. Do not expose it beyond localhost or your private Tailscale network before reading [SECURITY.md](./SECURITY.md), and don't run "Full auto" autonomy against anything you can't afford to lose. Found a vulnerability? See [Reporting a Vulnerability](./SECURITY.md#reporting-a-vulnerability).
+
 Read [SECURITY.md](./SECURITY.md) before exposing it beyond localhost.
 
 If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [SECURITY-REVIEW-PACKET.md](./SECURITY-REVIEW-PACKET.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), and [NOTIFICATIONS.md](./NOTIFICATIONS.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
@@ -329,7 +331,7 @@ Compass also warns when it is opened from a route that does not look like localh
 If you accidentally expose a key or something feels wrong, rotate both Latch keys immediately:
 
 ```powershell
-cd "C:\Users\troel\Documents\LLM server\openclaw-command-center"
+cd "C:\path\to\openclaw-command-center"
 powershell -ExecutionPolicy Bypass -File .\Emergency-Latch-Lockdown.ps1
 ```
 
