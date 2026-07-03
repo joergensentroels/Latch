@@ -280,19 +280,33 @@ function tlsConnect(host, port, timeoutMs) {
 
     function drainMatching(matcher) {
       return new Promise((res, rej) => {
-        const check = () => {
+        // Both listeners are removed on whichever path fires first, so repeated commands over the
+        // same socket don't accumulate handlers (previously leaked one 'error' listener per call,
+        // tripping Node's MaxListenersExceededWarning after ~10 commands).
+        const cleanup = () => {
+          socket.off("data", onData);
+          socket.off("error", onError);
+        };
+        const onData = () => {
           if (matcher.test(buffer)) {
             const out = buffer;
             buffer = "";
+            cleanup();
             res(out);
-            return true;
           }
-          return false;
         };
-        if (check()) return;
-        const onData = () => { if (check()) socket.off("data", onData); };
+        const onError = (err) => {
+          cleanup();
+          rej(err);
+        };
+        if (matcher.test(buffer)) {
+          const out = buffer;
+          buffer = "";
+          res(out);
+          return;
+        }
         socket.on("data", onData);
-        socket.once("error", rej);
+        socket.once("error", onError);
       });
     }
 
