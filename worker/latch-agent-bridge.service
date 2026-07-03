@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/latch-agent-bridge.env
-ExecStart=/usr/local/bin/latch-agent-bridge.py --state-path /var/lib/latch-agent-bridge/state.json
+ExecStart=/usr/local/bin/latch-agent-bridge.py --state-path /var/lib/latch-agent-bridge/state.json --source-cache-path /var/lib/latch-agent-bridge/source-notes.json
 Restart=always
 RestartSec=10
 DynamicUser=true
