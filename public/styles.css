@@ -308,6 +308,31 @@ button[type="submit"]:hover,
   font-weight: 800;
   color: var(--accent-strong);
 }
+#pendingSummary {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-chip.subtle {
+  background: transparent;
+  border-color: transparent;
+}
+.status-chip.alert {
+  background: rgba(180, 35, 24, 0.10);
+  border-color: rgba(180, 35, 24, 0.30);
+  color: var(--danger);
+}
 
 .status-strip > div {
   display: inline-flex;

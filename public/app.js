@@ -992,9 +992,18 @@ function renderStatus() {
   const pendingApprovals = (state.data?.approvals || []).filter((item) => item.status === "pending").length;
   const openTasks = (state.data?.tasks || []).filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const llmStatus = state.llmConfig?.enabled ? `LLM ${state.llmConfig.model}` : "LLM not set";
-  pendingSummary.textContent = isProMode()
-    ? `${pendingApprovals} approvals - ${openTasks} tasks - ${llmStatus}`
-    : `${openTasks} open tasks - ${friendlyComputeSummary()}`;
+  if (isProMode()) {
+    pendingSummary.innerHTML = `
+      <span class="status-chip${pendingApprovals > 0 ? " alert" : ""}">${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"}</span>
+      <span class="status-chip">${openTasks} task${openTasks === 1 ? "" : "s"}</span>
+      <span class="status-chip subtle">${escapeHtml(llmStatus)}</span>
+    `;
+  } else {
+    pendingSummary.innerHTML = `
+      <span class="status-chip${openTasks > 0 ? " alert" : ""}">${openTasks} open task${openTasks === 1 ? "" : "s"}</span>
+      <span class="status-chip subtle">${escapeHtml(friendlyComputeSummary())}</span>
+    `;
+  }
   const balance = creditBalance();
   creditSummary.textContent = `${balance} credits`;
 }
@@ -3005,7 +3014,8 @@ function renderCapabilities() {
     ["Channel management", "Operator only", "You can create, archive, and move messages between channels.", "ok"],
     ["Read-only diagnostics", "Approval-gated", "Bridge status, logs, Tailscale, Docker, gateway, and repo status use templates only.", "warn"],
     ["Exact-URL research", "Approval-gated", "Public URLs only, no crawling, no login, cached source notes.", "warn"],
-    ["External contact", "Draft only", "Compass can prepare a draft, but Latch does not send email or messages.", "warn"],
+    ["Agent email", "Approval-gated", "The companion sends from its own dedicated mailbox after you approve, and auto-replies only to people it emailed first (limit set above).", "warn"],
+    ["External contact", "Draft only", "Contacting someone via your identity stays a draft you send yourself; the agent uses its own mailbox for its own outreach.", "warn"],
     ["Credentials/payments", "Disabled", "Compass Companion should not receive secrets or control purchases/payment tools.", "bad"],
     ["Worker pairing", agencyWorker ? agencyWorker.status : "Not paired", agencyWorker ? agencyCapabilitySummary(agencyWorker) : "Pair OpenClaw before action runtime is available.", agencyWorker?.health === "ok" ? "ok" : "warn"],
     ["Browser automation", caps.browser || executorSeen ? "Policy-gated" : "Executor-ready", "Playwright-managed Firefox runs approved headless browser plans for operators and Pro users.", caps.browser || executorSeen ? "ok" : "warn"],
