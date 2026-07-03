@@ -4,7 +4,11 @@ After=network-online.target tailscaled.service docker.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+# Type=notify + WatchdogSec: the bridge sends WATCHDOG=1 each tick (see sd_notify in the
+# script). If the tick loop stalls (a hang no timeout catches), systemd force-restarts the
+# service instead of leaving it silently wedged and not consuming any work.
+Type=notify
+WatchdogSec=180
 EnvironmentFile=/etc/latch-agent-bridge.env
 ExecStart=/usr/local/bin/latch-agent-bridge.py --state-path /var/lib/latch-agent-bridge/state.json --source-cache-path /var/lib/latch-agent-bridge/source-notes.json
 Restart=always

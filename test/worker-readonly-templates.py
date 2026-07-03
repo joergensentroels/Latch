@@ -246,4 +246,39 @@ cached_run = bridge.perform_read_only_research(
 assert cached_run["status"] == "completed"
 assert cached_run["sources"][0]["cached"] is True
 
+# --- Resilience: a failing approval must be marked "seen" (persisted) and never retried.
+# Regression for the crash-loop where "seen" was recorded only after handling succeeded, so a
+# single failing approval (e.g. the /.cache write error) was retried on every tick forever. ---
+import json as _json
+
+_state_file = Path(tempfile.gettempdir()) / "latch-test-bridge-state.json"
+if _state_file.exists():
+    _state_file.unlink()
+_resilience_args = argparse.Namespace(state_path=str(_state_file), worker_name="test-bridge")
+_b = bridge.Bridge(_resilience_args)
+_b.request_json = lambda *a, **k: {}  # no network for report()/patch_task()
+_calls = {"handle": 0}
+
+
+def _boom(*a, **k):
+    _calls["handle"] += 1
+    raise RuntimeError("simulated handler failure")
+
+
+_b.handle_approved_decision = _boom
+_approval = {"id": "appr_test_1", "status": "approved", "title": "boom", "type": "web_research"}
+_b.process_approval_decisions([_approval], [], [], [], {})
+assert _calls["handle"] == 1, "handler should be attempted exactly once"
+assert "appr_test_1" in set(_b.state.get("seen_approval_decisions", [])), "failed approval must be marked seen"
+# persisted to disk BEFORE handling, so a watchdog restart cannot cause a retry loop
+_persisted = _json.loads(_state_file.read_text(encoding="utf-8"))
+assert "appr_test_1" in _persisted.get("seen_approval_decisions", []), "seen must be persisted immediately"
+# a later poll containing the same approval must not retry it
+_b.process_approval_decisions([_approval], [], [], [], {})
+assert _calls["handle"] == 1, "an already-seen approval must never be retried (no crash-loop)"
+_state_file.unlink()
+
+# sd_notify must be a safe no-op when not running under a systemd watchdog
+bridge.sd_notify("WATCHDOG=1")
+
 print("Worker read-only template tests passed.")
