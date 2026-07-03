@@ -2522,18 +2522,20 @@ async function updateAutonomyPolicy() {
 
 function autonomyModeLabel(value) {
   const labels = {
-    default_permissions: "Default permissions",
-    auto_review: "Auto review",
-    full_access: "Full access"
+    default_permissions: "Approve everything",
+    auto_review: "Auto read-only",
+    auto_browse: "Auto-browse",
+    full_access: "Full auto"
   };
   return labels[value] || labels.default_permissions;
 }
 
 function autonomyModeSummary(value) {
   const summaries = {
-    default_permissions: "Approval cards wait for the operator unless they are completed manually.",
-    auto_review: "Low-risk read-only diagnostics and tightly bounded public research can approve themselves after policy review.",
-    full_access: "Non-sensitive VM command requests and CompassProjects file updates can approve themselves for operators and Pro users; credentials, purchases, external contact, GitHub repo creation, account setup, human verification, and context answers still require the operator."
+    default_permissions: "Nothing runs until you approve it. The agent can plan, draft, and suggest — but every real action (running commands, browsing, committing files, or using any account) waits for your approval.",
+    auto_review: "Look, don't touch. Read-only diagnostics and tightly bounded public web research approve themselves. Anything that changes something — commands, browsing, downloads, commits — still waits for you.",
+    auto_browse: "Autonomous web browsing. Everything in Auto read-only, plus the agent can navigate HTTPS sites and read/extract pages unattended. It still asks before shell commands, code commits, using your accounts or credentials, and any login, credential, or insecure-HTTP step.",
+    full_access: "Full autonomy on the worker. Non-sensitive shell commands, browser plans, and CompassProjects commits approve themselves. Still gated: anything using your accounts or credentials (your email, GitHub token, purchases, account/repo creation) and any login/credential/HTTP step. ⚠️ A prompt-injected agent can run code on the worker in this mode — only enable it on the disposable, network-isolated worker."
   };
   return summaries[value] || summaries.default_permissions;
 }

@@ -110,6 +110,7 @@ const child = spawn(process.execPath, ["server.js"], {
     PORT: port,
     OPERATOR_TOKEN: operatorToken,
     AGENT_TOKEN: agentToken,
+    LATCH_ENABLE_DEV_LOGIN: "1",
     LLM_PROVIDER: "mock-openai-compatible",
     LLM_BASE_URL: mockLlmUrl,
     LLM_MODEL: "mock-local",
@@ -118,7 +119,10 @@ const child = spawn(process.execPath, ["server.js"], {
     GITHUB_API_URL: mockGithubUrl,
     GITHUB_OWNER: "smoke-owner",
     GITHUB_DEFAULT_REPO: "CompassProjects",
-    GITHUB_DEFAULT_VISIBILITY: "private"
+    GITHUB_DEFAULT_VISIBILITY: "private",
+    AGENT_EMAIL_ENABLED: "1",
+    AGENT_EMAIL_TRANSPORT: "mock",
+    AGENT_EMAIL_FROM: "agent@example.com"
   },
   stdio: ["ignore", "pipe", "pipe"]
 });
@@ -427,17 +431,17 @@ try {
     body: {
       type: "command",
       title: "Browser web search",
-      details: "Search the web for Troels Anker Jorgensen and write down what you learn in context.",
+      details: "Search the web for Jane Doe and write down what you learn in context.",
       executionMode: "browser",
       riskLevel: "medium",
       sensitive: false,
       executionPlan: {
         mode: "browser",
-        summary: "Search the public web for Troels Anker Jorgensen",
+        summary: "Search the public web for Jane Doe",
         sensitive: false,
         riskLevel: "medium",
         timeoutSeconds: 180,
-        actions: [{ type: "search_web", text: "Troels Anker Jorgensen PDC", maxResults: 4 }],
+        actions: [{ type: "search_web", text: "Jane Doe Example Corp", maxResults: 4 }],
         expectedResult: "Source notes are saved as context."
       }
     }
@@ -1082,6 +1086,105 @@ try {
   });
   assert(proShellApproval.status === "approved", "Pro user browser plans should auto-approve in full access");
   assert(proShellApproval.executionPlan.actions.length === 2, "browser execution plan should persist");
+
+  // --- Auto-browse tier: autonomous HTTPS browsing, but shell still needs a human ---
+  const browseTierPolicy = await request("/api/autonomy", {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { mode: "auto_browse" }
+  });
+  assert(browseTierPolicy.mode === "auto_browse", "operator should be able to select the auto-browse tier");
+  const browseTierBrowser = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "command",
+      title: "Auto-browse HTTPS page",
+      details: "Open a public HTTPS page and read it.",
+      messageId: "smoke-autobrowse-browser",
+      riskLevel: "low",
+      executionMode: "browser",
+      executionPlan: {
+        mode: "browser",
+        summary: "Open example.com",
+        sensitive: false,
+        riskLevel: "low",
+        timeoutSeconds: 60,
+        actions: [{ type: "open", url: "https://example.com" }, { type: "extract_text" }],
+        expectedResult: "Page text"
+      }
+    }
+  });
+  assert(browseTierBrowser.status === "approved", "auto-browse should auto-approve non-credential HTTPS browser plans");
+  const browseTierShell = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "command",
+      title: "Auto-browse shell attempt",
+      details: "Try to run a shell command under auto-browse.",
+      messageId: "smoke-autobrowse-shell",
+      riskLevel: "low",
+      executionMode: "shell",
+      executionPlan: {
+        mode: "shell",
+        summary: "whoami",
+        sensitive: false,
+        riskLevel: "low",
+        timeoutSeconds: 30,
+        commands: ["whoami"],
+        expectedResult: "user"
+      }
+    }
+  });
+  assert(browseTierShell.status === "pending", "auto-browse must still send shell execution to human review");
+  const restoreFullAccess = await request("/api/autonomy", {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { mode: "full_access" }
+  });
+  assert(restoreFullAccess.mode === "full_access", "restore full access for the remaining checks");
+
+  // --- Agent email (host-brokered, mock transport): cold-contact needs an approved plan ---
+  const coldSend = await request("/api/agent/email/send", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { to: "lead@prospect.example", subject: "Hello", body: "Intro" }
+  });
+  assert(coldSend.status === "needs_approval", "cold first-contact without an approved plan should need approval");
+  const emailCampaign = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { type: "email_campaign", title: "Q3 outreach", plannedRecipients: 3, campaignPurpose: "Introduce Compass to 3 prospects" }
+  });
+  assert(emailCampaign.type === "email_campaign", "email_campaign approval type is accepted");
+  assert(emailCampaign.status === "pending", "email_campaign must be operator-approved, never auto");
+  const approvedCampaign = await request(`/api/approvals/${emailCampaign.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved", note: "Approved 3-prospect outreach." }
+  });
+  assert(approvedCampaign.status === "approved", "operator can approve the outreach plan");
+  const firstContact = await request("/api/agent/email/send", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { to: "lead@prospect.example", subject: "Hello", body: "Intro" }
+  });
+  assert(firstContact.ok === true, "after plan approval the agent can send a first-contact within budget");
+  assert(firstContact.transport === "mock", "smoke uses the mock email transport");
+  const emailReply = await request("/api/agent/email/send", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { to: "lead@prospect.example", subject: "Re: Hello", body: "Following up" }
+  });
+  assert(emailReply.ok === true, "replies to an already-approved recipient send autonomously");
+  const emailInbox = await request("/api/agent/email/poll", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { unseenOnly: true }
+  });
+  assert(emailInbox.ok === true && Array.isArray(emailInbox.messages), "agent can poll its own inbox");
+
   const shoppingApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
@@ -1275,7 +1378,7 @@ try {
       mode: "browser",
       executionPlan: browserSearchApproval.executionPlan,
       exitCode: 0,
-      stdout: "Search query: Troels Anker Jorgensen PDC\n\nSource 1: Profile\nURL: https://example.com/troels\nExcerpt: Public source note",
+      stdout: "Search query: Jane Doe Example Corp\n\nSource 1: Profile\nURL: https://example.com/janedoe\nExcerpt: Public source note",
       stderr: "",
       startedAt: new Date().toISOString(),
       finishedAt: new Date().toISOString()
