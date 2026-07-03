@@ -35,6 +35,23 @@ from pathlib import Path
 DEFAULT_STATE_PATH = Path.home() / ".local" / "state" / "latch-agent-bridge" / "state.json"
 DEFAULT_SOURCE_CACHE_PATH = Path.home() / ".cache" / "latch-agent-bridge" / "source-notes.json"
 DEFAULT_CODE_REPO = "CompassProjects"
+
+
+def sd_notify(message: str) -> None:
+    """Best-effort systemd notification (e.g. "READY=1", "WATCHDOG=1"). No-op unless the
+    service runs as Type=notify with WatchdogSec set. Lets a stalled bridge self-recover:
+    if the tick loop stops sending WATCHDOG=1, systemd force-restarts the service instead of
+    leaving it silently wedged."""
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    try:
+        path = "\0" + addr[1:] if addr.startswith("@") else addr
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(path)
+            sock.sendall(message.encode("utf-8"))
+    except OSError:
+        pass
 SYSTEM_PROMPT = """You are the user's companion inside Compass.
 Your visible identity is the companion identity from the shared profile: name, purpose, goals, boundaries, and communication style. If no name is configured, use Compass Companion.
 When the user asks who you are, what your goals are, or what your purpose is, answer from the companion profile and anchor only. Do not describe backend architecture, worker processes, routing, approvals, VMs, products, or services as your identity.
@@ -169,9 +186,14 @@ def main() -> int:
 
     bridge = Bridge(args)
     bridge.report(f"{args.worker_name} bridge online. Mode: approval-gated bridge with optional VM executor.")
+    sd_notify("READY=1")
 
     while True:
-        bridge.tick()
+        sd_notify("WATCHDOG=1")
+        try:
+            bridge.tick()
+        except Exception as exc:  # noqa: BLE001 - one bad tick must not kill the bridge; watchdog covers true hangs
+            print(f"tick failed: {exc}", file=sys.stderr)
         if args.once:
             return 0
         time.sleep(max(5, args.interval))
@@ -195,6 +217,7 @@ class Bridge:
         payload = self.request_json("GET", "/api/agent/poll")
         if not payload:
             return
+        sd_notify("WATCHDOG=1")
 
         tasks = payload.get("tasks", [])
         messages = payload.get("messages", [])
@@ -583,25 +606,38 @@ class Bridge:
             if not approval_id or approval_id in seen or status not in {"approved", "denied"}:
                 continue
 
-            title = clean(approval.get("title") or approval_id, 180)
-            note = clean(approval.get("responseNote") or "", 1000)
-            task_id = clean(approval.get("taskId") or approval.get("messageId") or approval_id, 120)
-            if approval.get("taskId"):
-                approval_task = tasks_by_id.get(str(approval.get("taskId")))
-                self.remember("processed_tasks", task_processing_key(approval_task or {"id": approval.get("taskId")}))
-            if approval.get("messageId"):
-                self.remember("processed_messages", str(approval.get("messageId")))
-            if status == "approved":
-                self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id, context_items, profile)
-            else:
-                self.report(
-                    f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
-                    task_id,
-                )
-                if approval.get("taskId"):
-                    self.patch_task(task_id, "failed", "Approval denied by operator.")
+            # Mark as attempted and PERSIST it before doing any work. If handling then throws
+            # or hangs (and the process is later restarted by the watchdog), this approval is
+            # not retried forever. This is what turned a single failing approval into the
+            # 55x /.cache crash-loop: "seen" used to be recorded only after handling succeeded.
             seen.add(approval_id)
             self.state["seen_approval_decisions"] = sorted(seen)[-500:]
+            self.save_state()
+
+            try:
+                title = clean(approval.get("title") or approval_id, 180)
+                note = clean(approval.get("responseNote") or "", 1000)
+                task_id = clean(approval.get("taskId") or approval.get("messageId") or approval_id, 120)
+                if approval.get("taskId"):
+                    approval_task = tasks_by_id.get(str(approval.get("taskId")))
+                    self.remember("processed_tasks", task_processing_key(approval_task or {"id": approval.get("taskId")}))
+                if approval.get("messageId"):
+                    self.remember("processed_messages", str(approval.get("messageId")))
+                if status == "approved":
+                    self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id, context_items, profile)
+                else:
+                    self.report(
+                        f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
+                        task_id,
+                    )
+                    if approval.get("taskId"):
+                        self.patch_task(task_id, "failed", "Approval denied by operator.")
+            except Exception as exc:  # noqa: BLE001 - a single approval must never wedge or crash-loop the bridge
+                print(f"approval {approval_id} handling failed: {exc}", file=sys.stderr)
+                try:
+                    self.report(f"Could not finish processing approval {approval_id}: {exc}")
+                except Exception:  # noqa: BLE001 - best-effort operator notification
+                    pass
 
     def handle_approved_decision(
         self,
