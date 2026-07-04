@@ -949,35 +949,45 @@ body.simple-mode .chat-composer {
 .message-bubble {
   min-width: 0;
   width: fit-content;
-  max-width: min(76%, 680px);
+  max-width: min(78%, 680px);
   display: grid;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 5px;
+  padding: 11px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #ffffff;
+  border-radius: 14px;
+  background: var(--surface-2);
   color: var(--text);
   overflow: hidden;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
 }
 
+.from-agent .message-bubble {
+  border-bottom-left-radius: 4px;
+}
+
 .from-operator .message-bubble {
   border-color: #99d6cd;
   background: #e6fffb;
+  border-bottom-right-radius: 4px;
 }
 
 .message-meta {
   min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
   color: var(--muted);
   font-size: 0.74rem;
 }
 
 .message-meta strong {
   color: var(--text);
+  font-size: 0.82rem;
+}
+
+.message-meta .link-button {
+  margin-left: auto;
 }
 
 .message-bubble p {
@@ -1026,6 +1036,23 @@ body.simple-mode .chat-composer {
   padding: 2px 24px 2px 8px;
   border-radius: 6px;
   font-size: 0.74rem;
+}
+
+/* Declutter: on mouse/hover devices, the per-message channel/archive controls stay hidden
+   until you hover (or keyboard-focus) the message. Touch devices have no hover, so they keep
+   the controls visible and reachable. */
+@media (hover: hover) and (pointer: fine) {
+  .message-actions {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.15s ease, opacity 0.15s ease;
+  }
+  .chat-message:hover .message-actions,
+  .chat-message:focus-within .message-actions {
+    max-height: 48px;
+    opacity: 1;
+  }
 }
 
 .link-button {
