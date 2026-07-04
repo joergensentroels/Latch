@@ -2449,13 +2449,22 @@ function renderDiagnostics() {
       value: `${about.counts?.contextItems || 0} context / ${about.counts?.archived || 0} archived`,
       status: about.counts?.archived ? "warn" : "ok",
       note: about.dataDir || ""
+    },
+    {
+      label: "Source",
+      value: "github.com/joergensentroels/Latch",
+      href: "https://github.com/joergensentroels/Latch",
+      status: "ok",
+      note: "AGPL-3.0-or-later — source available; view or contribute"
     }
   ];
 
   diagnosticsGrid.innerHTML = cards.map((card) => `
     <article class="status-card ${card.status}">
       <span>${escapeHtml(card.label)}</span>
-      <strong>${escapeHtml(card.value)}</strong>
+      <strong>${card.href
+        ? `<a href="${escapeHtml(card.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(card.value)}</a>`
+        : escapeHtml(card.value)}</strong>
       ${card.note ? `<p>${escapeHtml(card.note)}</p>` : ""}
     </article>
   `).join("");
