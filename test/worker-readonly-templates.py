@@ -120,6 +120,15 @@ no_address = bridge.detect_approval_need(
 )
 assert no_address is None or no_address.type != "email_campaign"
 
+# An email whose body links repo docs (mentions github + README) must still be an email send, not
+# get hijacked by the github_file detector - the send detector now runs first.
+email_with_repo_links = bridge.detect_approval_need(
+    "Email",
+    "Send an email to emil@example.com. Subject: A look. Body: Start with the README at https://github.com/acme/proj/blob/main/README.md then read the rest of the repo.",
+)
+assert email_with_repo_links is not None and email_with_repo_links.type == "email_campaign", f"repo-linking email must stay email_campaign, got {email_with_repo_links and email_with_repo_links.type}"
+assert email_with_repo_links.email_to == "emil@example.com"
+
 # A "write a summary ... from their website" request must NOT be mis-detected as a github_file
 # commit (regression: dev verb "write" + noun "website" used to trip is_default_repo_dev_task).
 summary_req = bridge.detect_approval_need(
