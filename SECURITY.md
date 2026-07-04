@@ -134,7 +134,7 @@ To rotate keys:
 
 Execution is split into a separate `latch-agent-executor` service. The bridge remains a planning/reporting process; the executor polls approved non-sensitive command approvals with `executionMode` set to `shell` or `browser`, runs the exact stored plan once, and records an execution audit.
 
-Full access auto-approval applies only to operator tasks and operator-managed Pro users. Standard signed-in users remain approval-limited. Non-sensitive `CompassProjects` file updates may auto-commit through the trusted host connector. Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers still require a human even in Full access.
+Auto-approval rests only on **host-verifiable typed operations**, never on worker-asserted risk, and **arbitrary shell/browser plans are never auto-approved in any tier** — a human always reads the exact plan. Under Full access the auto-approvable set is: read-only diagnostic templates, bounded exact-URL research, operator-listed MCP tools, and `CompassProjects` file commits (operator / operator-managed Pro users only). The operator can additionally allow specific typed operations via host-side grants (see [AUTONOMY.md](./AUTONOMY.md)). Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers always require a human. This design follows external review: worker self-assessed sensitivity is not a security boundary, and arbitrary operations cannot be validated host-side.
 
 Shell plans run on the OpenClaw VM through `bash -lc` with a timeout and audit logs. Browser plans use Playwright-managed Firefox in a headless isolated profile under `/var/lib/latch-agent-executor/browser`.
 
@@ -161,7 +161,7 @@ See [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md#agent-email-agent-owned-mailbox), [M
 
 ## Web Research
 
-Agents should not scrape broadly or browse without a reviewed plan. Latch supports `web_research` approval records for bounded source-note research and `browser` execution plans for Full access operator/Pro workflows. Browser downloads are audited and are not automatically opened or executed.
+Agents should not scrape broadly or browse without a reviewed plan. Latch supports `web_research` approval records for bounded source-note research (which can auto-approve) and `browser` execution plans (which always require operator approval — arbitrary browsing is never auto-run). Browser downloads are audited and are not automatically opened or executed.
 
 ## GitHub Repository Creation
 

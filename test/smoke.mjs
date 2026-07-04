@@ -692,7 +692,7 @@ try {
       }
     }
   });
-  assert(operatorShellApproval.status === "approved", "full access should auto-approve operator non-sensitive shell plans");
+  assert(operatorShellApproval.status === "pending", "arbitrary shell plans must NOT auto-approve, even under full access");
   assert(operatorShellApproval.proEligible === true, "operator approvals should be pro eligible");
   assert(operatorShellApproval.executionPlan.commands[0] === "whoami", "shell execution plan should persist");
   // F1 regression: the operator's displayed commands must be derived from the plan the executor
@@ -844,6 +844,50 @@ try {
   });
   assert(continueApproval.status === "pending", "task_continue must always require a human, even under full access");
 
+  // --- Operation grants: allow a typed operation without re-asking (host-side allowlist) ---
+  await request("/api/autonomy", { method: "PATCH", headers: operatorHeaders, body: { mode: "default_permissions" } });
+  const research1 = await request("/api/approvals", {
+    method: "POST", headers: agentHeaders,
+    body: { type: "web_research", title: "Research example", details: "Read example.com", riskLevel: "low", seedUrls: ["https://example.com"], allowedDomains: ["example.com"] }
+  });
+  assert(research1.status === "pending", "research is human under default permissions");
+  const grantedResearch = await request(`/api/approvals/${research1.id}`, {
+    method: "PATCH", headers: operatorHeaders, body: { status: "approved", grant: "always" }
+  });
+  assert(grantedResearch.status === "approved", "operator can approve and grant in one step");
+  const stateWithGrant = await request("/api/state", { headers: operatorHeaders });
+  const researchGrant = (stateWithGrant.grants || []).find((g) => g.key === "research");
+  assert(researchGrant, "an operation grant is recorded on the host and visible to the operator");
+  const research2 = await request("/api/approvals", {
+    method: "POST", headers: agentHeaders,
+    body: { type: "web_research", title: "Research again", details: "Read example.org", riskLevel: "low", seedUrls: ["https://example.org"], allowedDomains: ["example.org"] }
+  });
+  assert(research2.status === "approved" && research2.decisionMode === "grant", "a granted typed operation auto-approves, even under default permissions");
+
+  // Arbitrary shell can NEVER be granted, even if the operator asks to.
+  const shellForGrant = await request("/api/approvals", {
+    method: "POST", headers: agentHeaders,
+    body: { type: "command", title: "shell", details: "x", riskLevel: "low", executionMode: "shell", executionPlan: { mode: "shell", commands: ["whoami"], timeoutSeconds: 30 } }
+  });
+  await request(`/api/approvals/${shellForGrant.id}`, { method: "PATCH", headers: operatorHeaders, body: { status: "approved", grant: "always" } });
+  const afterShellGrant = await request("/api/state", { headers: operatorHeaders });
+  assert(!(afterShellGrant.grants || []).some((g) => (g.key || "").startsWith("command")), "arbitrary shell is never grantable");
+  const shell2 = await request("/api/approvals", {
+    method: "POST", headers: agentHeaders,
+    body: { type: "command", title: "shell2", details: "y", riskLevel: "low", executionMode: "shell", executionPlan: { mode: "shell", commands: ["id"], timeoutSeconds: 30 } }
+  });
+  assert(shell2.status === "pending", "arbitrary shell still needs a human even after a grant attempt");
+
+  // Revoke restores human review; the agent key cannot revoke grants.
+  await expectStatus(`/api/grants/${researchGrant.id}`, { method: "DELETE", headers: agentHeaders }, 403);
+  await request(`/api/grants/${researchGrant.id}`, { method: "DELETE", headers: operatorHeaders });
+  const research3 = await request("/api/approvals", {
+    method: "POST", headers: agentHeaders,
+    body: { type: "web_research", title: "Research post-revoke", details: "Read example.net", riskLevel: "low", seedUrls: ["https://example.net"], allowedDomains: ["example.net"] }
+  });
+  assert(research3.status === "pending", "revoking a grant restores human review");
+  await request("/api/autonomy", { method: "PATCH", headers: operatorHeaders, body: { mode: "full_access" } });
+
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
@@ -864,7 +908,7 @@ try {
       }
     }
   });
-  assert(operatorHttpsBrowserApproval.status === "approved", "full access should auto-approve ordinary HTTPS browser plans");
+  assert(operatorHttpsBrowserApproval.status === "pending", "arbitrary browser plans must NOT auto-approve, even HTTPS, even under full access");
   const operatorHttpBrowserApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
@@ -1251,10 +1295,10 @@ try {
       }
     }
   });
-  assert(proShellApproval.status === "approved", "Pro user browser plans should auto-approve in full access");
+  assert(proShellApproval.status === "pending", "arbitrary browser plans must NOT auto-approve, even for Pro users in full access");
   assert(proShellApproval.executionPlan.actions.length === 2, "browser execution plan should persist");
 
-  // --- Auto-browse tier: autonomous HTTPS browsing, but shell still needs a human ---
+  // --- Auto-browse tier: typed ops auto-approve, but arbitrary execution (browser/shell) needs a human ---
   const browseTierPolicy = await request("/api/autonomy", {
     method: "PATCH",
     headers: operatorHeaders,
@@ -1282,7 +1326,7 @@ try {
       }
     }
   });
-  assert(browseTierBrowser.status === "approved", "auto-browse should auto-approve non-credential HTTPS browser plans");
+  assert(browseTierBrowser.status === "pending", "auto-browse must NOT auto-approve arbitrary browser plans anymore (typed ops only)");
   const browseTierShell = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
