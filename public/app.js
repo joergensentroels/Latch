@@ -68,8 +68,8 @@ const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
 const taskInstructionDetails = document.querySelector("#taskInstructionDetails");
 const taskAutonomyDetails = document.querySelector("#taskAutonomyDetails");
-const taskSubGoals = document.querySelector("#taskSubGoals");
-const taskDepth = document.querySelector("#taskDepth");
+const subGoalRows = document.querySelector("#subGoalRows");
+const addSubGoalButton = document.querySelector("#addSubGoalButton");
 const taskPriority = document.querySelector("#taskPriority");
 const taskRouting = document.querySelector("#taskRouting");
 const contactDraftForm = document.querySelector("#contactDraftForm");
@@ -361,10 +361,7 @@ taskForm.addEventListener("submit", async (event) => {
 
   await withSubmitLock(taskForm, async () => {
     const routingPreference = isProMode() ? (taskRouting.value || "auto") : "auto";
-    const subGoals = isProMode()
-      ? (taskSubGoals?.value || "").split("\n").map((line) => line.trim()).filter(Boolean)
-      : [];
-    const depthRaw = isProMode() ? (taskDepth?.value || "").trim() : "";
+    const subGoals = isProMode() ? collectSubGoals() : [];
     const task = await api(state.authMode === "user" ? "/api/me/tasks" : "/api/tasks", {
       method: "POST",
       body: JSON.stringify({
@@ -375,15 +372,13 @@ taskForm.addEventListener("submit", async (event) => {
         priority: taskPriority.value,
         routingPreference,
         allowNetwork: routingPreference !== "local",
-        subGoals,
-        ...(depthRaw ? { stepBudget: Number(depthRaw) } : {})
+        subGoals
       })
     });
     taskTitle.value = "";
     taskDetails.value = "";
     taskInstructionDetails.open = false;
-    if (taskSubGoals) taskSubGoals.value = "";
-    if (taskDepth) taskDepth.value = "";
+    if (subGoalRows) subGoalRows.innerHTML = "";
     if (taskAutonomyDetails) taskAutonomyDetails.open = false;
     taskPriority.value = "normal";
     taskRouting.value = "auto";
@@ -395,6 +390,45 @@ taskForm.addEventListener("submit", async (event) => {
     }
     await refresh();
   });
+});
+
+function currentDefaultDepth() {
+  return Number(state.data?.autonomy?.defaultStepBudget ?? state.about?.autonomy?.defaultStepBudget ?? 5) || 5;
+}
+
+function addSubGoalRow(text = "", depth) {
+  if (!subGoalRows) return;
+  const value = depth || currentDefaultDepth();
+  const row = document.createElement("div");
+  row.className = "subgoal-row";
+  row.innerHTML = `
+    <input type="text" class="subgoal-text" maxlength="500" placeholder="Sub-goal (e.g. Research 3 competitors)">
+    <input type="number" class="subgoal-depth" min="1" max="50" step="1" title="Max steps before check-in" aria-label="Depth">
+    <button type="button" class="subgoal-remove icon-button compact-icon" title="Remove" aria-label="Remove sub-goal">&times;</button>
+  `;
+  row.querySelector(".subgoal-text").value = text;
+  row.querySelector(".subgoal-depth").value = value;
+  subGoalRows.appendChild(row);
+}
+
+function collectSubGoals() {
+  if (!subGoalRows) return [];
+  return [...subGoalRows.querySelectorAll(".subgoal-row")]
+    .map((row) => ({
+      text: row.querySelector(".subgoal-text")?.value.trim() || "",
+      depth: Number(row.querySelector(".subgoal-depth")?.value) || currentDefaultDepth()
+    }))
+    .filter((item) => item.text);
+}
+
+addSubGoalButton?.addEventListener("click", () => addSubGoalRow());
+subGoalRows?.addEventListener("click", (event) => {
+  const remove = event.target.closest(".subgoal-remove");
+  if (remove) remove.closest(".subgoal-row")?.remove();
+});
+// Seed one row the first time the section is opened, so the default depth is visible.
+taskAutonomyDetails?.addEventListener("toggle", () => {
+  if (taskAutonomyDetails.open && subGoalRows && !subGoalRows.children.length) addSubGoalRow();
 });
 
 contactDraftForm.addEventListener("submit", async (event) => {

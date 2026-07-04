@@ -479,7 +479,11 @@ def _loop_request(method, path, body=None):
 
 
 _lb.request_json = _loop_request
-_loop_subgoals = ["Research 3 sites", "Email the draft"]
+# Structured sub-goals: explicit {text, depth} objects (count is operator-defined, not inferred).
+_loop_subgoals = [{"text": "Research 3 sites", "depth": 4}, {"text": "Email the draft", "depth": 6}]
+assert bridge.subgoal_text(_loop_subgoals[0]) == "Research 3 sites"
+assert bridge.subgoal_depth(_loop_subgoals[1], 5) == 6
+assert bridge.subgoal_text("legacy string") == "legacy string" and bridge.subgoal_depth("legacy string", 5) == 5
 _loop_task = {"id": "task_loop_1", "goal": "Compare and email", "channel": "operations", "subGoals": _loop_subgoals, "stepBudget": 12}
 
 # kickoff works sub-goal 1, reports it, files ONE continue checkpoint, does not finish

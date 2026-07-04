@@ -201,12 +201,10 @@
               <textarea id="taskDetails" rows="3" placeholder="Tools to use, files to avoid, style preferences, or how to verify it"></textarea>
             </details>
             <details id="taskAutonomyDetails" class="optional-instructions pro-only">
-              <summary>Autonomy &amp; sub-goals</summary>
-              <label for="taskSubGoals">Sub-goals — one per line. It stops and reports after each.</label>
-              <textarea id="taskSubGoals" rows="3" placeholder="Research 3 competitors&#10;Draft a comparison&#10;Email me the draft"></textarea>
-              <label for="taskDepth">Max steps before it checks in</label>
-              <input id="taskDepth" type="number" min="1" max="50" step="1" inputmode="numeric" placeholder="default">
-              <p class="help-note">Leave depth blank to use the default in Settings &rarr; Review Policy. It always summarizes and asks before going past the limit or a sub-goal.</p>
+              <summary>Sub-goals</summary>
+              <p class="help-note">Add explicit stages. It does one at a time and stops to report after each. <strong>Depth</strong> = the most steps that stage may take before it checks in (prefilled from your Review Policy default).</p>
+              <div id="subGoalRows"></div>
+              <button id="addSubGoalButton" class="secondary-button compact-button" type="button">+ Add sub-goal</button>
             </details>
             <div class="form-row">
               <select id="taskRouting" class="pro-only-inline" title="Compute routing" aria-label="Compute routing">
