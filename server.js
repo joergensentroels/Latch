@@ -5567,6 +5567,10 @@ function applyTaskPatch(db, task, body) {
   if (body.routingPreference !== undefined) task.routingPreference = cleanChoice(body.routingPreference, routingPreferences, task.routingPreference || "auto");
   if (body.allowNetwork !== undefined) task.allowNetwork = cleanBoolean(body.allowNetwork, task.allowNetwork || false);
   if (body.archived !== undefined) task.archivedAt = cleanBoolean(body.archived, false) ? now : "";
+  // Multi-step loop progress mirrored from the bridge so the UI reflects it.
+  if (body.loopStatus !== undefined) task.loopStatus = cleanChoice(body.loopStatus, ["idle", "running", "awaiting_continue", "done", "failed"], task.loopStatus || "idle");
+  if (body.stepCount !== undefined) task.stepCount = cleanInteger(body.stepCount, 0, 100000, task.stepCount || 0);
+  if (body.subGoalIndex !== undefined) task.subGoalIndex = cleanInteger(body.subGoalIndex, 0, 1000, task.subGoalIndex || 0);
   const reopenNote = cleanText(body.reopenNote || body.elaboration || "", 4000);
   if (task.status === "queued" && ["done", "failed", "paused"].includes(previousStatus)) {
     if (reopenNote) {

@@ -330,6 +330,16 @@ class Bridge:
             briefing_items = network_context_items if allow_network else context_items
             briefing_profile = {} if allow_network else profile
             try:
+                # Multi-step: a task with sub-goals runs one sub-goal at a time, reporting after each
+                # and pausing on an always-human task_continue checkpoint before the next. It never
+                # runs the whole task unattended. (Tasks pane only -- inbox stays single-shot.)
+                subgoals = [clean(item, 500) for item in (task.get("subGoals") or []) if clean(item, 500)]
+                if subgoals:
+                    self.patch_task(task_id, "running", "Working sub-goals with a review checkpoint after each.")
+                    self.start_task_loop(task, subgoals, briefing_items, briefing_profile, response_channel, routing_preference, allow_network)
+                    self.remember("processed_tasks", task_key)
+                    continue
+
                 approval = detect_approval_need(title, details)
                 if approval:
                     if approval.type == "command" and approval.execution_mode == "none":
@@ -645,6 +655,124 @@ class Bridge:
             mcp_args=args,
         )
 
+    # --- Multi-step task loop (bounded, checkpointed sub-goal execution) ---
+
+    def start_task_loop(self, task, subgoals, context_items, profile, response_channel, routing_preference, allow_network) -> None:
+        task_id = str(task.get("id", ""))
+        loops = self.state.setdefault("task_loops", {})
+        loops[task_id] = {"subGoalIndex": 0, "stepCount": 0, "results": []}
+        self.save_state()
+        self.work_current_subgoal(task, subgoals, context_items, profile, response_channel, routing_preference, allow_network)
+
+    def work_current_subgoal(self, task, subgoals, context_items, profile, response_channel, routing_preference, allow_network) -> None:
+        task_id = str(task.get("id", ""))
+        loop = self.state.setdefault("task_loops", {}).get(task_id)
+        if loop is None:
+            return
+        idx = int(loop.get("subGoalIndex", 0))
+        if idx >= len(subgoals):
+            self.finish_task_loop(task_id, loop, response_channel)
+            return
+        subgoal = subgoals[idx]
+        goal = clean(task.get("goal") or task.get("title") or "", 500)
+        prior = "\n".join(loop.get("results", [])) or "(nothing yet)"
+        try:
+            answer = self.ask_llm(
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": context_briefing(context_items, profile)},
+                    {
+                        "role": "user",
+                        "content": (
+                            "You are completing a multi-step task ONE sub-goal at a time, in the companion voice. "
+                            "Do only the current sub-goal and report its result concisely. Do NOT claim to have "
+                            "done the later sub-goals.\n\n"
+                            f"Overall goal:\n{goal}\n\nProgress so far:\n{prior}\n\n"
+                            f"Current sub-goal ({idx + 1} of {len(subgoals)}):\n{subgoal}"
+                        ),
+                    },
+                ],
+                routing_preference=routing_preference,
+                allow_network=allow_network,
+            )
+        except Exception as exc:  # noqa: BLE001 - a sub-goal failure ends the loop, doesn't crash the bridge
+            self.report(f"Sub-goal {idx + 1} failed: {exc}", task_id, response_channel)
+            self.patch_task(task_id, "failed", f"Sub-goal {idx + 1} failed: {clean(str(exc), 300)}")
+            self.state.setdefault("task_loops", {}).pop(task_id, None)
+            self.save_state()
+            return
+
+        text = clean_visible_report_text(answer)
+        loop["results"].append(f"Sub-goal {idx + 1} ({clean(subgoal, 120)}): {clean(text, 400)}")
+        loop["stepCount"] = int(loop.get("stepCount", 0)) + 1
+        self.save_state()
+        self.report(f"Sub-goal {idx + 1}/{len(subgoals)} — {subgoal}\n\n{text}", task_id, response_channel)
+        self.patch_task_loop(task_id, subgoal_index=idx, step_count=loop["stepCount"], status="awaiting_continue")
+
+        if idx + 1 >= len(subgoals):
+            self.finish_task_loop(task_id, loop, response_channel)
+            return
+        summary = (
+            f"Finished sub-goal {idx + 1} of {len(subgoals)} for: {goal}\n\n"
+            f"Results so far:\n" + "\n".join(loop.get("results", [])) + "\n\n"
+            f"Next sub-goal: {subgoals[idx + 1]}"
+        )
+        self.create_task_continue(task_id, f"Continue to sub-goal {idx + 2}/{len(subgoals)}?", clean(summary, 4000))
+        self.patch_task(task_id, "waiting", f"Finished sub-goal {idx + 1}/{len(subgoals)}; awaiting continue approval.")
+
+    def advance_task_loop(self, task, context_items, profile) -> None:
+        task_id = str(task.get("id", ""))
+        loop = self.state.setdefault("task_loops", {}).get(task_id)
+        if loop is None:
+            self.report("Continue approved, but no active task loop was found.", task_id)
+            return
+        subgoals = [clean(item, 500) for item in (task.get("subGoals") or []) if clean(item, 500)]
+        loop["subGoalIndex"] = int(loop.get("subGoalIndex", 0)) + 1
+        self.save_state()
+        response_channel = clean_channel_id(task.get("channel") or "") or "compass"
+        routing_preference = clean_routing(task.get("routingPreference"))
+        allow_network = bool(task.get("allowNetwork")) and routing_preference != "local"
+        self.work_current_subgoal(task, subgoals, context_items, profile, response_channel, routing_preference, allow_network)
+
+    def stop_task_loop(self, task_id, response_channel="compass") -> None:
+        self.state.setdefault("task_loops", {}).pop(task_id, None)
+        self.save_state()
+        self.patch_task(task_id, "paused", "Task stopped by operator at a checkpoint.")
+
+    def finish_task_loop(self, task_id, loop, response_channel) -> None:
+        summary = "\n".join(loop.get("results", [])) or "(no results recorded)"
+        self.report(f"Task complete. Summary of all sub-goals:\n\n{summary}", task_id, response_channel)
+        self.patch_task(task_id, "done", "All sub-goals completed.")
+        self.patch_task_loop(task_id, status="done")
+        self.state.setdefault("task_loops", {}).pop(task_id, None)
+        self.save_state()
+
+    def create_task_continue(self, task_id, title, summary) -> dict | None:
+        return self.request_json(
+            "POST",
+            "/api/approvals",
+            {
+                "type": "task_continue",
+                "title": title,
+                "details": summary,
+                "expectedResponse": "Approve to continue to the next sub-goal, or deny to stop the task here.",
+                "sensitive": False,
+                "riskLevel": "low",
+                "taskId": task_id,
+            },
+        )
+
+    def patch_task_loop(self, task_id, subgoal_index=None, step_count=None, status=None) -> None:
+        body = {}
+        if subgoal_index is not None:
+            body["subGoalIndex"] = subgoal_index
+        if step_count is not None:
+            body["stepCount"] = step_count
+        if status is not None:
+            body["loopStatus"] = status
+        if body:
+            self.request_json("PATCH", f"/api/tasks/{task_id}", body)
+
     def process_inbound_email(self, profile: dict) -> None:
         """Poll the companion's OWN mailbox and auto-reply to senders it has already emailed
         first. The "first-contact" rule is enforced by the server: a reply to a known contact
@@ -929,6 +1057,14 @@ class Bridge:
                     self.remember("processed_messages", str(approval.get("messageId")))
                 if status == "approved":
                     self.handle_approved_decision(approval, title, note, task_id, tasks_by_id, messages_by_id, context_items, profile)
+                elif str(approval.get("type", "")) == "task_continue":
+                    # Denying a checkpoint is a deliberate stop, not a failure.
+                    self.report(
+                        f"Task stopped at your checkpoint: {title}.{f' Operator note: {note}' if note else ''}",
+                        task_id,
+                    )
+                    if approval.get("taskId"):
+                        self.stop_task_loop(str(approval.get("taskId")))
                 else:
                     self.report(
                         f"Approval denied: {title}.{f' Operator note: {note}' if note else ''}",
@@ -966,6 +1102,15 @@ class Bridge:
                 self.save_state()
             self.report(f"Resuming auto-replies to {contact}." if contact else "Email thread continue approved.", task_id)
             return
+
+        if approval_type == "task_continue":
+            loop_task = tasks_by_id.get(str(approval.get("taskId", "")))
+            if loop_task:
+                self.advance_task_loop(loop_task, context_items, profile)
+            else:
+                self.report("Continue approved, but the task is no longer active.", task_id)
+            return
+
         task = tasks_by_id.get(str(approval.get("taskId", "")))
         message = messages_by_id.get(str(approval.get("messageId", "")))
 
