@@ -333,7 +333,9 @@ class Bridge:
                 # Multi-step: a task with sub-goals runs one sub-goal at a time, reporting after each
                 # and pausing on an always-human task_continue checkpoint before the next. It never
                 # runs the whole task unattended. (Tasks pane only -- inbox stays single-shot.)
-                subgoals = [clean(item, 500) for item in (task.get("subGoals") or []) if clean(item, 500)]
+                # Sub-goals are an explicit operator list of {text, depth} objects (or legacy strings);
+                # the count is operator-defined, never inferred.
+                subgoals = [item for item in (task.get("subGoals") or []) if subgoal_text(item)]
                 if subgoals:
                     self.patch_task(task_id, "running", "Working sub-goals with a review checkpoint after each.")
                     self.start_task_loop(task, subgoals, briefing_items, briefing_profile, response_channel, routing_preference, allow_network)
@@ -673,7 +675,7 @@ class Bridge:
         if idx >= len(subgoals):
             self.finish_task_loop(task_id, loop, response_channel)
             return
-        subgoal = subgoals[idx]
+        subgoal = subgoal_text(subgoals[idx])
         goal = clean(task.get("goal") or task.get("title") or "", 500)
         prior = "\n".join(loop.get("results", [])) or "(nothing yet)"
         try:
@@ -715,7 +717,7 @@ class Bridge:
         summary = (
             f"Finished sub-goal {idx + 1} of {len(subgoals)} for: {goal}\n\n"
             f"Results so far:\n" + "\n".join(loop.get("results", [])) + "\n\n"
-            f"Next sub-goal: {subgoals[idx + 1]}"
+            f"Next sub-goal: {subgoal_text(subgoals[idx + 1])}"
         )
         self.create_task_continue(task_id, f"Continue to sub-goal {idx + 2}/{len(subgoals)}?", clean(summary, 4000))
         self.patch_task(task_id, "waiting", f"Finished sub-goal {idx + 1}/{len(subgoals)}; awaiting continue approval.")
@@ -726,7 +728,7 @@ class Bridge:
         if loop is None:
             self.report("Continue approved, but no active task loop was found.", task_id)
             return
-        subgoals = [clean(item, 500) for item in (task.get("subGoals") or []) if clean(item, 500)]
+        subgoals = [item for item in (task.get("subGoals") or []) if subgoal_text(item)]
         loop["subGoalIndex"] = int(loop.get("subGoalIndex", 0)) + 1
         self.save_state()
         response_channel = clean_channel_id(task.get("channel") or "") or "compass"
@@ -1429,6 +1431,22 @@ def sentence_fragment(text: str) -> str:
         return ""
     cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
     return cleaned if cleaned.endswith((".", "!", "?")) else f"{cleaned}."
+
+
+def subgoal_text(item) -> str:
+    """A sub-goal is an explicit {text, depth} object (or a legacy plain string)."""
+    if isinstance(item, dict):
+        return clean(item.get("text") or item.get("goal") or "", 500)
+    return clean(str(item or ""), 500)
+
+
+def subgoal_depth(item, default: int) -> int:
+    if isinstance(item, dict):
+        try:
+            return max(1, min(50, int(item.get("depth", default))))
+        except (TypeError, ValueError):
+            return default
+    return default
 
 
 def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:

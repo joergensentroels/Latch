@@ -986,6 +986,7 @@ async function handleApi(req, res, url) {
     const details = cleanText(body.details || composeTaskDetails(goal, instructions) || body.text || "", 6000);
     const title = await generateTaskOneLiner(goal || body.title || body.text || "", instructions, "operator");
     const now = new Date().toISOString();
+    const taskDefaultDepth = publicAutonomyPolicy(db.meta.autonomyPolicy).defaultStepBudget;
     const task = {
       id: newId("task"),
       title,
@@ -996,12 +997,13 @@ async function handleApi(req, res, url) {
       priority: cleanChoice(body.priority, ["normal", "high", "low"], "normal"),
       routingPreference: cleanChoice(body.routingPreference, routingPreferences, "auto"),
       allowNetwork: cleanBoolean(body.allowNetwork, body.routingPreference === "auto" || body.routingPreference === "network"),
-      // Multi-step loop guardrail (slice 1: recorded + enforced-as-boundary; the loop itself lands
-      // in a later slice). stepBudget = how many actions before it must summarize and ask to
-      // continue (per-task depth, defaulting to the operator's global default). subGoals = ordered
-      // milestones; reaching one is a natural stop-and-report checkpoint.
-      stepBudget: cleanInteger(body.stepBudget ?? body.depth, 1, 50, publicAutonomyPolicy(db.meta.autonomyPolicy).defaultStepBudget),
-      subGoals: cleanTextArray(body.subGoals, 20, 500),
+      // Multi-step: sub-goals are an EXPLICIT, ordered operator list, each an object {text, depth}.
+      // The count and boundaries are operator data (deterministic) -- the model never infers how many
+      // stages there are; it only does the work inside a stage. Each sub-goal's depth caps how many
+      // actions it may take before a checkpoint (defaults to the operator's global default). stepBudget
+      // stays as a whole-task fallback for tasks without sub-goals.
+      stepBudget: cleanInteger(body.stepBudget ?? body.depth, 1, 50, taskDefaultDepth),
+      subGoals: cleanSubGoals(body.subGoals, taskDefaultDepth),
       subGoalIndex: 0,
       stepCount: 0,
       loopStatus: "idle",
@@ -5689,6 +5691,23 @@ async function computeMcpAutoApprovable(serverName, toolName) {
   } catch {
     return false;
   }
+}
+
+// Structured sub-goals: an explicit ordered list, each {text, depth}. Accepts legacy plain strings
+// (depth falls back to the default) as well as {text, depth} objects. Empty-text items are dropped.
+function cleanSubGoals(value, defaultDepth) {
+  if (!Array.isArray(value)) return [];
+  const fallback = cleanInteger(defaultDepth, 1, 50, 5);
+  return value
+    .map((item) => {
+      if (typeof item === "string") return { text: cleanText(item, 500), depth: fallback };
+      if (item && typeof item === "object") {
+        return { text: cleanText(item.text ?? item.goal ?? "", 500), depth: cleanInteger(item.depth, 1, 50, fallback) };
+      }
+      return null;
+    })
+    .filter((item) => item && item.text)
+    .slice(0, 20);
 }
 
 // Accept a plain JSON object (e.g. MCP tool arguments) and reject anything that isn't a serializable

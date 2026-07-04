@@ -821,10 +821,12 @@ try {
   const loopTask = await request("/api/tasks", {
     method: "POST",
     headers: operatorHeaders,
-    body: { goal: "Compare three competitors and email me", subGoals: ["Research 3 sites", "Draft comparison", "Email the draft"], stepBudget: 12 }
+    body: { goal: "Compare three competitors and email me", subGoals: [{ text: "Research 3 sites", depth: 8 }, { text: "Draft comparison" }, "Email the draft"] }
   });
-  assert(loopTask.stepBudget === 12, "per-task depth overrides the default");
   assert(Array.isArray(loopTask.subGoals) && loopTask.subGoals.length === 3, "sub-goals are stored in order");
+  assert(loopTask.subGoals[0].text === "Research 3 sites" && loopTask.subGoals[0].depth === 8, "an explicit per-sub-goal depth is kept");
+  assert(loopTask.subGoals[1].depth === 5, "a sub-goal with no depth inherits the default (5)");
+  assert(loopTask.subGoals[2].text === "Email the draft" && loopTask.subGoals[2].depth === 5, "a legacy string sub-goal is coerced to {text, depth}");
   assert(loopTask.subGoalIndex === 0 && loopTask.stepCount === 0 && loopTask.loopStatus === "idle", "loop state initializes idle");
 
   const defaultBudgetTask = await request("/api/tasks", {
