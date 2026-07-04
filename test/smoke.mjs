@@ -4,10 +4,28 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = await mkdtemp(path.join(tmpdir(), "latch-smoke-"));
+
+// Seed an MCP config with a mock server so the host-brokered MCP path is exercised end-to-end.
+await writeFile(path.join(dataDir, "mcp.json"), JSON.stringify({
+  enabled: true,
+  servers: [
+    {
+      name: "testfs",
+      description: "Mock MCP server for tests",
+      transport: "mock",
+      env: { SECRET_KEY: "should-not-leak" },
+      allowedTools: ["echo"],
+      mockTools: [
+        { name: "echo", description: "Echo arguments back", inputSchema: { type: "object" } },
+        { name: "secret_tool", description: "Not in the allowlist", inputSchema: { type: "object" } }
+      ]
+    }
+  ]
+}));
 const port = String(19000 + Math.floor(Math.random() * 1000));
 const baseUrl = `http://127.0.0.1:${port}`;
 const operatorToken = "op_test_operator";
@@ -709,6 +727,56 @@ try {
   );
   // F2 regression: the agent key must not be able to read the full operator console.
   await expectStatus("/api/state", { headers: agentHeaders }, 403);
+
+  // --- MCP host-brokered tool calls ---
+  const mcpServers = await request("/api/mcp/servers", { headers: operatorHeaders });
+  assert(mcpServers.enabled === true, "MCP should report enabled when a server is configured");
+  const testfs = (mcpServers.servers || []).find((server) => server.name === "testfs");
+  assert(testfs, "configured MCP server should be listed");
+  assert(testfs.tools?.some((tool) => tool.name === "echo"), "MCP tool discovery should surface the echo tool");
+  assert(!JSON.stringify(mcpServers).includes("should-not-leak"), "MCP server env values must never be exposed");
+  assert(!testfs.envKeys || testfs.envKeys.includes("SECRET_KEY"), "MCP config should expose env key names but not values");
+  await expectStatus("/api/mcp/servers", { headers: agentHeaders }, 403);
+
+  const mcpApproval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "mcp_tool_call",
+      title: "Read a file via MCP",
+      details: "Call the echo tool on testfs.",
+      riskLevel: "low",
+      mcpServer: "testfs",
+      mcpTool: "echo",
+      mcpArgs: { path: "notes.txt" }
+    }
+  });
+  assert(mcpApproval.status === "pending", "mcp_tool_call must not auto-approve, even under full access");
+  assert(mcpApproval.mcpServer === "testfs" && mcpApproval.mcpTool === "echo", "mcp approval should store server + tool");
+  const decidedMcp = await request(`/api/approvals/${mcpApproval.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved" }
+  });
+  assert(decidedMcp.status === "approved", "operator should be able to approve an mcp_tool_call");
+  assert(decidedMcp.mcpResult.includes("mock:testfs:echo"), "host should run the approved MCP tool and store its result");
+  assert(decidedMcp.mcpRanAt, "mcp approval should record when the tool ran");
+  assert(decidedMcp.mcpIsError === false, "a successful MCP tool call should not be flagged as an error");
+
+  // A tool outside the server allowlist must be refused at run time (reverts to pending).
+  const mcpBlocked = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { type: "mcp_tool_call", title: "Blocked tool", details: "secret_tool", riskLevel: "low", mcpServer: "testfs", mcpTool: "secret_tool", mcpArgs: {} }
+  });
+  const decidedBlocked = await request(`/api/approvals/${mcpBlocked.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved" }
+  });
+  assert(decidedBlocked.status === "pending", "an MCP tool outside the allowlist must not run");
+  assert(/not permitted|allowlist/i.test(decidedBlocked.responseNote || ""), "blocked MCP tool should explain why");
+
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
