@@ -171,6 +171,7 @@ def main() -> int:
     parser.add_argument("--latch-repo-dir", default=os.getenv("LATCH_REPO_DIR", str(Path.home() / "code" / "latch-readonly")))
     parser.add_argument("--source-cache-path", default=os.getenv("LATCH_SOURCE_CACHE_PATH", str(DEFAULT_SOURCE_CACHE_PATH)))
     parser.add_argument("--interval", type=int, default=int(os.getenv("LATCH_POLL_INTERVAL", "15")))
+    parser.add_argument("--llm-timeout", type=int, default=int(os.getenv("LATCH_LLM_TIMEOUT", "120")))
     parser.add_argument("--state-path", default=os.getenv("LATCH_STATE_PATH", str(DEFAULT_STATE_PATH)))
     parser.add_argument("--max-tasks-per-tick", type=int, default=int(os.getenv("LATCH_MAX_TASKS_PER_TICK", "1")))
     parser.add_argument("--max-messages-per-tick", type=int, default=int(os.getenv("LATCH_MAX_MESSAGES_PER_TICK", "1")))
@@ -461,6 +462,10 @@ class Bridge:
                 "allowNetwork": allow_network,
                 "priority": priority,
             },
+            # A local model (e.g. Ollama qwen3) can take ~15s+ on a cold load; the
+            # default 15s API timeout was tripping "LLM did not respond" flakes.
+            # Give the chat path headroom matching the host's own provider timeout.
+            timeout=self.args.llm_timeout,
         )
         if not response:
             raise RuntimeError("Latch LLM gateway did not return a response.")
@@ -1058,7 +1063,7 @@ class Bridge:
     def report_research(self, result: dict) -> None:
         self.request_json("POST", "/api/agent/research-results", result)
 
-    def request_json(self, method: str, path: str, body: dict | None = None) -> dict | None:
+    def request_json(self, method: str, path: str, body: dict | None = None, timeout: int = 15) -> dict | None:
         url = f"{self.args.base_url}{path}"
         data = None
         headers = {"Authorization": f"Bearer {self.args.agent_key}"}
@@ -1067,7 +1072,7 @@ class Bridge:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = response.read().decode("utf-8")
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:
