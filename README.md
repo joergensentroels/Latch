@@ -26,7 +26,9 @@ Credits and Latch Network compute can make reasoning stronger, but they are not 
 
 Read [SECURITY.md](./SECURITY.md) before exposing it beyond localhost.
 
-If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [SECURITY-REVIEW-PACKET.md](./SECURITY-REVIEW-PACKET.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), and [NOTIFICATIONS.md](./NOTIFICATIONS.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
+Want to contribute? See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [SECURITY-FINDINGS-2026-07.md](./SECURITY-FINDINGS-2026-07.md), [SECURITY-REVIEW-PACKET.md](./SECURITY-REVIEW-PACKET.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), [NOTIFICATIONS.md](./NOTIFICATIONS.md), [MCP.md](./MCP.md), and [SCHEDULING.md](./SCHEDULING.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.
 
 For the Ubuntu OpenClaw worker VM, see [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md).
 
@@ -39,9 +41,11 @@ OpenClaw should inspect this project from its own VM-local read-only checkout, n
 | Compass text responses through Latch | Enabled |
 | Read-only VM diagnostics | Approval-gated |
 | Exact-URL web research | Approval-gated |
-| GitHub repository creation | Approval-gated trusted-host connector |
+| GitHub repository creation + file commits | Approval-gated trusted-host connector |
 | External contact drafts | Manual send only |
-| Email sending | Not enabled |
+| Agent email (own mailbox) | Approval-gated host-brokered — see [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md) |
+| MCP tool calls | Approval-gated host-brokered — see [MCP.md](./MCP.md) |
+| Scheduled / recurring tasks | Operator-managed — see [SCHEDULING.md](./SCHEDULING.md) |
 | Interactive browser automation | Full-access executor gated |
 | Write/system commands | Full-access executor gated |
 
@@ -104,6 +108,8 @@ powershell -ExecutionPolicy Bypass -File .\Push-Latch.ps1 -Yes -Message "Update 
 ```
 
 The helper resolves Git from common Windows install locations, shows the files it will include, refuses paths that look secret-like unless explicitly allowed, commits, rebases from `origin/main`, and pushes.
+
+To actually ship pushed changes to the running host and worker (which deployable a change needs, the restart/redeploy commands, and how to verify), follow [DEPLOY.md](./DEPLOY.md).
 
 For worker releases, use [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md)'s `Push-And-Deploy.ps1` flow so the pushed GitHub code and deployed VM worker stay aligned.
 
@@ -222,6 +228,14 @@ powershell -ExecutionPolicy Bypass -File .\Configure-GitHub.ps1 -Owner "your-git
 When the companion asks for development work, code, websites, a README, or another file update, Latch creates a `github_file` approval card with the repository, path, commit message, and proposed content. Development and code/file updates default to `CompassProjects` unless another repository is named. In Full access, non-sensitive `CompassProjects` file updates from the operator or operator-managed Pro users can auto-approve and commit through the trusted host connector. The worker never receives the GitHub token.
 
 Repository creation is still supported with `github_repo`, but it requires broader GitHub administration permission because the repository does not exist yet. Prefer creating the repo yourself and using `github_file` updates for day-to-day companion work.
+
+## MCP tool servers
+
+Latch can act as an approval-gating **MCP host**: the trusted host connects to configured MCP servers (each holding its own credentials in `data\mcp.json`), and the worker can only *request* a tool call. The request becomes an `mcp_tool_call` approval; the host runs the tool after approval and returns the result. The worker never sees MCP server credentials. Copy [`mcp.example.json`](./mcp.example.json) to `data\mcp.json` to enable it. Full details in [MCP.md](./MCP.md).
+
+## Scheduled tasks
+
+Compass can run instructions on a schedule (daily, weekly, or every N minutes). Each run queues a normal task that flows through the usual approval pipeline — scheduling adds no new powers, it just queues work for you. Manage schedules in **Settings → Automation → Scheduled tasks**. Full details in [SCHEDULING.md](./SCHEDULING.md).
 
 ## Tailscale mode
 
