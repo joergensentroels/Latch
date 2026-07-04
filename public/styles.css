@@ -1838,6 +1838,10 @@ pre.item-body {
 
 .dialog-panel {
   width: min(520px, 100%);
+  /* Keep the panel within the visible viewport so its actions (e.g. the primary
+     Unlock button) stay reachable when the on-screen keyboard shrinks the view. */
+  max-height: calc(100dvh - 28px);
+  overflow-y: auto;
   display: grid;
   gap: 12px;
   padding: 16px;
@@ -1864,6 +1868,13 @@ pre.item-body {
 .dialog-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
+  /* Stay visible when the panel scrolls, so the primary action is never
+     stranded off-screen behind the keyboard. */
+  position: sticky;
+  bottom: 0;
+  margin: 0 -16px -16px;
+  padding: 10px 16px 16px;
+  background: var(--surface);
 }
 
 .empty-state {
