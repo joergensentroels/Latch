@@ -2,6 +2,7 @@
   "name": "latch-agent-gateway",
   "version": "0.1.0",
   "private": true,
+  "author": "Troels Anker Jørgensen",
   "license": "AGPL-3.0-or-later",
   "description": "Compass / Latch — a self-hosted, approval-gated gateway for operating a disposable AI agent worker (OpenClaw) from your phone or desktop, where the control plane holds the secrets and the worker never does.",
   "type": "module",
