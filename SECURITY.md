@@ -150,11 +150,14 @@ The operator should complete those steps only on a trusted device and return the
 
 ## External Contact
 
-Agents should not receive a mailbox, SMTP credential, social account, or unrestricted browser session by default. If an agent needs to contact a collaborator or security reviewer, the first version should be a supervised draft-and-approve workflow: the agent drafts the message in Latch, the operator reviews recipient and content, and the operator sends manually or through a narrow future connector.
+The agent never holds a mailbox credential, social account, or unrestricted browser session. There are two supported outbound paths, both with the operator on the boundary:
 
-Latch supports `external_contact` approval records for this draft-only workflow. Approval does not send the message.
+- **`external_contact` (draft-only).** For operator-identity messages (e.g. reaching a named collaborator or security reviewer). The agent drafts in Latch; approval does **not** send — the operator sends manually. Unchanged.
+- **Agent email (host-brokered).** The companion may operate its *own* mailbox and send from it, but the SMTP/IMAP credentials live only on the trusted host (`email.mjs`) — never on the worker. The worker can only *request* a send by creating an `email_campaign` approval; the host performs the actual send after approval. First contact with a new recipient always requires operator approval (cold contact is gated server-side). Replies to already-known contacts can send without a fresh approval, backstopped by a per-thread reply cap and mailbox rate limits. The LLM only writes/summarizes content — recipient selection is programmatic, never model-chosen.
 
-See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) and [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md) for the proposed external-contact model and public security-review checklist.
+The design invariant holds across both: a compromised or prompt-injected worker still cannot send on its own, because it holds no mail credential and every first send is host-brokered behind an operator approval.
+
+See [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md#agent-email-agent-owned-mailbox), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), and the dated [SECURITY-FINDINGS-2026-07.md](./SECURITY-FINDINGS-2026-07.md) for the full model and the latest self-review.
 
 ## Web Research
 
