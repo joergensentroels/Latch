@@ -1575,7 +1575,7 @@ function renderTasks() {
           <button class="secondary-button" data-open-message-channel="${escapeHtml(linkedChannel)}" type="button">Open Chat</button>
         </div>
       ` : ""}
-      <p class="item-meta">${escapeHtml(task.priority)} - ${escapeHtml(routingLabel(task.routingPreference || "auto"))} - ${formatTime(task.updatedAt || task.createdAt)}</p>
+      <p class="item-meta">${escapeHtml(task.priority)} · ${escapeHtml(routingLabel(task.routingPreference || "auto"))} · ${formatTime(task.updatedAt || task.createdAt)}</p>
       ${canReopen ? `
         <form class="reopen-task-form" data-reopen-task="${escapeHtml(task.id)}">
           <textarea rows="2" maxlength="4000" placeholder="What should Compass add or fix before trying again?">${escapeHtml(state.reopenDrafts[task.id] || "")}</textarea>
