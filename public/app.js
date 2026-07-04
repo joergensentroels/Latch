@@ -293,6 +293,13 @@ resizeContextTextareas();
 
 channelForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  // The create-channel form is tucked behind the "+". The first "+" click reveals the inputs
+  // and focuses the name; it only creates once the inputs are open and a name is entered.
+  if (!channelForm.classList.contains("open")) {
+    channelForm.classList.add("open");
+    channelName.focus();
+    return;
+  }
   const label = channelName.value.trim();
   if (!label) return;
 
@@ -306,10 +313,20 @@ channelForm.addEventListener("submit", async (event) => {
     });
     channelName.value = "";
     channelDescription.value = "";
+    channelForm.classList.remove("open");
     state.activeChannel = channel.id;
     localStorage.setItem("latchActiveChannel", state.activeChannel);
     await refresh();
   });
+});
+
+// Escape collapses the create-channel form back behind the "+".
+channelForm.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    channelForm.classList.remove("open");
+    channelName.blur();
+    channelDescription.blur();
+  }
 });
 
 showArchivedChannels?.addEventListener("change", () => {
