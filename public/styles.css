@@ -1449,6 +1449,16 @@ body.simple-mode .chat-composer {
   gap: 8px;
 }
 
+/* On phones, the text-heavy card grids (Preferences/diagnostics cards, capability cards, and the
+   test console) read better stacked in a single column than squeezed two-up with uneven heights. */
+@media (max-width: 480px) {
+  .status-grid,
+  .capability-grid,
+  .test-console {
+    grid-template-columns: 1fr;
+  }
+}
+
 .linked-message {
   margin-top: 10px;
   background: var(--surface-2);
