@@ -77,4 +77,16 @@ if ($Existing) {
 }
 
 Set-Location $Root
+
+# Ensure the phone's HTTPS Tailscale Serve URL (https://<node>.<tailnet>.ts.net) proxies to this
+# server. Serve config can be cleared by a reboot or a Tailscale restart, which leaves the phone
+# unable to reach Latch even though the server is fine; re-establishing it here (idempotent, --bg
+# so it persists) keeps the phone route working across restarts. Best-effort.
+try {
+    & tailscale serve --bg $Port 2>$null | Out-Null
+    Write-Output "Tailscale Serve: HTTPS proxy -> http://127.0.0.1:$Port ensured (phone URL)."
+} catch {
+    Write-Output "Tailscale Serve not set (tailscale CLI unavailable); the phone's HTTPS URL may not resolve."
+}
+
 & $NodeExe .\server.js
