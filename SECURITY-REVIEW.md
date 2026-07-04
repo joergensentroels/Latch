@@ -2,6 +2,19 @@
 
 This document is the handoff checklist for a security-minded co-creator before Latch is made public or given broader agent powers.
 
+> **Update 2026-07-04 — supersedes stale statements below.** A maintainer pre-public self-review was
+> done; findings and fixes are in [SECURITY-FINDINGS-2026-07.md](./SECURITY-FINDINGS-2026-07.md).
+> Two things in this document are now out of date:
+> 1. **Agent email is implemented.** The companion has a host-brokered mailbox: it can *draft and
+>    send* email through an `email_campaign` approval, but the SMTP/IMAP credentials live only on the
+>    trusted host (`email.mjs`), the worker never holds them, and first contact with a new recipient
+>    still requires operator approval. The "the bridge cannot send outbound email" and
+>    "`external_contact` remains draft/manual only" lines below no longer describe the build.
+> 2. **Approved shell plans run via `bash -lc`** in the root executor (intentionally — that is the
+>    point of the disposable worker), not `shell=False` argv as the checklist implies. The control is
+>    that the operator sees the *exact* commands that will run (enforced host-side as of F1), and the
+>    executor only runs operator-approved, non-sensitive plans.
+
 ## Current Trust Model
 
 Latch is a private operator console. The trusted operator uses the Windows host and phone app. The OpenClaw VM is treated as semi-trusted and disposable.
