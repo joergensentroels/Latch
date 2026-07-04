@@ -17,12 +17,14 @@ deliberate act on a surface built for review; a casual chat message can never st
 A running task pauses, summarizes its state, and files an **always-human** `task_continue` approval at
 either boundary:
 
-- **Depth (the number)** — a per-task **step budget**: the most actions it may take before it must
-  check in. Defaults to the operator's global "default steps" (Settings → Review Policy), overridable
-  per task in the Tasks form. This is the blunt safety backstop.
-- **Sub-goals (the meaning)** — an optional ordered list of milestones. It works toward the current
-  sub-goal and **stops and reports** when it reaches one, so each check-in is meaningful ("finished
-  stage 1: scraped 3 sites — go to stage 2?") rather than a blind "did N things, more?".
+- **Depth (the number)** — the **per-sub-goal step budget**: the most actions that stage may take
+  before it must check in. Each sub-goal has its own, prefilled from the operator's global "default
+  steps" (Settings → Review Policy) and editable per stage. This is the blunt safety backstop.
+- **Sub-goals (the meaning)** — an **explicit, operator-defined** ordered list of milestones, each an
+  object `{text, depth}`. The count and boundaries are your data, never inferred by the model — it
+  only does the work *inside* a stage and **stops and reports** at each boundary, so every check-in is
+  meaningful ("finished stage 1: scraped 3 sites — go to stage 2?"). Each sub-goal carries its **own
+  depth** (the step cap for that stage), prefilled from the global default and editable per stage.
 
 `task_continue` is never auto-approvable — even under Full access, the decision to keep going is
 always yours. That's what makes the budget mean something. This stacks on top of the existing
@@ -36,7 +38,8 @@ So autonomy is really two dials: **breadth** (which action types auto-approve �
 
 **Slice 1 — shipped (host + UI):** the data model (per-task `stepBudget`, `subGoals`, `subGoalIndex`,
 `stepCount`, `loopStatus`), the operator default budget (`autonomyPolicy.defaultStepBudget` + slider),
-the `task_continue` approval type (always-human), and the Tasks-form fields (depth + sub-goals).
+the `task_continue` approval type (always-human), and the Tasks-form UI: an explicit add-a-sub-goal
+list where each row is `{text, depth}` and the depth prefills from the global default.
 
 **Slice 2 (cut 1) — built, pending live test (worker):** a queued task with sub-goals now runs the
 loop. The bridge works the current sub-goal (LLM, in the companion voice, using progress-so-far),
@@ -48,6 +51,7 @@ bridge redeploy.
 
 **Cut 2 — not yet built:** each sub-goal currently produces a *reasoning/plan* result and checkpoints;
 it does not yet dispatch a real gated executor action (browse/shell) *per sub-goal* and auto-advance
-when that action's result returns. That async "dispatch → await result → re-plan" step, and using
-`stepBudget` to bound multiple actions *within* a single sub-goal, is the next cut. Until then the
-per-task **depth** is recorded and enforced-ready but the natural bound is one report per sub-goal.
+when that action's result returns. That async "dispatch → await result → re-plan" step — and using
+each sub-goal's **depth** to bound multiple actions *within* that stage before an early check-in — is
+the next cut. Until then each sub-goal's depth is stored and enforced-ready, and the natural bound is
+one report per sub-goal.

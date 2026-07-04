@@ -1397,6 +1397,23 @@ body.simple-mode .chat-composer {
   min-width: 0;
 }
 
+.subgoal-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.subgoal-row .subgoal-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.subgoal-row .subgoal-depth {
+  flex: 0 0 4.5rem;
+  width: 4.5rem;
+}
+
 .status-card p {
   margin: 0;
   color: var(--muted);
