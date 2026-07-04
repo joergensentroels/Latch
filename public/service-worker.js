@@ -1,4 +1,4 @@
-const CACHE_NAME = "latch-v32";
+const CACHE_NAME = "latch-v33";
 const APP_SHELL = [
   "/",
   "/index.html",
