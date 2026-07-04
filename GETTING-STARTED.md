@@ -118,6 +118,8 @@ Full worker reference, deploy helpers, and start/stop commands: [OPENCLAW-WORKER
 
 - **LLM** — local (Ollama, OpenAI-compatible endpoint) or a hosted provider: [LLM-PROVIDER.md](./LLM-PROVIDER.md) / `Configure-External-LLM.ps1`.
 - **Agent email** — the companion's own mailbox: [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md#agent-email-agent-owned-mailbox) / [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md).
+- **MCP tool servers** — connect the companion to the MCP ecosystem, approval-gated, credentials on the host only: [MCP.md](./MCP.md).
+- **Scheduled tasks** — recurring instructions (daily/weekly/interval): [SCHEDULING.md](./SCHEDULING.md).
 - **Notifications** — push to your phone: [NOTIFICATIONS.md](./NOTIFICATIONS.md).
 - **Auto-start on boot** — Windows: `Install-Latch-StartupTask.ps1`. Linux host: run `node server.js` under a small `systemd` unit (with `Environment=HOST=<tailscale-ip>` `Environment=PORT=8787`) so it starts on boot, the same way the worker's bridge/executor do.
 - **If something's wrong** — `Invoke-Latch-Doctor.ps1` / `Status-Latch.ps1`, and `sudo journalctl -u latch-agent-bridge -f` on the worker.
