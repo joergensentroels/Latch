@@ -2113,23 +2113,22 @@ pre.item-body {
     align-items: start;
   }
 
+  /* Tasks is a compose-and-list screen: stack the Queue form on top and give the task list the
+     full width below, instead of a fixed 420px form column that leaves a tall empty void beside a
+     cramped list. The form card is width-capped so it doesn't sprawl on wide screens. */
   #tasksPanel {
-    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #tasksPanel .task-form,
+  #tasksPanel .panel-toolbar,
+  #tasksPanel #tasksList {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   #tasksPanel .task-form {
-    grid-column: 1;
-    grid-row: 1 / span 2;
-  }
-
-  #tasksPanel .panel-toolbar {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  #tasksPanel #tasksList {
-    grid-column: 2;
-    grid-row: 2;
+    max-width: 720px;
   }
 
   #creditsPanel {
