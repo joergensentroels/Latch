@@ -26,6 +26,8 @@ Credits and Latch Network compute can make reasoning stronger, but they are not 
 
 Read [SECURITY.md](./SECURITY.md) before exposing it beyond localhost.
 
+How much the agent does without asking — and why it's built around bounded, typed operations rather than trusting the agent's own risk assessment — is in [AUTONOMY.md](./AUTONOMY.md).
+
 Want to contribute? See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 If this is prepared for a public GitHub repository, also read [OPEN-SOURCE.md](./OPEN-SOURCE.md), [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md), [HUMAN-REQUESTS.md](./HUMAN-REQUESTS.md), [SECURITY-REVIEW.md](./SECURITY-REVIEW.md), [SECURITY-FINDINGS-2026-07.md](./SECURITY-FINDINGS-2026-07.md), [SECURITY-REVIEW-PACKET.md](./SECURITY-REVIEW-PACKET.md), [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md), [NOTIFICATIONS.md](./NOTIFICATIONS.md), [MCP.md](./MCP.md), and [SCHEDULING.md](./SCHEDULING.md). The short version: the code can become public, but live keys, GitHub write credentials, provider API keys, notification tokens, and `data\` must stay private.

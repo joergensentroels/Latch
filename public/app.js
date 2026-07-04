@@ -154,6 +154,8 @@ const approvalDialogEyebrow = document.querySelector("#approvalDialogEyebrow");
 const approvalDialogTitle = document.querySelector("#approvalDialogTitle");
 const approvalDialogSummary = document.querySelector("#approvalDialogSummary");
 const approvalDecisionNote = document.querySelector("#approvalDecisionNote");
+const approvalGrantScope = document.querySelector("#approvalGrantScope");
+const approvalGrantLabel = document.querySelector("#approvalGrantLabel");
 const approvalDecisionSubmit = document.querySelector("#approvalDecisionSubmit");
 const approvalDialogClose = document.querySelector("#approvalDialogClose");
 const approvalDecisionCancel = document.querySelector("#approvalDecisionCancel");
@@ -185,6 +187,7 @@ const scheduleAtTime = document.querySelector("#scheduleAtTime");
 const scheduleDayOfWeek = document.querySelector("#scheduleDayOfWeek");
 const scheduleList = document.querySelector("#scheduleList");
 const scheduleStatus = document.querySelector("#scheduleStatus");
+const grantList = document.querySelector("#grantList");
 const capabilityGrid = document.querySelector("#capabilityGrid");
 const userTierList = document.querySelector("#userTierList");
 const securityChecklist = document.querySelector("#securityChecklist");
@@ -878,6 +881,7 @@ function render() {
   renderNetwork();
   renderMcpServers();
   renderSchedules();
+  renderGrants();
   renderCredits();
   renderSimpleSettings();
   renderCapabilities();
@@ -1948,6 +1952,13 @@ function openApprovalDialog(approvalId, status) {
   approvalDecisionSubmit.textContent = isApproved ? "Save" : "Save";
   approvalDecisionSubmit.classList.toggle("danger-button", !isApproved);
   approvalDecisionSubmit.classList.toggle("action-button", isApproved);
+  // Offer "allow this typed operation" only when approving a grantable operation (host says so).
+  const grantable = isApproved && isProMode() && Boolean(approval.grantKey);
+  if (approvalGrantScope && approvalGrantLabel) {
+    approvalGrantScope.value = "once";
+    approvalGrantScope.classList.toggle("hidden", !grantable);
+    approvalGrantLabel.classList.toggle("hidden", !grantable);
+  }
   approvalDialog.classList.remove("hidden");
   focusDialogInput(approvalDecisionNote);
 }
@@ -1965,11 +1976,15 @@ async function submitApprovalDecision(event) {
   const { approval, status } = state.approvalDecision;
   approvalDecisionSubmit.disabled = true;
   try {
+    const grantScope = status === "approved" && approvalGrantScope && !approvalGrantScope.classList.contains("hidden")
+      ? approvalGrantScope.value
+      : "once";
     await api(approvalApiPath(`/${approval.id}`), {
       method: "PATCH",
       body: JSON.stringify({
         status,
-        note: approvalDecisionNote.value.trim()
+        note: approvalDecisionNote.value.trim(),
+        ...(grantScope === "session" || grantScope === "always" ? { grant: grantScope } : {})
       })
     });
     closeApprovalDialog();
@@ -2693,18 +2708,18 @@ function autonomyModeLabel(value) {
   const labels = {
     default_permissions: "Approve everything",
     auto_review: "Auto read-only",
-    auto_browse: "Auto-browse",
-    full_access: "Full auto"
+    auto_browse: "Auto typed tools",
+    full_access: "Auto all typed ops"
   };
   return labels[value] || labels.default_permissions;
 }
 
 function autonomyModeSummary(value) {
   const summaries = {
-    default_permissions: "Nothing runs until you approve it. The agent can plan, draft, and suggest — but every real action (running commands, browsing, committing files, or using any account) waits for your approval.",
-    auto_review: "Look, don't touch. Read-only diagnostics and tightly bounded public web research approve themselves. Anything that changes something — commands, browsing, downloads, commits — still waits for you.",
-    auto_browse: "Autonomous web browsing. Everything in Auto read-only, plus the agent can navigate HTTPS sites and read/extract pages unattended. It still asks before shell commands, code commits, using your accounts or credentials, and any login, credential, or insecure-HTTP step.",
-    full_access: "Full autonomy on the worker. Non-sensitive shell commands, browser plans, and CompassProjects commits approve themselves. Still gated: anything using your accounts or credentials (your email, GitHub token, purchases, account/repo creation) and any login/credential/HTTP step. ⚠️ A prompt-injected agent can run code on the worker in this mode — only enable it on the disposable, network-isolated worker."
+    default_permissions: "Nothing runs until you approve it. The agent can plan, draft, and suggest — but every real action waits for you. (Operations you've explicitly allowed still auto-run — see Allowed operations.)",
+    auto_review: "Look, don't touch. Only read-only diagnostics and bounded public web research approve themselves. Everything else waits for you.",
+    auto_browse: "Auto read-only, plus operator-listed MCP tools. Arbitrary browsing and shell are NOT auto-approved — only typed operations the host can verify.",
+    full_access: "Auto-approves typed, host-verifiable operations: read-only diagnostics, bounded research, operator-listed MCP tools, and CompassProjects commits. Arbitrary shell/browser ALWAYS need you — they can't be validated, so they're never auto-run. Credentials, purchases, email, and account/repo creation stay human too."
   };
   return summaries[value] || summaries.default_permissions;
 }
@@ -2770,6 +2785,40 @@ function updateScheduleCadenceVisibility() {
   if (scheduleDayOfWeek) scheduleDayOfWeek.hidden = type !== "weekly";
 }
 scheduleCadenceType?.addEventListener("change", updateScheduleCadenceVisibility);
+
+function renderGrants() {
+  if (!grantList) return;
+  const grants = state.data?.grants || [];
+  if (!grants.length) {
+    grantList.innerHTML = `<p class="empty-state">No operations allowed yet. Approve a typed operation with "session" or "always" to add one.</p>`;
+    return;
+  }
+  grantList.innerHTML = grants.map((grant) => `
+    <article class="item">
+      <div class="item-header">
+        <h2 class="item-title">${escapeHtml(grant.label || grant.key)}</h2>
+        <span class="badge ${grant.sessionScoped ? "" : "approved"}">${grant.sessionScoped ? "session" : "always"}</span>
+      </div>
+      <div class="meta-row">
+        <span class="item-meta"><code>${escapeHtml(grant.key)}</code>${grant.expiresAt ? ` &middot; expires ${escapeHtml(formatTime(grant.expiresAt))}` : ""}</span>
+      </div>
+      <div class="approval-actions">
+        <button class="danger-button" data-grant-revoke="${escapeHtml(grant.id)}" type="button">Revoke</button>
+      </div>
+    </article>
+  `).join("");
+}
+
+grantList?.addEventListener("click", async (event) => {
+  const id = event.target.closest("[data-grant-revoke]")?.dataset.grantRevoke;
+  if (!id) return;
+  try {
+    await api(`/api/grants/${id}`, { method: "DELETE" });
+    await refresh();
+  } catch (error) {
+    console.error("Could not revoke grant", error);
+  }
+});
 
 function renderSchedules() {
   if (!scheduleList) return;
