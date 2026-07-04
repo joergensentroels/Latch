@@ -10,7 +10,8 @@
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/you/shared"],
       "env": {},
       "allowedTools": ["read_file", "list_directory"],
-      "autoApprove": []
+      "autoApprove": [],
+      "argConstraints": { "read_file": { "path": { "prefix": "/home/you/shared" } } }
     },
     {
       "name": "example-with-secret",
@@ -26,6 +27,7 @@
   "_fields": {
     "transport": "'stdio' spawns the server as a subprocess and speaks JSON-RPC over stdin/stdout; 'mock' is for tests.",
     "allowedTools": "Optional. If non-empty, ONLY these tool names may be called on this server. Empty = allow any tool the server exposes (still approval-gated).",
-    "autoApprove": "Optional. Tool names pre-authorised for autonomy auto-approval once bridge-side detection lands. Still audited. Leave empty to require a human for every call."
+    "autoApprove": "Optional. Tool names pre-authorised for autonomy auto-approval once bridge-side detection lands. Still audited. Leave empty to require a human for every call.",
+    "argConstraints": "Optional per-tool argument bounds enforced host-side before the call runs, for tools that don't self-sandbox. Per field: {\"prefix\":\"...\"} | {\"equals\":value} | {\"enum\":[...]}. Tool arguments are also validated against the tool's own inputSchema regardless."
   }
 }

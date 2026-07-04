@@ -3944,11 +3944,26 @@ function urlNeedsHumanApproval(value) {
   }
 }
 
+// A scoped repo write becomes code execution if it lands on a CI/hook/action path (a pushed
+// GitHub Actions workflow runs with that repo's token/secrets). Such paths NEVER auto-approve and
+// are never grantable -- they always require a human, even for CompassProjects.
+function githubPathIsAutoUnsafe(rawPath) {
+  const path = String(rawPath || "").replace(/^\/+/, "").toLowerCase();
+  if (!path) return false;
+  const unsafePrefixes = [".github/", ".githooks/", ".circleci/", ".git/", ".gitea/", ".forgejo/"];
+  if (unsafePrefixes.some((prefix) => path.startsWith(prefix) || path.includes(`/${prefix}`))) return true;
+  const base = path.split("/").pop();
+  const unsafeFiles = [".gitlab-ci.yml", "gitlab-ci.yml", "azure-pipelines.yml", "jenkinsfile", "action.yml", "action.yaml"];
+  return unsafeFiles.includes(base);
+}
+
 function isOwnRepoGithubFileApproval(approval) {
+  const filePath = cleanGithubFilePath(approval.githubFilePath || "README.md");
   return approval.type === "github_file"
     && !approval.sensitive
     && cleanGithubRepoName(approval.githubRepoName).toLowerCase() === "compassprojects"
-    && Boolean(cleanGithubFilePath(approval.githubFilePath || "README.md"))
+    && Boolean(filePath)
+    && !githubPathIsAutoUnsafe(filePath)
     && Boolean(cleanText(approval.githubFileContent || "", 12000));
 }
 

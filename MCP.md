@@ -44,6 +44,11 @@ Copy [`mcp.example.json`](./mcp.example.json) to `data/mcp.json` (gitignored) an
   all, even with approval.
 - **`autoApprove`** — optional; tools pre-authorised for autonomy auto-approval once bridge-side
   detection lands (see "Not yet" below). Still audited.
+- **`argConstraints`** — optional per-tool argument bounds enforced host-side before a call runs
+  (e.g. `{ "read_file": { "path": { "prefix": "/home/you/shared" } } }`), for tools that don't
+  self-sandbox. Independently, every call's arguments are validated against the tool's own declared
+  `inputSchema` (required fields, types, enums, no unexpected fields) — a typed tool with unbounded
+  arguments is not treated as safe.
 
 No npm dependency is added: the MCP stdio client is implemented directly on Node built-ins
 (`mcp.mjs`), consistent with the rest of the host.

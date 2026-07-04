@@ -11,6 +11,7 @@ then verify. This file gets deleted once everything below is confirmed.
 
 ## Commits in this batch
 
+- hardening #1 + #2: CI/hook paths never auto/grant; MCP args validated + constrainable
 - `a533a3e` autonomy recut: auto-approve only host-verified typed operations + operator grants
 - `0d86d67` structured sub-goals (`{text, depth}`)
 - `e4b084e` bridge multi-step loop (slice 2, cut 1)
@@ -43,6 +44,10 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
 - [ ] **Sub-goal depth** prefills from the Review-Policy default in the Tasks form and round-trips.
 - [ ] **UI on the phone**: the sub-goal add/remove rows, the approval dialog's once/session/always
       selector (only shows for grantable ops), and the Allowed-operations list all render and work.
+- [ ] **Hardening #1**: a commit to `.github/workflows/**` in CompassProjects does NOT auto-approve
+      even under full access, and isn't offered a grant option; a normal file still does.
+- [ ] **Hardening #2**: an MCP tool call with malformed/extra args (or args violating a configured
+      `argConstraints` prefix) is rejected host-side before running.
 
 ## Known scope limits (by design, not bugs)
 
