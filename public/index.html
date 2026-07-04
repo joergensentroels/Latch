@@ -463,6 +463,16 @@ The companion should help the user think clearly and act responsibly; it should 
             </div>
             <p id="autonomyStatus" class="form-status" aria-live="polite"></p>
           </form>
+          <div class="ops-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Autonomy</p>
+                <h2 class="section-title">Allowed operations</h2>
+              </div>
+            </div>
+            <p class="help-note">Typed operations you've allowed to run without asking (from a "session" or "always" approval). Kept only on the trusted host, never on the worker. Arbitrary shell/browser can never be added here.</p>
+            <div id="grantList" class="list compact-list"></div>
+          </div>
           <form id="agentEmailForm" class="ops-panel autonomy-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>
@@ -642,6 +652,12 @@ The companion should help the user think clearly and act responsibly; it should 
           <p id="approvalDialogSummary" class="item-body"></p>
           <label for="approvalDecisionNote">Review note</label>
           <textarea id="approvalDecisionNote" rows="4" placeholder="Optional note or result for the agent"></textarea>
+          <label id="approvalGrantLabel" for="approvalGrantScope" class="hidden">Allow this kind of operation</label>
+          <select id="approvalGrantScope" class="hidden">
+            <option value="once">Just this once</option>
+            <option value="session">Allow for this session</option>
+            <option value="always">Always allow this operation</option>
+          </select>
           <div class="dialog-actions">
             <button id="approvalDecisionCancel" class="secondary-button" type="button">Cancel</button>
             <button id="approvalDecisionSubmit" class="action-button" type="submit">Save</button>

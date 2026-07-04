@@ -40,6 +40,7 @@ const networkJobStatuses = ["queued", "assigned", "completed", "failed", "timed_
 const agencyWorkerStatuses = ["online", "offline", "degraded"];
 const purchaseStatuses = ["pending", "completed", "cancelled", "failed"];
 const sessionTtlMs = Number(process.env.LATCH_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+const grantSessionTtlMs = Number(process.env.LATCH_GRANT_SESSION_TTL_MS || 12 * 60 * 60 * 1000);
 // Default OFF for a public build: dev login mints a real session with no credential, so it must
 // be an explicit opt-in (LATCH_ENABLE_DEV_LOGIN=1) rather than an opt-out.
 const devUserLoginEnabled = process.env.LATCH_ENABLE_DEV_LOGIN === "1";
@@ -1316,11 +1317,33 @@ async function handleApi(req, res, url) {
       db.contextItems.unshift(contextItem);
       db.events.unshift(event("context.answer.saved", "operator", contextItem.id, contextItem.title));
     }
+    // "Allow this session / always": on approval, optionally record an operation grant so the same
+    // typed operation auto-approves next time (Claude-Code-style allowlist). Only grantable for
+    // host-verifiable typed operations; a no-op otherwise.
+    if (previousStatus !== "approved" && approval.status === "approved" && ["session", "always"].includes(body.grant)) {
+      grantOperationFromApproval(db, approval, body.grant, "operator");
+    }
     if (previousStatus !== "approved" && approval.status === "approved") {
       await handleApprovedApprovalSideEffects(db, approval, "operator");
     }
     await writeDb(db);
     sendJson(res, 200, approval);
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/grants/") && req.method === "DELETE") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const id = url.pathname.split("/").at(-1);
+    const db = await readDb();
+    const before = (db.meta.operationGrants || []).length;
+    db.meta.operationGrants = (db.meta.operationGrants || []).filter((grant) => grant.id !== id);
+    if (db.meta.operationGrants.length !== before) {
+      db.events.unshift(event("operation.grant.revoked", "operator", id, id));
+    }
+    await writeDb(db);
+    sendJson(res, 200, { ok: true, grants: publicGrants(db) });
     return;
   }
 
@@ -3233,12 +3256,13 @@ function visibleState(db) {
     profile: publicAgentProfile(db.meta.agentProfile),
     autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
     agentEmailPolicy: publicAgentEmailPolicy(db.meta.agentEmailPolicy),
+    grants: publicGrants(db),
     users: db.users.slice(0, 100).map(publicUser),
     purchases: db.purchases.slice(0, 100).map(publicPurchase),
     messages: newestFirst(activeItems(db.messages)).slice(0, 100),
     channels: activeItems(db.channels).slice(0, 100).map(publicChannel),
     tasks: activeItems(db.tasks).slice(0, 100),
-    approvals: activeItems(db.approvals).slice(0, 100),
+    approvals: activeItems(db.approvals).slice(0, 100).map((approval) => ({ ...approval, grantKey: grantKeyForApproval(approval) })),
     executions: activeItems(db.executions).slice(0, 100),
     researchRuns: activeItems(db.researchRuns).slice(0, 100),
     schedules: activeItems(db.schedules).slice(0, 100).map(publicSchedule),
@@ -3261,6 +3285,7 @@ function normalizeDb(db) {
   db.meta = db.meta || {};
   db.meta.agentProfile = publicAgentProfile(db.meta.agentProfile);
   db.meta.autonomyPolicy = publicAutonomyPolicy(db.meta.autonomyPolicy);
+  db.meta.operationGrants = Array.isArray(db.meta.operationGrants) ? db.meta.operationGrants : [];
   db.meta.deletedRecords = mergeDeletedRecords([], db.meta.deletedRecords);
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
@@ -3704,7 +3729,7 @@ function autonomyModeLabel(mode) {
 function applyAutonomyDecision(approval, policy = {}, db = null) {
   const mode = publicAutonomyPolicy(policy).mode;
   approval.proEligible = sourceCanUseFullAccess(approval, db);
-  const review = reviewApprovalForAutonomy(approval, mode, approval.proEligible);
+  const review = reviewApprovalForAutonomy(approval, mode, approval.proEligible, db);
   approval.decisionMode = review.decisionMode;
   approval.decisionReason = review.reason;
   if (review.status) {
@@ -3714,120 +3739,147 @@ function applyAutonomyDecision(approval, policy = {}, db = null) {
   }
 }
 
-function reviewApprovalForAutonomy(approval, mode, proEligible = false) {
-  if (mode === "default_permissions") {
-    return { decisionMode: "human", reason: "Default permissions require operator review." };
-  }
+// Free-form shell/browser plans cannot be validated host-side, so they ALWAYS require a human — even
+// under full access, even with a grant. (Pre-public review, Emil: don't auto-run arbitrary operations;
+// auto-approval must rest on host-verifiable typed operations, not on worker-asserted risk.)
+// read_only_status is a fixed host-defined template, so it is NOT arbitrary.
+function isArbitraryExecution(approval) {
+  return approval.type === "command" && ["shell", "browser"].includes(approval.executionMode);
+}
 
+function reviewApprovalForAutonomy(approval, mode, proEligible = false, db = null) {
+  // Hard boundaries (host-side, keyed on operation type): never auto, regardless of mode or grants.
   const boundaryReason = humanBoundaryReason(approval);
   if (boundaryReason) {
     return { decisionMode: "human", reason: boundaryReason };
   }
 
+  // Arbitrary shell/browser: a human always reads the exact plan.
+  if (isArbitraryExecution(approval)) {
+    return { decisionMode: "human", reason: "Arbitrary shell/browser plans always require operator review." };
+  }
+
+  // Operator operation grants ("allow this typed operation") auto-approve in ANY mode — including
+  // default_permissions — the Claude-Code-style allowlist. Grants live only on the trusted host and
+  // only ever match host-verifiable typed operations (see grantKeyForApproval).
+  if (db && isOperationGranted(db, approval)) {
+    return {
+      status: "approved",
+      decisionMode: "grant",
+      reason: "Auto-approved by an operator operation grant.",
+      note: "Auto-approved: you granted this operation."
+    };
+  }
+
+  if (mode === "default_permissions") {
+    return { decisionMode: "human", reason: "Default permissions require operator review." };
+  }
+
+  const auto = (what) => ({
+    status: "approved",
+    decisionMode: "auto",
+    reason: `Auto-approved (${mode}): ${what}.`,
+    note: `Auto-approved by autonomy policy: ${what}.`
+  });
+
+  // Typed, host-verifiable operations only. None of these is an arbitrary operation.
+  const readOnly = approval.executionMode === "read_only_status" && approval.riskLevel === "low";
+  const research = approval.type === "web_research" && canAutoApproveResearch(approval);
+  const mcpTyped = approval.type === "mcp_tool_call" && approval.mcpAutoApprovable && !approval.sensitive;
+
   if (mode === "auto_review") {
-    if (approval.executionMode === "read_only_status" && approval.riskLevel === "low") {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Auto review approved a low-risk fixed read-only diagnostic.",
-        note: "Auto-approved by autonomy policy: low-risk read-only diagnostic."
-      };
-    }
-    if (approval.type === "web_research" && canAutoApproveResearch(approval)) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Auto review approved bounded exact-URL public research.",
-        note: "Auto-approved by autonomy policy: bounded public research."
-      };
-    }
-    return { decisionMode: "human", reason: "Auto review did not match a low-risk allow rule." };
+    if (readOnly) return auto("read-only diagnostic");
+    if (research) return auto("bounded public research");
+    return { decisionMode: "human", reason: "Auto review only auto-approves read-only diagnostics and bounded research." };
   }
 
   if (mode === "auto_browse") {
-    if (approval.executionMode === "read_only_status" && approval.riskLevel === "low") {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Auto-browse approved a low-risk read-only diagnostic.",
-        note: "Auto-approved by autonomy policy: low-risk read-only diagnostic."
-      };
-    }
-    if (approval.type === "web_research" && canAutoApproveResearch(approval)) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Auto-browse approved bounded exact-URL public research.",
-        note: "Auto-approved by autonomy policy: bounded public research."
-      };
-    }
-    // Unattended HTTPS browsing. Risky browser plans (plain HTTP, embedded URL credentials, or
-    // login/credential/2FA steps) were already routed to the operator by humanBoundaryReason above,
-    // so any browser plan reaching here is a non-credential HTTPS plan. Shell execution, repo
-    // commits, and contacting people still require a human in this tier.
-    if (approval.type === "command" && approval.executionMode === "browser" && !approval.sensitive && proEligible) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Auto-browse approved an unattended non-credential HTTPS browser plan.",
-        note: "Auto-approved by autonomy policy: HTTPS browser automation."
-      };
-    }
-    return { decisionMode: "human", reason: "Auto-browse requires review for anything beyond read-only steps and HTTPS browsing (e.g. shell, commits, or contacting people)." };
+    if (readOnly) return auto("read-only diagnostic");
+    if (research) return auto("bounded public research");
+    if (mcpTyped) return auto("operator-listed MCP tool");
+    return { decisionMode: "human", reason: "Auto-browse auto-approves read-only diagnostics, bounded research, and operator-listed MCP tools — not arbitrary execution." };
   }
 
   if (mode === "full_access") {
-    if (isOwnRepoGithubFileApproval(approval) && proEligible) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Full access auto-approved a CompassProjects file update for an operator or Pro user.",
-        note: "Auto-approved by full access policy: CompassProjects file update."
-      };
-    }
-    // Full auto is an explicit, operator-only opt-in (the agent cannot raise the autonomy level —
-    // /api/autonomy is operator-gated). In this tier non-sensitive shell/browser execution plans
-    // auto-approve; the hard human boundaries (credentials, purchases, contacting people via YOUR
-    // accounts, account/repo creation, HTTP/login browser steps) still require the operator. Only
-    // enable this on the disposable, network-isolated worker.
-    if (approval.type === "command" && !approval.sensitive && proEligible) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Full access auto-approved a non-sensitive VM execution request for an operator or Pro user.",
-        note: "Auto-approved by full access policy."
-      };
-    }
-    if (approval.type === "web_research" && canAutoApproveResearch(approval)) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Full access auto-approved bounded exact-URL public research.",
-        note: "Auto-approved by full access policy: bounded public research."
-      };
-    }
-    if (approval.type === "other" && approval.riskLevel === "low" && !approval.sensitive && proEligible) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Full access auto-approved a low-risk non-sensitive request.",
-        note: "Auto-approved by full access policy."
-      };
-    }
-    // MCP tool calls auto-approve only when the operator has explicitly listed the tool in that
-    // server's `autoApprove` allowlist (mcpAutoApprovable). Everything else still waits for a human,
-    // so a newly-reachable tool never runs unattended without an explicit opt-in.
-    if (approval.type === "mcp_tool_call" && approval.mcpAutoApprovable && !approval.sensitive && proEligible) {
-      return {
-        status: "approved",
-        decisionMode: "auto",
-        reason: "Full access auto-approved a pre-authorised MCP tool call.",
-        note: "Auto-approved by full access policy: operator-listed MCP tool."
-      };
-    }
+    if (readOnly) return auto("read-only diagnostic");
+    if (research) return auto("bounded public research");
+    if (mcpTyped) return auto("operator-listed MCP tool");
+    if (isOwnRepoGithubFileApproval(approval) && proEligible) return auto("CompassProjects file update");
+    if (approval.type === "other" && approval.riskLevel === "low" && !approval.sensitive && proEligible) return auto("low-risk request");
+    return { decisionMode: "human", reason: "Full access auto-approves typed operations only; arbitrary execution still needs you." };
   }
 
   return { decisionMode: "human", reason: "Operator review required." };
+}
+
+// The typed-operation identity used for operator grants. Returns null for anything that must never
+// be auto-approved (hard boundaries, arbitrary shell/browser), so those are never grantable.
+function grantKeyForApproval(approval) {
+  if (!approval || humanBoundaryReason(approval) || isArbitraryExecution(approval)) return null;
+  if (approval.executionMode === "read_only_status" && approval.actionTemplate) return `template:${approval.actionTemplate}`;
+  if (approval.type === "web_research") return "research";
+  if (approval.type === "mcp_tool_call" && approval.mcpServer && approval.mcpTool) return `mcp:${approval.mcpServer}:${approval.mcpTool}`;
+  if (isOwnRepoGithubFileApproval(approval)) return `github_file:${approval.githubRepoName || "CompassProjects"}`;
+  return null;
+}
+
+function grantLabelForApproval(approval) {
+  const key = grantKeyForApproval(approval);
+  if (!key) return "";
+  if (key.startsWith("template:")) return `Read-only diagnostic: ${key.slice("template:".length)}`;
+  if (key === "research") return "Bounded public web research";
+  if (key.startsWith("mcp:")) return `MCP tool ${key.slice("mcp:".length)}`;
+  if (key.startsWith("github_file:")) return `File commits to ${key.slice("github_file:".length)}`;
+  return key;
+}
+
+function isGrantActive(grant, nowMs) {
+  if (!grant || !grant.key) return false;
+  if (grant.expiresAt && Date.parse(grant.expiresAt) <= nowMs) return false;
+  if (grant.sessionScoped && grant.serverEpoch && grant.serverEpoch !== startedAt) return false;
+  return true;
+}
+
+function isOperationGranted(db, approval) {
+  const key = grantKeyForApproval(approval);
+  if (!key) return false;
+  const now = Date.now();
+  return (db.meta?.operationGrants || []).some((grant) => grant.key === key && isGrantActive(grant, now));
+}
+
+function publicGrants(db) {
+  const now = Date.now();
+  return (db.meta?.operationGrants || [])
+    .filter((grant) => isGrantActive(grant, now))
+    .map((grant) => ({
+      id: grant.id,
+      key: grant.key,
+      label: grant.label || grant.key,
+      sessionScoped: Boolean(grant.sessionScoped),
+      expiresAt: grant.expiresAt || "",
+      createdAt: grant.createdAt || ""
+    }));
+}
+
+// Record (or refresh) a grant for the typed operation an approval represents. scope: "session"
+// (cleared on host restart or after a TTL) or "always" (persistent). No-op for non-grantable ops.
+function grantOperationFromApproval(db, approval, scope, actor = "operator") {
+  const key = grantKeyForApproval(approval);
+  if (!key || !["session", "always"].includes(scope)) return null;
+  db.meta.operationGrants = Array.isArray(db.meta.operationGrants) ? db.meta.operationGrants : [];
+  const now = new Date();
+  const expiresAt = scope === "session" ? new Date(now.getTime() + grantSessionTtlMs).toISOString() : "";
+  const existing = db.meta.operationGrants.find((grant) => grant.key === key);
+  const record = existing || { id: newId("grant"), key, createdAt: now.toISOString() };
+  record.label = grantLabelForApproval(approval);
+  record.sessionScoped = scope === "session";
+  record.serverEpoch = scope === "session" ? startedAt : "";
+  record.expiresAt = expiresAt;
+  record.createdBy = actor;
+  record.updatedAt = now.toISOString();
+  if (!existing) db.meta.operationGrants.unshift(record);
+  db.events.unshift(event("operation.granted", actor, record.id, `${scope}: ${record.label}`));
+  return record;
 }
 
 function sourceCanUseFullAccess(approval, db) {
