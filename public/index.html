@@ -481,6 +481,40 @@ The companion should help the user think clearly and act responsibly; it should 
           <div class="ops-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>
+                <p class="eyebrow">Automation</p>
+                <h2 class="section-title">Scheduled tasks</h2>
+              </div>
+            </div>
+            <p class="help-note">Recurring instructions. Each run queues a normal task that goes through the usual approval pipeline.</p>
+            <form id="scheduleForm" class="schedule-form">
+              <input id="scheduleTitle" type="text" maxlength="180" placeholder="Title (e.g. Morning digest)" required>
+              <textarea id="scheduleInstructions" rows="2" maxlength="4000" placeholder="What should happen each run?"></textarea>
+              <div class="schedule-cadence-row">
+                <select id="scheduleCadenceType" aria-label="How often">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="interval">Every N minutes</option>
+                </select>
+                <input id="scheduleEveryMinutes" type="number" min="5" max="20160" step="5" value="60" title="Minutes between runs" aria-label="Minutes between runs" hidden>
+                <input id="scheduleAtTime" type="time" value="09:00" title="Time of day" aria-label="Time of day">
+                <select id="scheduleDayOfWeek" aria-label="Day of week" title="Day of week" hidden>
+                  <option value="1">Monday</option>
+                  <option value="2">Tuesday</option>
+                  <option value="3">Wednesday</option>
+                  <option value="4">Thursday</option>
+                  <option value="5">Friday</option>
+                  <option value="6">Saturday</option>
+                  <option value="0">Sunday</option>
+                </select>
+              </div>
+              <button type="submit">Add schedule</button>
+            </form>
+            <p id="scheduleStatus" class="form-status" aria-live="polite"></p>
+            <div id="scheduleList" class="list compact-list"></div>
+          </div>
+          <div class="ops-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
                 <p class="eyebrow">Latch Network</p>
                 <h2 class="section-title">Private Compute</h2>
               </div>
