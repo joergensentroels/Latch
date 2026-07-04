@@ -322,6 +322,38 @@ assert _composed.email_body in _composed.details, "composed body should appear i
 # verbatim approvals are left untouched by the composer
 assert _cb.compose_email_if_needed(verbatim_need).email_body == "Ship it today.", "verbatim body must not be recomposed"
 
+# --- MCP tool calls: explicit detection + LLM planning against the poll catalog ---
+mcp_need = bridge.detect_approval_need("Files", "Use MCP to read the file notes.txt")
+assert mcp_need is not None and mcp_need.type == "mcp_tool_call", f"expected mcp_tool_call, got {mcp_need and mcp_need.type}"
+assert mcp_need.mcp_tool == "" and mcp_need.mcp_compose_brief, "detector should defer server/tool to the planner"
+assert bridge.detect_mcp_tool_call("Summary", "Please write a short summary of this text.") is None, "non-MCP text must not trigger"
+
+_mcp = bridge.Bridge(argparse.Namespace(state_path=str(Path(tempfile.gettempdir()) / "latch-test-mcp-state.json"), worker_name="test"))
+_mcp.remote_mcp_catalog = {
+    "enabled": True,
+    "servers": [
+        {"name": "filesystem", "tools": [
+            {"name": "read_file", "description": "Read a file", "inputSchema": {"type": "object"}},
+            {"name": "list_directory", "description": "List a dir", "inputSchema": {"type": "object"}},
+        ]},
+    ],
+}
+_mcp.ask_llm = lambda messages, **k: '{"server":"filesystem","tool":"read_file","args":{"path":"notes.txt"},"summary":"Read notes.txt"}'
+_planned = _mcp.plan_mcp_tool_call("Files", "Use MCP to read notes.txt", mcp_need, "local", False)
+assert _planned.type == "mcp_tool_call" and _planned.mcp_server == "filesystem" and _planned.mcp_tool == "read_file", _planned
+assert _planned.mcp_args == {"path": "notes.txt"}, _planned.mcp_args
+assert "filesystem/read_file" in _planned.title
+
+# A model that invents an unlisted tool is rejected -> falls back to a human "other" approval.
+_mcp.ask_llm = lambda messages, **k: '{"server":"filesystem","tool":"delete_everything","args":{}}'
+_bad = _mcp.plan_mcp_tool_call("Files", "Use MCP to nuke things", mcp_need, "local", False)
+assert _bad.type == "other" and not _bad.mcp_tool, "an unlisted tool must not be proposed"
+
+# No catalog available -> operator must decide.
+_mcp.remote_mcp_catalog = {"enabled": False, "servers": []}
+_none = _mcp.plan_mcp_tool_call("Files", "Use MCP to read notes.txt", mcp_need, "local", False)
+assert _none.type == "other", "no MCP tools available should defer to the operator"
+
 # --- Inbound email: auto-reply only to senders the companion emailed first ---
 assert bridge.reply_subject("Hello") == "Re: Hello"
 assert bridge.reply_subject("Re: Hello") == "Re: Hello"

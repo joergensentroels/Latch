@@ -171,6 +171,9 @@ const lists = {
 };
 const diagnosticsGrid = document.querySelector("#diagnosticsGrid");
 const networkGrid = document.querySelector("#networkGrid");
+const mcpServerList = document.querySelector("#mcpServerList");
+const mcpRefreshButton = document.querySelector("#mcpRefreshButton");
+const mcpStatus = document.querySelector("#mcpStatus");
 const capabilityGrid = document.querySelector("#capabilityGrid");
 const userTierList = document.querySelector("#userTierList");
 const securityChecklist = document.querySelector("#securityChecklist");
@@ -818,6 +821,7 @@ function render() {
     renderAutonomyPolicy();
     renderAgentEmailPolicy();
   renderNetwork();
+  renderMcpServers();
   renderCredits();
   renderSimpleSettings();
   renderCapabilities();
@@ -2623,6 +2627,59 @@ function autonomyModeSummary(value) {
   };
   return summaries[value] || summaries.default_permissions;
 }
+
+function renderMcpServers() {
+  if (!mcpServerList) return;
+  // Prefer the live catalog (with tools) if it's been fetched; otherwise the redacted list from
+  // /api/about (names + allowlist, no tools) so the section renders instantly without a subprocess.
+  const source = state.mcp || state.about?.mcp || { enabled: false, servers: [] };
+  const servers = source.servers || [];
+  if (!source.enabled) {
+    mcpServerList.innerHTML = `<p class="empty-state">MCP is off. Add servers to <code>data/mcp.json</code> and set <code>enabled: true</code>.</p>`;
+    return;
+  }
+  if (!servers.length) {
+    mcpServerList.innerHTML = `<p class="empty-state">No MCP servers configured.</p>`;
+    return;
+  }
+  mcpServerList.innerHTML = servers.map((server) => {
+    const badges = [
+      server.transport ? `<span class="type-pill">${escapeHtml(server.transport)}</span>` : "",
+      server.ready === false ? `<span class="type-pill risk-high">unreachable</span>` : "",
+      (server.allowedTools?.length) ? `<span class="type-pill shared">allowlist: ${server.allowedTools.length}</span>` : "",
+      (server.autoApprove?.length) ? `<span class="type-pill auto-review">auto: ${server.autoApprove.length}</span>` : ""
+    ].filter(Boolean).join(" ");
+    const tools = (server.tools || []).length
+      ? `<ul class="mcp-tool-list">${server.tools.map((tool) => `
+          <li><strong>${escapeHtml(tool.name)}</strong>${server.autoApprove?.includes(tool.name) ? ` <span class="type-pill auto-review">auto-approve</span>` : ""}${tool.description ? `<span class="item-meta">${escapeHtml(tool.description)}</span>` : ""}</li>
+        `).join("")}</ul>`
+      : (state.mcp ? `<p class="item-meta">No tools exposed${server.error ? `: ${escapeHtml(server.error)}` : "."}</p>` : `<p class="item-meta">Press Refresh to list tools.</p>`);
+    return `
+      <article class="item">
+        <div class="item-header">
+          <h2 class="item-title">${escapeHtml(server.name)}</h2>
+          <div class="meta-row">${badges}</div>
+        </div>
+        ${server.description ? `<p class="item-body">${escapeHtml(server.description)}</p>` : ""}
+        ${tools}
+      </article>
+    `;
+  }).join("");
+}
+
+async function loadMcpServers() {
+  if (state.authMode !== "operator") return;
+  if (mcpStatus) setFormStatus(mcpStatus, "Discovering MCP tools...", "");
+  try {
+    state.mcp = await api("/api/mcp/servers");
+    renderMcpServers();
+    if (mcpStatus) setFormStatus(mcpStatus, "", "");
+  } catch (error) {
+    if (mcpStatus) setFormStatus(mcpStatus, `Could not load MCP servers: ${error.message}`, "error");
+  }
+}
+
+mcpRefreshButton?.addEventListener("click", loadMcpServers);
 
 function renderNetwork() {
   if (!networkGrid || !lists.network) return;

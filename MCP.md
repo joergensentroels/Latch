@@ -58,16 +58,41 @@ No npm dependency is added: the MCP stdio client is implemented directly on Node
    approval approved and records the error; a transport/config failure reverts it to pending so you
    can fix config and retry.
 
+## Bridge-side (natural language → tool call)
+
+You don't have to hand-craft the approval. When a task or Inbox message explicitly mentions MCP
+("use MCP to read notes.txt", "via the … MCP server"), the bridge's `detect_mcp_tool_call` flags the
+intent and `plan_mcp_tool_call` asks the LLM to pick a concrete `(server, tool, args)` — **only from
+the tool catalog delivered in that poll** (the host sends the catalog, minus credentials, in
+`/api/agent/poll`). The choice is validated against the catalog before the approval is created, so
+the model can't invent a server or tool; if nothing fits, it falls back to a plain operator review.
+
+## Autonomy
+
+Every MCP call requires a human by default. The one exception: under **Full access**, a tool the
+operator has listed in that server's `autoApprove` array auto-approves (computed as
+`mcpAutoApprovable` at creation). A newly-reachable tool never runs unattended without that explicit
+per-tool opt-in.
+
+## Results
+
+On a successful call the result is stored on the approval **and** posted back into the loop as an
+Inbox message tied to the source task/message, and the originating task is closed (`done`, or
+`failed` if the tool errored).
+
+## UI
+
+**Settings → MCP → Tool servers** lists configured servers, their allowlist/auto-approve badges,
+and (via **Refresh**) their live tools. Read-only — servers are configured in `data/mcp.json`.
+
 ## Status
 
-**Implemented:** the host MCP client (stdio + mock transports, handshake, `tools/list`,
-`tools/call`), config loading + redaction, the `/api/mcp/servers` operator endpoint, the
-`mcp_tool_call` approval type, and host-side execution on approval. Covered by `test/mcp.mjs`
-(incl. the real stdio transport) and the end-to-end path in `test/smoke.mjs`.
+Fully implemented across host and worker: the MCP client (stdio + mock transports), config
+load/redaction, `/api/mcp/servers`, the `mcp_tool_call` approval type + host-side execution,
+bridge-side detection + LLM planning against the poll catalog, Full-access auto-approve for
+`autoApprove` tools, result feedback into the Inbox/task, and the Settings UI. Covered by
+`test/mcp.mjs` (incl. the real stdio transport), `test/worker-readonly-templates.py` (detection +
+planning), and the end-to-end path in `test/smoke.mjs`.
 
-**Not yet (next slices):**
-- Bridge-side intent detection so a natural-language task can *propose* an `mcp_tool_call`.
-- Autonomy auto-approval for `autoApprove` tools (currently every MCP call requires a human, even
-  under Full access — the safe default).
-- A Settings UI for MCP servers/tools (today it's config file + API).
-- Returning tool results to the worker's task loop (today the result is stored on the approval).
+**Takes effect on:** host restart (server) + bridge redeploy (worker detection/planning). The
+Settings UI is static (PWA reload).
