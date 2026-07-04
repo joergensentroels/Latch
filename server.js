@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadEmailConfig, sendEmail, pollInbox, classifySend } from "./email.mjs";
 import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed } from "./mcp.mjs";
+import { normalizeCadence, describeCadence, computeNextRun, dueSchedules } from "./schedule.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
@@ -78,6 +79,7 @@ const defaultCompanionAnchorPurpose = [
 const companionAnchor = await loadCompanionAnchor();
 let simplePlannerRunning = false;
 let simplePlannerScheduled = false;
+let schedulerRunning = false;
 let dbWriteChain = Promise.resolve();
 const agentResponseClaims = new Map();
 
@@ -114,6 +116,7 @@ const emptyDb = {
   researchRuns: [],
   emailCampaigns: [],
   emailLog: [],
+  schedules: [],
   users: [],
   sessions: [],
   purchases: [],
@@ -168,6 +171,9 @@ if (simplePlannerIntervalMs > 0) {
   setInterval(() => {
     runSimplePlanner().catch((error) => {
       console.error(`Simple planner failed: ${error.message}`);
+    });
+    runScheduler().catch((error) => {
+      console.error(`Scheduler failed: ${error.message}`);
     });
   }, simplePlannerIntervalMs).unref?.();
   scheduleSimplePlannerSoon();
@@ -331,6 +337,7 @@ function mergeConcurrentDb(current, incoming) {
   merged.researchRuns = mergeRecordsById(current.researchRuns, merged.researchRuns, "researchRuns", deleted);
   merged.emailCampaigns = mergeRecordsById(current.emailCampaigns, merged.emailCampaigns, "emailCampaigns", deleted);
   merged.emailLog = mergeRecordsById(current.emailLog, merged.emailLog, "emailLog", deleted);
+  merged.schedules = mergeRecordsById(current.schedules, merged.schedules, "schedules", deleted);
   merged.users = mergeRecordsById(current.users, merged.users, "users", deleted);
   merged.sessions = mergeRecordsById(current.sessions, merged.sessions, "sessions", deleted);
   merged.purchases = mergeRecordsById(current.purchases, merged.purchases, "purchases", deleted);
@@ -1026,6 +1033,101 @@ async function handleApi(req, res, url) {
     if (res.writableEnded) return;
 
     await removeDbItem(res, "tasks", url.pathname.split("/").at(-1), "task.deleted");
+    return;
+  }
+
+  if (url.pathname === "/api/schedules" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    const cadence = normalizeCadence(body.cadence || { type: body.cadenceType, everyMinutes: body.everyMinutes, atTime: body.atTime, dayOfWeek: body.dayOfWeek });
+    const enabled = cleanBoolean(body.enabled, true);
+    const now = new Date().toISOString();
+    const schedule = {
+      id: newId("schedule"),
+      title: cleanText(body.title || body.goal || "Scheduled task", 180),
+      instructions: cleanText(body.instructions || body.details || "", 4000),
+      channel: cleanChannelId(body.channel || "") || "operations",
+      priority: cleanChoice(body.priority, ["normal", "high", "low"], "normal"),
+      routingPreference: cleanChoice(body.routingPreference, routingPreferences, "auto"),
+      allowNetwork: cleanBoolean(body.allowNetwork, true),
+      cadence,
+      enabled,
+      lastRunAt: "",
+      nextRunAt: enabled ? computeNextRun(cadence, Date.now()) : "",
+      runCount: 0,
+      lastTaskId: "",
+      archivedAt: "",
+      createdAt: now,
+      updatedAt: now
+    };
+    db.schedules.unshift(schedule);
+    db.events.unshift(event("schedule.created", "operator", schedule.id, schedule.title));
+    await writeDb(db);
+    sendJson(res, 201, publicSchedule(schedule));
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/schedules/") && url.pathname.endsWith("/run") && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const id = url.pathname.split("/").slice(-2)[0];
+    const db = await readDb();
+    const schedule = db.schedules.find((item) => item.id === id && !item.archivedAt);
+    if (!schedule) {
+      sendJson(res, 404, { error: "Schedule not found." });
+      return;
+    }
+    const task = materializeScheduleTask(db, schedule, "operator");
+    await writeDb(db);
+    sendJson(res, 200, { schedule: publicSchedule(schedule), task });
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/schedules/") && req.method === "PATCH") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const id = url.pathname.split("/").at(-1);
+    const body = await readJsonBody(req);
+    const db = await readDb();
+    const schedule = db.schedules.find((item) => item.id === id && !item.archivedAt);
+    if (!schedule) {
+      sendJson(res, 404, { error: "Schedule not found." });
+      return;
+    }
+    if (body.title !== undefined) schedule.title = cleanText(body.title, 180);
+    if (body.instructions !== undefined) schedule.instructions = cleanText(body.instructions, 4000);
+    if (body.channel !== undefined) schedule.channel = cleanChannelId(body.channel || "") || "operations";
+    if (body.priority !== undefined) schedule.priority = cleanChoice(body.priority, ["normal", "high", "low"], schedule.priority);
+    if (body.routingPreference !== undefined) schedule.routingPreference = cleanChoice(body.routingPreference, routingPreferences, schedule.routingPreference);
+    if (body.allowNetwork !== undefined) schedule.allowNetwork = cleanBoolean(body.allowNetwork, schedule.allowNetwork);
+    let cadenceChanged = false;
+    if (["cadence", "cadenceType", "everyMinutes", "atTime", "dayOfWeek"].some((key) => body[key] !== undefined)) {
+      schedule.cadence = normalizeCadence(body.cadence || { type: body.cadenceType, everyMinutes: body.everyMinutes, atTime: body.atTime, dayOfWeek: body.dayOfWeek });
+      cadenceChanged = true;
+    }
+    const wasEnabled = schedule.enabled;
+    if (body.enabled !== undefined) schedule.enabled = cleanBoolean(body.enabled, schedule.enabled);
+    if (schedule.enabled && (cadenceChanged || !wasEnabled || !schedule.nextRunAt)) {
+      schedule.nextRunAt = computeNextRun(schedule.cadence, Date.now());
+    }
+    if (!schedule.enabled) schedule.nextRunAt = "";
+    schedule.updatedAt = new Date().toISOString();
+    db.events.unshift(event("schedule.updated", "operator", schedule.id, schedule.title));
+    await writeDb(db);
+    sendJson(res, 200, publicSchedule(schedule));
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/schedules/") && req.method === "DELETE") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    await removeDbItem(res, "schedules", url.pathname.split("/").at(-1), "schedule.deleted");
     return;
   }
 
@@ -3124,6 +3226,7 @@ function visibleState(db) {
     approvals: activeItems(db.approvals).slice(0, 100),
     executions: activeItems(db.executions).slice(0, 100),
     researchRuns: activeItems(db.researchRuns).slice(0, 100),
+    schedules: activeItems(db.schedules).slice(0, 100).map(publicSchedule),
     network: publicNetworkState(db),
     agencyWorkers: publicAgencyWorkers(db),
     productContract: publicProductContract(),
@@ -3154,6 +3257,7 @@ function normalizeDb(db) {
   db.researchRuns = Array.isArray(db.researchRuns) ? db.researchRuns : [];
   db.emailCampaigns = Array.isArray(db.emailCampaigns) ? db.emailCampaigns : [];
   db.emailLog = Array.isArray(db.emailLog) ? db.emailLog : [];
+  db.schedules = normalizeSchedules(db.schedules);
   db.users = normalizeUsers(db.users);
   db.sessions = normalizeSessions(db.sessions);
   db.purchases = normalizePurchases(db.purchases);
@@ -3188,6 +3292,81 @@ function normalizeUserPreferences(preferences = {}) {
     proMode: cleanBoolean(preferences.proMode, false),
     defaultRoutingPreference: cleanChoice(preferences.defaultRoutingPreference, routingPreferences, "auto")
   };
+}
+
+function normalizeSchedules(schedules) {
+  const now = new Date().toISOString();
+  return (Array.isArray(schedules) ? schedules : []).map((schedule) => {
+    const cadence = normalizeCadence(schedule.cadence);
+    const enabled = cleanBoolean(schedule.enabled, true);
+    return {
+      id: cleanText(schedule.id || newId("schedule"), 120),
+      title: cleanText(schedule.title || "Scheduled task", 180),
+      instructions: cleanText(schedule.instructions || "", 4000),
+      channel: cleanChannelId(schedule.channel || "") || "operations",
+      priority: cleanChoice(schedule.priority, ["normal", "high", "low"], "normal"),
+      routingPreference: cleanChoice(schedule.routingPreference, routingPreferences, "auto"),
+      allowNetwork: cleanBoolean(schedule.allowNetwork, true),
+      cadence,
+      enabled,
+      lastRunAt: cleanText(schedule.lastRunAt || "", 80),
+      nextRunAt: cleanText(schedule.nextRunAt || "", 80) || (enabled ? computeNextRun(cadence, Date.now()) : ""),
+      runCount: cleanInteger(schedule.runCount, 0, 1_000_000, 0),
+      lastTaskId: cleanText(schedule.lastTaskId || "", 120),
+      archivedAt: cleanText(schedule.archivedAt || "", 80),
+      createdAt: cleanText(schedule.createdAt || now, 80),
+      updatedAt: cleanText(schedule.updatedAt || schedule.createdAt || now, 80)
+    };
+  });
+}
+
+function publicSchedule(schedule) {
+  return { ...schedule, cadenceLabel: describeCadence(schedule.cadence) };
+}
+
+// Turn a due schedule into a normal queued task, which then flows through the usual bridge pipeline
+// (detect -> approve -> execute). Advances the schedule's next run from NOW (no catch-up bursts).
+function materializeScheduleTask(db, schedule, actor = "scheduler") {
+  const now = new Date().toISOString();
+  const channel = cleanChannel(schedule.channel || "operations", db);
+  const task = {
+    id: newId("task"),
+    title: schedule.title,
+    goal: schedule.title,
+    instructions: schedule.instructions,
+    details: composeTaskDetails(schedule.title, schedule.instructions) || schedule.instructions || schedule.title,
+    status: "queued",
+    priority: schedule.priority,
+    routingPreference: schedule.routingPreference,
+    allowNetwork: schedule.allowNetwork !== false,
+    channel,
+    scheduleId: schedule.id,
+    createdAt: now,
+    updatedAt: now
+  };
+  db.tasks.unshift(task);
+  db.events.unshift(event("schedule.fired", actor, schedule.id, schedule.title));
+  db.events.unshift(event("task.created", actor, task.id, task.title));
+  schedule.lastRunAt = now;
+  schedule.lastTaskId = task.id;
+  schedule.runCount = (schedule.runCount || 0) + 1;
+  schedule.nextRunAt = computeNextRun(schedule.cadence, Date.now());
+  schedule.updatedAt = now;
+  return task;
+}
+
+async function runScheduler() {
+  if (schedulerRunning) return;
+  schedulerRunning = true;
+  try {
+    const db = await readDb();
+    const due = dueSchedules(activeItems(db.schedules), Date.now());
+    if (!due.length) return;
+    for (const schedule of due) materializeScheduleTask(db, schedule, "scheduler");
+    await writeDb(db);
+  } finally {
+    schedulerRunning = false;
+  }
 }
 
 function normalizeExecutionPlan(plan = {}) {
