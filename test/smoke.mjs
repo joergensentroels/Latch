@@ -810,6 +810,38 @@ try {
   const stateAfterDelete = await request("/api/state", { headers: operatorHeaders });
   assert(!stateAfterDelete.schedules.some((item) => item.id === schedule.id), "deleted schedule should be gone");
 
+  // --- Multi-step task guardrail (slice 1: depth, sub-goals, default budget, task_continue) ---
+  const budgetPolicy = await request("/api/autonomy", { method: "PATCH", headers: operatorHeaders, body: { defaultStepBudget: 7 } });
+  assert(budgetPolicy.defaultStepBudget === 7, "operator can set the default step budget");
+  const clampedBudget = await request("/api/autonomy", { method: "PATCH", headers: operatorHeaders, body: { defaultStepBudget: 999 } });
+  assert(clampedBudget.defaultStepBudget === 50, "default step budget is clamped");
+  const restorePolicy = await request("/api/autonomy", { method: "PATCH", headers: operatorHeaders, body: { defaultStepBudget: 5, mode: "full_access" } });
+  assert(restorePolicy.mode === "full_access" && restorePolicy.defaultStepBudget === 5, "mode and budget update together");
+
+  const loopTask = await request("/api/tasks", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { goal: "Compare three competitors and email me", subGoals: ["Research 3 sites", "Draft comparison", "Email the draft"], stepBudget: 12 }
+  });
+  assert(loopTask.stepBudget === 12, "per-task depth overrides the default");
+  assert(Array.isArray(loopTask.subGoals) && loopTask.subGoals.length === 3, "sub-goals are stored in order");
+  assert(loopTask.subGoalIndex === 0 && loopTask.stepCount === 0 && loopTask.loopStatus === "idle", "loop state initializes idle");
+
+  const defaultBudgetTask = await request("/api/tasks", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { goal: "A task with no explicit depth" }
+  });
+  assert(defaultBudgetTask.stepBudget === 5, "a task with no depth inherits the default budget");
+
+  // task_continue is always-human: it must not auto-approve even under full access.
+  const continueApproval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { type: "task_continue", title: "Continue?", details: "Finished sub-goal 1.", riskLevel: "low", taskId: loopTask.id }
+  });
+  assert(continueApproval.status === "pending", "task_continue must always require a human, even under full access");
+
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
