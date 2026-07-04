@@ -452,4 +452,57 @@ assert len(_sent) == 4, "after approving continue, auto-replies resume"
 
 Path(_eb.state_path).unlink()
 
+# --- Multi-step task loop: one sub-goal per step, checkpoint after each, advance on approval ---
+_lb = bridge.Bridge(argparse.Namespace(
+    state_path=str(Path(tempfile.gettempdir()) / "latch-test-loop-state.json"),
+    worker_name="test",
+))
+if Path(_lb.state_path).exists():
+    Path(_lb.state_path).unlink()
+_lb.state["task_loops"] = {}
+_loop_answers = iter(["Did stage one.", "Did stage two."])
+_lb.ask_llm = lambda messages, **k: next(_loop_answers)
+_loop_reports = []
+_lb.report = lambda text, task_id="", channel="": _loop_reports.append(text)
+_loop_approvals = []
+_loop_patches = []
+
+
+def _loop_request(method, path, body=None):
+    if path == "/api/approvals":
+        _loop_approvals.append(body)
+        return {"id": f"appr_{len(_loop_approvals)}"}
+    if path.startswith("/api/tasks/"):
+        _loop_patches.append((path, body))
+        return {"ok": True}
+    return {}
+
+
+_lb.request_json = _loop_request
+_loop_subgoals = ["Research 3 sites", "Email the draft"]
+_loop_task = {"id": "task_loop_1", "goal": "Compare and email", "channel": "operations", "subGoals": _loop_subgoals, "stepBudget": 12}
+
+# kickoff works sub-goal 1, reports it, files ONE continue checkpoint, does not finish
+_lb.start_task_loop(_loop_task, _loop_subgoals, [], {}, "operations", "local", False)
+assert _lb.state["task_loops"]["task_loop_1"]["stepCount"] == 1, _lb.state["task_loops"]
+assert any("Sub-goal 1/2" in t for t in _loop_reports), _loop_reports
+assert len(_loop_approvals) == 1 and _loop_approvals[0]["type"] == "task_continue", _loop_approvals
+assert _loop_approvals[0]["taskId"] == "task_loop_1"
+
+# approving the checkpoint advances to the last sub-goal, which finishes the task (no new checkpoint)
+_lb.advance_task_loop(_loop_task, [], {})
+assert any("Sub-goal 2/2" in t for t in _loop_reports), _loop_reports
+assert any("Task complete" in t for t in _loop_reports), _loop_reports
+assert len(_loop_approvals) == 1, "the final sub-goal must not file another continue checkpoint"
+assert "task_loop_1" not in _lb.state["task_loops"], "a completed loop clears its state"
+assert any(p[0] == "/api/tasks/task_loop_1" and p[1].get("status") == "done" for p in _loop_patches), _loop_patches
+
+# denying a checkpoint stops cleanly (paused, not failed) and clears the loop
+_lb.state["task_loops"]["task_loop_2"] = {"subGoalIndex": 0, "stepCount": 1, "results": ["x"]}
+_lb.stop_task_loop("task_loop_2")
+assert "task_loop_2" not in _lb.state["task_loops"]
+assert any(p[0] == "/api/tasks/task_loop_2" and p[1].get("status") == "paused" for p in _loop_patches), _loop_patches
+
+Path(_lb.state_path).unlink()
+
 print("Worker read-only template tests passed.")
