@@ -1190,6 +1190,13 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
             execution_mode="read_only_status",
         )
 
+    # An explicit "send an email to <address>" is unambiguously an email send, so classify it before
+    # the github_file/repo detectors. Otherwise incidental "github"/"README" mentions in the body
+    # (e.g. an email that links repo docs) would misroute the send into a bogus file-commit approval.
+    email_send = detect_agent_email_send(title, details)
+    if email_send:
+        return email_send
+
     github_file = detect_github_file_request(title, details)
     if github_file:
         return github_file
@@ -1201,10 +1208,6 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     vm_execution = detect_vm_execution(title, details)
     if vm_execution:
         return vm_execution
-
-    email_send = detect_agent_email_send(title, details)
-    if email_send:
-        return email_send
 
     contact = detect_external_contact(title, details)
     if contact:
