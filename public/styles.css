@@ -890,6 +890,30 @@ body.simple-mode .chat-composer {
   color: #aeb9cb;
 }
 
+/* Tuck the new-channel inputs behind the "+": at rest only the button shows; the first "+" click
+   opens the form (adds .open, see app.js) and Escape closes it again. The form is display:none on
+   mobile. */
+.channel-form input {
+  transition: height 0.14s ease, opacity 0.14s ease, padding 0.14s ease, border-width 0.14s ease;
+}
+.channel-form:not(.open) input {
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+.channel-form:not(.open) button {
+  grid-column: 1 / -1;
+}
+
+/* Review's manual-contact form: keep the compose fields at a comfortable width instead of
+   sprawling the full panel width on wide screens. */
+.contact-draft-form {
+  max-width: 760px;
+}
+
 .channel-form button {
   width: 36px;
   height: 36px;
@@ -2155,8 +2179,15 @@ pre.item-body {
   }
 
   #contextMainSection {
-    grid-template-columns: minmax(440px, 1.45fr) minmax(320px, 0.85fr);
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
+  }
+
+  /* Stack Context like Tasks: the add-note form (with its large writing textarea) spans full
+     width on top, then the short upload form (capped so a file picker doesn't sprawl), then the
+     notes list full-width below. */
+  #contextMainSection #contextFileForm {
+    max-width: 760px;
   }
 
   .context-note-form textarea {
