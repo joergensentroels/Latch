@@ -65,6 +65,9 @@ function normalizeServer(raw = {}) {
     allowedTools: Array.isArray(raw.allowedTools)
       ? raw.allowedTools.map((name) => String(name || "").trim()).filter(Boolean)
       : [],
+    // Optional per-tool argument constraints for tools that do not self-sandbox, e.g.
+    // { "read_file": { "path": { "prefix": "/home/you/shared" } } }. Enforced host-side.
+    argConstraints: raw.argConstraints && typeof raw.argConstraints === "object" ? raw.argConstraints : {},
     // Test-only seeded tools for the mock transport.
     mockTools: Array.isArray(raw.mockTools) ? raw.mockTools : []
   };
@@ -88,7 +91,8 @@ export function publicMcpConfig(config) {
       args: server.args,
       envKeys: Object.keys(server.env || {}),
       autoApprove: server.autoApprove,
-      allowedTools: server.allowedTools
+      allowedTools: server.allowedTools,
+      argConstraints: server.argConstraints || {}
     }))
   };
 }
@@ -130,6 +134,18 @@ export async function callTool(server, toolName, args = {}, { timeoutMs = DEFAUL
   if (!isToolAllowed(server, toolName)) {
     throw new Error(`Tool "${toolName}" is not in the allowlist for MCP server "${server.name}".`);
   }
+  // A typed tool is not enough -- its ARGUMENTS must be bounded too. Validate the worker-supplied
+  // args against the tool's own declared inputSchema and any operator argConstraints before running.
+  let tool = null;
+  try {
+    tool = (await listTools(server, { timeoutMs })).find((item) => item.name === toolName);
+  } catch {
+    tool = null; // if discovery fails we still enforce operator constraints below
+  }
+  const check = validateToolArgs(tool?.inputSchema, server.argConstraints?.[toolName], args || {});
+  if (!check.ok) {
+    throw new Error(`Arguments for "${toolName}" were rejected: ${check.error}`);
+  }
   if (server.transport === "mock") {
     return mockCall(server, toolName, args);
   }
@@ -139,6 +155,61 @@ export async function callTool(server, toolName, args = {}, { timeoutMs = DEFAUL
     timeoutMs
   );
   return normalizeToolResult(result[0]);
+}
+
+function matchesJsonType(value, type) {
+  const types = Array.isArray(type) ? type : [type];
+  return types.some((t) => {
+    switch (t) {
+      case "string": return typeof value === "string";
+      case "number": return typeof value === "number";
+      case "integer": return typeof value === "number" && Number.isInteger(value);
+      case "boolean": return typeof value === "boolean";
+      case "array": return Array.isArray(value);
+      case "object": return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+      case "null": return value === null;
+      default: return true; // unknown/absent type constraint -> don't block
+    }
+  });
+}
+
+// Lightweight, dependency-free validation: a useful JSON-Schema subset (required, type, enum,
+// additionalProperties:false) plus operator argument constraints (equals / enum / prefix).
+export function validateToolArgs(schema, constraints, rawArgs) {
+  const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs : {};
+
+  if (schema && typeof schema === "object" && schema.type === "object") {
+    const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const key of required) {
+      if (!(key in args)) return { ok: false, error: `missing required field "${key}"` };
+    }
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(args)) {
+        if (!(key in props)) return { ok: false, error: `unexpected field "${key}"` };
+      }
+    }
+    for (const [key, value] of Object.entries(args)) {
+      const spec = props[key];
+      if (!spec || typeof spec !== "object") continue;
+      if (spec.type && !matchesJsonType(value, spec.type)) return { ok: false, error: `field "${key}" must be ${Array.isArray(spec.type) ? spec.type.join("|") : spec.type}` };
+      if (Array.isArray(spec.enum) && !spec.enum.includes(value)) return { ok: false, error: `field "${key}" is not an allowed value` };
+    }
+  }
+
+  if (constraints && typeof constraints === "object") {
+    for (const [key, rule] of Object.entries(constraints)) {
+      if (!rule || typeof rule !== "object") continue;
+      const value = args[key];
+      if ("equals" in rule && value !== rule.equals) return { ok: false, error: `field "${key}" must equal the configured value` };
+      if (Array.isArray(rule.enum) && !rule.enum.includes(value)) return { ok: false, error: `field "${key}" is not in the allowed set` };
+      if ("prefix" in rule && (typeof value !== "string" || !value.startsWith(rule.prefix))) {
+        return { ok: false, error: `field "${key}" must start with "${rule.prefix}"` };
+      }
+    }
+  }
+
+  return { ok: true };
 }
 
 function mockCall(server, toolName, args) {

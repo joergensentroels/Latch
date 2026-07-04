@@ -13,7 +13,8 @@ import {
   listTools,
   callTool,
   isToolAllowed,
-  isToolAutoApprovable
+  isToolAutoApprovable,
+  validateToolArgs
 } from "../mcp.mjs";
 
 // A minimal MCP server that speaks newline-delimited JSON-RPC 2.0 over stdio.
@@ -60,9 +61,14 @@ try {
       {
         name: "mockecho",
         transport: "mock",
-        allowedTools: ["echo"],
+        allowedTools: ["echo", "write"],
         autoApprove: ["echo"],
-        mockTools: [{ name: "echo", description: "echo" }, { name: "blocked", description: "blocked" }]
+        argConstraints: { write: { path: { prefix: "/allowed/" } } },
+        mockTools: [
+          { name: "echo", description: "echo" },
+          { name: "blocked", description: "blocked" },
+          { name: "write", description: "write", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } }
+        ]
       }
     ]
   }));
@@ -93,6 +99,23 @@ try {
   const mockResult = await callTool(mock, "echo", { a: 1 });
   assert.ok(mockResult.ok && mockResult.text.includes("mock:mockecho:echo"), "mock echoes the call");
   await assert.rejects(() => callTool(mock, "blocked", {}), /allowlist/, "mock enforces the allowlist");
+
+  // Argument validation (typed args): schema subset.
+  const wSchema = { type: "object", properties: { path: { type: "string" }, count: { type: "integer" } }, required: ["path"], additionalProperties: false };
+  assert.equal(validateToolArgs(wSchema, null, { path: "x" }).ok, true, "valid args pass");
+  assert.equal(validateToolArgs(wSchema, null, {}).ok, false, "missing required field fails");
+  assert.equal(validateToolArgs(wSchema, null, { path: 5 }).ok, false, "wrong type fails");
+  assert.equal(validateToolArgs(wSchema, null, { path: "x", extra: 1 }).ok, false, "unexpected field fails (additionalProperties:false)");
+  assert.equal(validateToolArgs({ type: "object", properties: { m: { enum: ["a", "b"] } } }, null, { m: "c" }).ok, false, "enum violation fails");
+  // Operator argument constraints (prefix).
+  assert.equal(validateToolArgs(null, { path: { prefix: "/allowed/" } }, { path: "/allowed/f" }).ok, true, "prefix ok");
+  assert.equal(validateToolArgs(null, { path: { prefix: "/allowed/" } }, { path: "/etc/shadow" }).ok, false, "prefix violation fails");
+
+  // callTool enforces both schema and constraints before running the tool.
+  assert.ok((await callTool(mock, "write", { path: "/allowed/note.txt" })).ok, "write with a permitted path runs");
+  await assert.rejects(() => callTool(mock, "write", {}), /required/, "write without required path is rejected");
+  await assert.rejects(() => callTool(mock, "write", { path: "/etc/shadow" }), /must start with/, "write outside the allowed prefix is rejected");
+  await assert.rejects(() => callTool(mock, "write", { path: "/allowed/x", extra: 1 }), /unexpected field/, "write with an unexpected field is rejected");
 
   // Real stdio transport: handshake + tools/list + tools/call.
   const tools = await listTools(fake, { useCache: false });

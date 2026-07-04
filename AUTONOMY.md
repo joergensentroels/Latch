@@ -40,6 +40,19 @@ session allowlist). Grants:
 - **session** grants clear when the host restarts (and after a TTL, default 12h); **always** grants
   persist until you revoke them. Manage them in **Settings → Autonomy → Allowed operations**.
 
+## Bounding the arguments, not just the operation type
+
+A typed operation is necessary but not sufficient — its *arguments* and *side channels* are bounded too:
+
+- **CI/hook/action paths never auto-approve and are never grantable.** A `CompassProjects` commit
+  auto-approves, but a commit to `.github/workflows/**`, `.githooks/`, `Jenkinsfile`, `action.yml`,
+  etc. always needs a human — a pushed CI workflow runs code with the repo's token/secrets, so a
+  scoped write must not silently become code execution.
+- **MCP tool arguments are validated host-side** against the tool's declared `inputSchema` (required
+  fields, types, enums, no unexpected fields) before the call runs. Operators can add per-tool
+  `argConstraints` in `data/mcp.json` (e.g. a `path` `prefix`) to bound arguments for tools that
+  don't self-sandbox. A typed tool with unbounded args is not considered safe.
+
 ## The net effect
 
 The agent can only ever get auto-execution for a *fixed vocabulary of operations the host can reason
