@@ -670,6 +670,27 @@ try {
   assert(autoGithubFileApproval.status === "approved", "full access should auto-approve own repo file updates");
   assert(autoGithubFileApproval.decisionMode === "auto", "own repo file update should record automatic review");
   assert(autoGithubFileApproval.githubFileUrl.includes("/CompassProjects/blob/main/README.md"), "auto-approved own repo file update should commit through connector");
+  // Hardening #1: a CI/hook path (GitHub Actions workflow = code execution) must NOT auto-approve,
+  // even to CompassProjects under full access.
+  const workflowFileApproval = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "github_file",
+      title: "Add a workflow",
+      details: "Commit a GitHub Actions workflow.",
+      githubRepoName: "CompassProjects",
+      githubFilePath: ".github/workflows/evil.yml",
+      githubFileContent: "on: push\njobs: {}\n",
+      githubCommitMessage: "add workflow"
+    }
+  });
+  assert(workflowFileApproval.status === "pending", "a .github/workflows commit must never auto-approve (CI code execution)");
+  const stateForGrantKey = await request("/api/state", { headers: operatorHeaders });
+  const workflowInState = stateForGrantKey.approvals.find((a) => a.id === workflowFileApproval.id);
+  assert(workflowInState && workflowInState.grantKey === null, "a CI/hook path commit must not be grantable");
+  const readmeInState = stateForGrantKey.approvals.find((a) => a.id === autoGithubFileApproval.id);
+  assert(readmeInState && readmeInState.grantKey === "github_file:CompassProjects", "a normal CompassProjects commit is grantable");
   assert(mockGithubFiles.some((item) => item.message === "Update README automatically"), "auto-approved own repo file update should call GitHub");
 
   const operatorShellApproval = await request("/api/approvals", {
