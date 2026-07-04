@@ -67,6 +67,9 @@ const taskTitleLabel = document.querySelector("#taskTitleLabel");
 const taskTitle = document.querySelector("#taskTitle");
 const taskDetails = document.querySelector("#taskDetails");
 const taskInstructionDetails = document.querySelector("#taskInstructionDetails");
+const taskAutonomyDetails = document.querySelector("#taskAutonomyDetails");
+const taskSubGoals = document.querySelector("#taskSubGoals");
+const taskDepth = document.querySelector("#taskDepth");
 const taskPriority = document.querySelector("#taskPriority");
 const taskRouting = document.querySelector("#taskRouting");
 const contactDraftForm = document.querySelector("#contactDraftForm");
@@ -112,6 +115,7 @@ const autonomyForm = document.querySelector("#autonomyForm");
 const autonomyMode = document.querySelector("#autonomyMode");
 const autonomySummary = document.querySelector("#autonomySummary");
 const autonomyStatus = document.querySelector("#autonomyStatus");
+const autonomyStepBudget = document.querySelector("#autonomyStepBudget");
 const agentEmailForm = document.querySelector("#agentEmailForm");
 const emailReplyCap = document.querySelector("#emailReplyCap");
 const emailReplyCapSummary = document.querySelector("#emailReplyCapSummary");
@@ -357,6 +361,10 @@ taskForm.addEventListener("submit", async (event) => {
 
   await withSubmitLock(taskForm, async () => {
     const routingPreference = isProMode() ? (taskRouting.value || "auto") : "auto";
+    const subGoals = isProMode()
+      ? (taskSubGoals?.value || "").split("\n").map((line) => line.trim()).filter(Boolean)
+      : [];
+    const depthRaw = isProMode() ? (taskDepth?.value || "").trim() : "";
     const task = await api(state.authMode === "user" ? "/api/me/tasks" : "/api/tasks", {
       method: "POST",
       body: JSON.stringify({
@@ -366,12 +374,17 @@ taskForm.addEventListener("submit", async (event) => {
         details: composeTaskDetails(goal, instructions),
         priority: taskPriority.value,
         routingPreference,
-        allowNetwork: routingPreference !== "local"
+        allowNetwork: routingPreference !== "local",
+        subGoals,
+        ...(depthRaw ? { stepBudget: Number(depthRaw) } : {})
       })
     });
     taskTitle.value = "";
     taskDetails.value = "";
     taskInstructionDetails.open = false;
+    if (taskSubGoals) taskSubGoals.value = "";
+    if (taskDepth) taskDepth.value = "";
+    if (taskAutonomyDetails) taskAutonomyDetails.open = false;
     taskPriority.value = "normal";
     taskRouting.value = "auto";
     if (task.channel && isProMode()) {
@@ -533,6 +546,7 @@ networkInviteForm?.addEventListener("submit", createNetworkInvite);
 purchaseForm?.addEventListener("submit", createPurchaseRequest);
 autonomyForm?.addEventListener("submit", (event) => event.preventDefault());
 autonomyMode?.addEventListener("change", updateAutonomyPolicy);
+autonomyStepBudget?.addEventListener("change", updateAutonomyStepBudget);
 agentEmailForm?.addEventListener("submit", (event) => event.preventDefault());
 emailReplyCap?.addEventListener("change", updateAgentEmailPolicy);
 appLockButton.addEventListener("click", () => {
@@ -2536,7 +2550,32 @@ function renderAutonomyPolicy() {
   const policy = state.data?.autonomy || state.about?.autonomy || {};
   const mode = policy.mode || "default_permissions";
   if (!autonomyForm.contains(document.activeElement)) autonomyMode.value = mode;
+  if (autonomyStepBudget && document.activeElement !== autonomyStepBudget) {
+    autonomyStepBudget.value = policy.defaultStepBudget ?? 5;
+  }
   renderAutonomySummary(autonomyMode.value || mode, policy.updatedAt);
+}
+
+async function updateAutonomyStepBudget() {
+  if (!autonomyStepBudget) return;
+  const value = Math.max(1, Math.min(50, Number(autonomyStepBudget.value) || 5));
+  autonomyStepBudget.value = value;
+  setFormStatus(autonomyStatus, "Saving...", "");
+  autonomyStepBudget.disabled = true;
+  try {
+    const policy = await api("/api/autonomy", {
+      method: "PATCH",
+      body: JSON.stringify({ defaultStepBudget: value })
+    });
+    setFormStatus(autonomyStatus, "Default step budget saved.", "success");
+    state.data = { ...(state.data || {}), autonomy: policy };
+    await refresh();
+  } catch (error) {
+    setFormStatus(autonomyStatus, `Could not save: ${error.message}`, "error");
+    renderAutonomyPolicy();
+  } finally {
+    autonomyStepBudget.disabled = false;
+  }
 }
 
 function renderAutonomySummary(mode, updatedAt = "") {
