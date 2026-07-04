@@ -26,13 +26,14 @@ Host on one computer (your daily desktop/laptop), worker on a **second Linux box
 One capable machine running a hypervisor (e.g. Proxmox), with a **host VM** and a **worker VM**. (Or — how the maintainer runs it — your daily machine as the host plus a single worker VM.)
 - Best if you have one powerful box.
 - Isolation is at the VM level: put the worker VM on its own network segment so it can't reach your LAN/secrets, and give it enough resources for OpenClaw (~6 vCPU / 12 GB RAM if it runs the browser and a local model).
+- Both VMs are usually **Ubuntu**. In that case the **host** follows the Linux commands throughout this guide — the `.ps1` scripts are Windows-only conveniences, and everything they do has a plain `node`/`tailscale`/`systemd` equivalent noted below.
 
 > Whichever you pick, the worker must **not** be able to read the host's `data/` folder or your other credentials. Physical separation (A) gives that for free; with VMs (B) you enforce it with network isolation.
 
 ## Prerequisites
 
 - A **Tailscale** account (free tier is fine). Both halves join the same tailnet.
-- **Trusted host:** Node.js 22+ (a bundled runtime ships for Windows).
+- **Trusted host:** Node.js 22+ (a bundled runtime ships for Windows; on Ubuntu install it via [NodeSource](https://github.com/nodesource/distributions) or `nvm`).
 - **Worker (Ubuntu/Debian recommended):** Docker + Docker Compose, Python 3.11+, and Tailscale.
 
 ---
@@ -59,9 +60,21 @@ At this point you have **Compass Simple** — chat, memory, tasks, approvals. Re
 
 Provision the worker per your topology (Option A: a Linux machine; Option B: a Linux VM), then:
 
-1. Install **Tailscale** on the worker and sign in to the **same tailnet**.
-2. Install **Docker + Compose** and run **OpenClaw** (use a prebuilt `ghcr.io/openclaw/openclaw` image — see [OPENCLAW-WORKER.md](./OPENCLAW-WORKER.md)). Its gateway listens on `:18789`; keep it bound to localhost/Tailscale only.
-3. Copy the repo's `worker/` folder to the worker and install the **bridge**:
+1. Install **Tailscale** on the worker and sign in to the **same tailnet**. Install **Docker + Compose** and **Python 3.11+**.
+2. **Install OpenClaw itself.** OpenClaw is a separate upstream project, not bundled here — follow its own quickstart at <https://github.com/openclaw/openclaw> to bring up its gateway with Docker Compose (it creates a `docker-compose.yml` + `.env`, typically under `~/apps/openclaw`). What Latch needs from it:
+   - the gateway reachable at `http://127.0.0.1:18789` (health endpoint `/healthz`);
+   - bound to **localhost / your Tailscale IP only** — never `0.0.0.0` or the public internet.
+
+   Latch ships a helper that locks OpenClaw's published ports to your Tailscale IP and keeps the containers restarting. Copy this repo's `worker/` folder onto the worker, then from it:
+   ```bash
+   OPENCLAW_PROJECT_DIR=~/apps/openclaw \
+   OPENCLAW_GATEWAY_HOST=<worker-tailscale-ip> \
+   python3 patch-openclaw-compose.py
+   docker compose -f ~/apps/openclaw/docker-compose.yml up -d
+   curl -fsS http://127.0.0.1:18789/healthz   # confirm the gateway is healthy
+   ```
+   (If your OpenClaw version serves `/health` instead of `/healthz`, use whichever its gateway answers — and match it in `OPENCLAW_HEALTH_URL` below.)
+3. Install the **bridge** (from that same `worker/` folder):
    ```bash
    cd worker
    sudo bash install-latch-agent-bridge.sh
@@ -72,7 +85,7 @@ Provision the worker per your topology (Option A: a Linux machine; Option B: a L
    LATCH_BASE_URL=http://<host-tailscale-ip>:8787
    LATCH_AGENT_KEY=agent_...          # the agent key from Step 1 — the ONLY secret on the worker
    LATCH_WORKER_NAME=openclaw-worker
-   OPENCLAW_HEALTH_URL=http://127.0.0.1:18789/health
+   OPENCLAW_HEALTH_URL=http://127.0.0.1:18789/healthz
    ```
    Then: `sudo systemctl enable --now latch-agent-bridge`
 4. **Optional — real shell/browser actions.** The bridge only plans and reports; approved shell/browser plans run in a separate root-owned service (installs Playwright Firefox):
@@ -106,6 +119,6 @@ Full worker reference, deploy helpers, and start/stop commands: [OPENCLAW-WORKER
 - **LLM** — local (Ollama, OpenAI-compatible endpoint) or a hosted provider: [LLM-PROVIDER.md](./LLM-PROVIDER.md) / `Configure-External-LLM.ps1`.
 - **Agent email** — the companion's own mailbox: [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md#agent-email-agent-owned-mailbox) / [MAILBOX-BROWSER.md](./MAILBOX-BROWSER.md).
 - **Notifications** — push to your phone: [NOTIFICATIONS.md](./NOTIFICATIONS.md).
-- **Auto-start on boot** — `Install-Latch-StartupTask.ps1`.
+- **Auto-start on boot** — Windows: `Install-Latch-StartupTask.ps1`. Linux host: run `node server.js` under a small `systemd` unit (with `Environment=HOST=<tailscale-ip>` `Environment=PORT=8787`) so it starts on boot, the same way the worker's bridge/executor do.
 - **If something's wrong** — `Invoke-Latch-Doctor.ps1` / `Status-Latch.ps1`, and `sudo journalctl -u latch-agent-bridge -f` on the worker.
 - **Emergency** — `Emergency-Latch-Lockdown.ps1` rotates keys and cuts the worker off.
