@@ -1053,6 +1053,9 @@ async function handleApi(req, res, url) {
     const githubConfigForApproval = approvalType === "github_file" && !suppliedGithubRepoName
       ? await loadGithubConfig()
       : null;
+    const mcpAutoApprovable = approvalType === "mcp_tool_call"
+      ? await computeMcpAutoApprovable(cleanText(body.mcpServer || "", 120), cleanText(body.mcpTool || "", 200))
+      : false;
     const existingApproval = findExistingSourceApproval(db, {
       taskId,
       messageId,
@@ -1101,6 +1104,7 @@ async function handleApi(req, res, url) {
       mcpServer: approvalType === "mcp_tool_call" ? cleanText(body.mcpServer || "", 120) : "",
       mcpTool: approvalType === "mcp_tool_call" ? cleanText(body.mcpTool || "", 200) : "",
       mcpArgs: approvalType === "mcp_tool_call" ? cleanJsonObject(body.mcpArgs, 8000) : {},
+      mcpAutoApprovable,
       mcpResult: "",
       mcpIsError: false,
       mcpRanAt: "",
@@ -1411,7 +1415,8 @@ async function handleApi(req, res, url) {
       profile: publicAgentProfile(db.meta.agentProfile),
       contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50)),
       networkContextItems: await networkContextItems(activeItems(db.contextItems).filter((item) => item.shareWithNetwork).slice(0, 50)),
-      executions: activeItems(db.executions).slice(0, 20)
+      executions: activeItems(db.executions).slice(0, 20),
+      mcp: await agentMcpCatalog()
     });
     return;
   }
@@ -2345,6 +2350,9 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
         approval.responseNote = approval.responseNote || `MCP tool ${approval.mcpServer}/${approval.mcpTool} ran.`;
         db.events.unshift(event("mcp.tool.ran", actor, approval.id, `${approval.mcpServer}/${approval.mcpTool}`));
       }
+      // Return the result into the loop: surface it as an Inbox message tied to the source
+      // task/message, and close the originating task so it doesn't linger in "waiting".
+      surfaceMcpResult(db, approval, result);
     } catch (error) {
       // Transport/config failure (not a tool-level error): revert to pending so the operator can
       // fix config and retry, mirroring the GitHub connector's behaviour.
@@ -3602,6 +3610,17 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false) {
         decisionMode: "auto",
         reason: "Full access auto-approved a low-risk non-sensitive request.",
         note: "Auto-approved by full access policy."
+      };
+    }
+    // MCP tool calls auto-approve only when the operator has explicitly listed the tool in that
+    // server's `autoApprove` allowlist (mcpAutoApprovable). Everything else still waits for a human,
+    // so a newly-reachable tool never runs unattended without an explicit opt-in.
+    if (approval.type === "mcp_tool_call" && approval.mcpAutoApprovable && !approval.sensitive && proEligible) {
+      return {
+        status: "approved",
+        decisionMode: "auto",
+        reason: "Full access auto-approved a pre-authorised MCP tool call.",
+        note: "Auto-approved by full access policy: operator-listed MCP tool."
       };
     }
   }
@@ -5402,6 +5421,70 @@ function cleanTextArray(value, maxItems, maxLength) {
     .map((item) => cleanText(item, maxLength))
     .filter(Boolean)
     .slice(0, maxItems);
+}
+
+// Agent-facing MCP tool catalog: server + tool names/descriptions/schemas, NO credentials. The
+// bridge uses this to plan mcp_tool_call requests. Best-effort per server (a failing server yields
+// no tools rather than breaking the poll); mcp.mjs caches tool discovery to keep polls cheap.
+async function agentMcpCatalog() {
+  const config = await loadMcpConfig(mcpConfigPath);
+  if (!config.enabled) return { enabled: false, servers: [] };
+  const servers = await Promise.all((config.servers || []).map(async (server) => {
+    let tools = [];
+    try {
+      tools = await listTools(server, { timeoutMs: 8000 });
+    } catch {
+      tools = [];
+    }
+    return {
+      name: server.name,
+      description: server.description,
+      allowedTools: server.allowedTools,
+      autoApprove: server.autoApprove,
+      tools: tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }))
+    };
+  }));
+  return { enabled: true, servers };
+}
+
+// Return an MCP tool result into the loop: post it as an Inbox message tied to the source
+// task/message, and close the originating task so it does not linger in "waiting".
+function surfaceMcpResult(db, approval, result) {
+  const sourceTask = approval.taskId ? db.tasks.find((task) => task.id === approval.taskId) : null;
+  const sourceMessage = approval.messageId ? db.messages.find((message) => message.id === approval.messageId) : null;
+  const channel = cleanChannel(sourceTask?.channel || sourceMessage?.channel || "operations", db);
+  const label = `${approval.mcpServer}/${approval.mcpTool}`;
+  const header = result.isError ? `MCP tool ${label} returned an error:` : `Result from ${label}:`;
+  db.messages.unshift({
+    id: newId("msg"),
+    userId: sourceTask?.userId || sourceMessage?.userId || approval.userId || "",
+    direction: "agent_to_operator",
+    author: "openclaw",
+    text: cleanText(`${header}\n\n${result.text || "(no output)"}`, 6000),
+    taskId: approval.taskId || "",
+    messageId: approval.messageId || "",
+    channel,
+    createdAt: new Date().toISOString()
+  });
+  if (sourceTask && ["queued", "running", "waiting"].includes(sourceTask.status)) {
+    applyTaskPatch(db, sourceTask, {
+      status: result.isError ? "failed" : "done",
+      note: result.isError ? `MCP tool ${label} failed.` : `MCP tool ${label} completed; result posted to ${channel}.`
+    });
+  }
+}
+
+// Is this (server, tool) pair pre-authorised by the operator for autonomy auto-approval?
+async function computeMcpAutoApprovable(serverName, toolName) {
+  try {
+    const config = await loadMcpConfig(mcpConfigPath);
+    if (!config.enabled) return false;
+    const server = findServer(config, serverName);
+    if (!server) return false;
+    return isToolAllowed(server, toolName) && (server.autoApprove || []).includes(String(toolName || "").trim());
+  } catch {
+    return false;
+  }
 }
 
 // Accept a plain JSON object (e.g. MCP tool arguments) and reject anything that isn't a serializable

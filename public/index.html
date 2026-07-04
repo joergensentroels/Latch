@@ -469,6 +469,18 @@ The companion should help the user think clearly and act responsibly; it should 
           <div class="ops-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>
+                <p class="eyebrow">MCP</p>
+                <h2 class="section-title">Tool servers</h2>
+              </div>
+              <button id="mcpRefreshButton" class="secondary-button compact-button" type="button">Refresh</button>
+            </div>
+            <p class="help-note">Configured in <code>data/mcp.json</code> on the host. Each server holds its own credentials; the worker never sees them. Tool calls are gated by approval.</p>
+            <div id="mcpServerList" class="list compact-list"></div>
+            <p id="mcpStatus" class="form-status" aria-live="polite"></p>
+          </div>
+          <div class="ops-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
                 <p class="eyebrow">Latch Network</p>
                 <h2 class="section-title">Private Compute</h2>
               </div>
