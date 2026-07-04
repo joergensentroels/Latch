@@ -1,5 +1,7 @@
 # Compass, powered by Latch
 
+> **New here? Start with [GETTING-STARTED.md](./GETTING-STARTED.md)** — zero to first task, for both a two-machine and a two-VM setup.
+
 Compass is the user-facing companion app for sending instructions, receiving status updates, managing context, and reviewing approvals. Latch is the private infrastructure layer underneath it: routing, approvals, keys, bridges, nodes, and worker trust boundaries.
 
 The mission is to help people bring good ideas to life when time, energy, or cognitive load would otherwise keep those ideas unrealized. Compass and Latch are intended to be community-based and not-for-profit in spirit: a shared service for enabling people, not extracting attention, dependency, or profit. Read [COMMUNITY-MISSION.md](./COMMUNITY-MISSION.md) and [COMPANION-ANCHOR.md](./COMPANION-ANCHOR.md) for the values every companion starts from.
