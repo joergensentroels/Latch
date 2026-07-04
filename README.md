@@ -563,3 +563,12 @@ sudo bash install-latch-agent-executor.sh
 sudo nano /etc/latch-agent-executor.env
 sudo systemctl enable --now latch-agent-executor
 ```
+
+## License
+
+Copyright (C) 2026 Troels Anker Jørgensen.
+
+Compass / Latch is free software licensed under the **GNU Affero General Public
+License v3.0 or later** — see [LICENSE](./LICENSE). AGPL is a network-copyleft
+license: if you run a modified version and let others interact with it over a
+network, you must offer them the corresponding source under the same terms.
