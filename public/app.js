@@ -174,6 +174,13 @@ const networkGrid = document.querySelector("#networkGrid");
 const mcpServerList = document.querySelector("#mcpServerList");
 const mcpRefreshButton = document.querySelector("#mcpRefreshButton");
 const mcpStatus = document.querySelector("#mcpStatus");
+const scheduleForm = document.querySelector("#scheduleForm");
+const scheduleCadenceType = document.querySelector("#scheduleCadenceType");
+const scheduleEveryMinutes = document.querySelector("#scheduleEveryMinutes");
+const scheduleAtTime = document.querySelector("#scheduleAtTime");
+const scheduleDayOfWeek = document.querySelector("#scheduleDayOfWeek");
+const scheduleList = document.querySelector("#scheduleList");
+const scheduleStatus = document.querySelector("#scheduleStatus");
 const capabilityGrid = document.querySelector("#capabilityGrid");
 const userTierList = document.querySelector("#userTierList");
 const securityChecklist = document.querySelector("#securityChecklist");
@@ -822,6 +829,7 @@ function render() {
     renderAgentEmailPolicy();
   renderNetwork();
   renderMcpServers();
+  renderSchedules();
   renderCredits();
   renderSimpleSettings();
   renderCapabilities();
@@ -2680,6 +2688,96 @@ async function loadMcpServers() {
 }
 
 mcpRefreshButton?.addEventListener("click", loadMcpServers);
+
+function updateScheduleCadenceVisibility() {
+  if (!scheduleCadenceType) return;
+  const type = scheduleCadenceType.value;
+  if (scheduleEveryMinutes) scheduleEveryMinutes.hidden = type !== "interval";
+  if (scheduleAtTime) scheduleAtTime.hidden = type === "interval";
+  if (scheduleDayOfWeek) scheduleDayOfWeek.hidden = type !== "weekly";
+}
+scheduleCadenceType?.addEventListener("change", updateScheduleCadenceVisibility);
+
+function renderSchedules() {
+  if (!scheduleList) return;
+  const schedules = state.data?.schedules || [];
+  if (!schedules.length) {
+    scheduleList.innerHTML = `<p class="empty-state">No schedules yet. Add one above.</p>`;
+    return;
+  }
+  scheduleList.innerHTML = schedules.map((schedule) => {
+    const next = schedule.enabled && schedule.nextRunAt ? `Next ${formatTime(schedule.nextRunAt)}` : "Paused";
+    const runs = schedule.runCount ? ` &middot; ${schedule.runCount} run${schedule.runCount === 1 ? "" : "s"}` : "";
+    return `
+      <article class="item">
+        <div class="item-header">
+          <h2 class="item-title">${escapeHtml(schedule.title)}</h2>
+          <span class="badge ${schedule.enabled ? "approved" : ""}">${schedule.enabled ? "on" : "paused"}</span>
+        </div>
+        <div class="meta-row">
+          <span class="type-pill">${escapeHtml(schedule.cadenceLabel || "")}</span>
+          <span class="item-meta">${escapeHtml(next)}${runs}</span>
+        </div>
+        ${schedule.instructions ? `<p class="item-body">${escapeHtml(schedule.instructions)}</p>` : ""}
+        <div class="approval-actions">
+          <button class="secondary-button" data-schedule-run="${escapeHtml(schedule.id)}" type="button">Run now</button>
+          <button class="secondary-button" data-schedule-toggle="${escapeHtml(schedule.id)}" data-enabled="${schedule.enabled ? "1" : "0"}" type="button">${schedule.enabled ? "Pause" : "Resume"}</button>
+          <button class="danger-button" data-schedule-delete="${escapeHtml(schedule.id)}" type="button">Delete</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+scheduleForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const title = document.querySelector("#scheduleTitle")?.value.trim();
+  if (!title) return;
+  const type = scheduleCadenceType?.value || "daily";
+  const body = {
+    title,
+    instructions: document.querySelector("#scheduleInstructions")?.value.trim() || "",
+    cadenceType: type,
+    everyMinutes: Number(scheduleEveryMinutes?.value) || 60,
+    atTime: scheduleAtTime?.value || "09:00",
+    dayOfWeek: Number(scheduleDayOfWeek?.value ?? 1)
+  };
+  setFormStatus(scheduleStatus, "Adding schedule...", "");
+  try {
+    await api("/api/schedules", { method: "POST", body: JSON.stringify(body) });
+    scheduleForm.reset();
+    updateScheduleCadenceVisibility();
+    setFormStatus(scheduleStatus, "", "");
+    await refresh();
+  } catch (error) {
+    setFormStatus(scheduleStatus, `Could not add schedule: ${error.message}`, "error");
+  }
+});
+
+scheduleList?.addEventListener("click", async (event) => {
+  const runId = event.target.closest("[data-schedule-run]")?.dataset.scheduleRun;
+  const toggleBtn = event.target.closest("[data-schedule-toggle]");
+  const deleteId = event.target.closest("[data-schedule-delete]")?.dataset.scheduleDelete;
+  try {
+    if (runId) {
+      setFormStatus(scheduleStatus, "Running now...", "");
+      await api(`/api/schedules/${runId}/run`, { method: "POST" });
+      setFormStatus(scheduleStatus, "Queued a task.", "success");
+    } else if (toggleBtn) {
+      const id = toggleBtn.dataset.scheduleToggle;
+      const enable = toggleBtn.dataset.enabled !== "1";
+      await api(`/api/schedules/${id}`, { method: "PATCH", body: JSON.stringify({ enabled: enable }) });
+    } else if (deleteId) {
+      if (!confirm("Delete this schedule?")) return;
+      await api(`/api/schedules/${deleteId}`, { method: "DELETE" });
+    } else {
+      return;
+    }
+    await refresh();
+  } catch (error) {
+    setFormStatus(scheduleStatus, `Action failed: ${error.message}`, "error");
+  }
+});
 
 function renderNetwork() {
   if (!networkGrid || !lists.network) return;

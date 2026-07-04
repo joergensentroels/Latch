@@ -1378,6 +1378,25 @@ body.simple-mode .chat-composer {
   flex-basis: 100%;
 }
 
+.schedule-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.schedule-cadence-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.schedule-cadence-row select,
+.schedule-cadence-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .status-card p {
   margin: 0;
   color: var(--muted);

@@ -777,6 +777,39 @@ try {
   assert(decidedBlocked.status === "pending", "an MCP tool outside the allowlist must not run");
   assert(/not permitted|allowlist/i.test(decidedBlocked.responseNote || ""), "blocked MCP tool should explain why");
 
+  // --- Scheduling: create, run-now, edit, delete ---
+  const schedule = await request("/api/schedules", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { title: "Morning digest", instructions: "Summarize overnight activity.", cadenceType: "daily", atTime: "07:30", channel: "operations" }
+  });
+  assert(schedule.id && schedule.enabled, "schedule should be created enabled");
+  assert(schedule.cadenceLabel === "Daily at 07:30", "schedule should expose a cadence label");
+  assert(schedule.nextRunAt, "an enabled schedule should have a next run time");
+  const stateWithSchedule = await request("/api/state", { headers: operatorHeaders });
+  assert(stateWithSchedule.schedules.some((item) => item.id === schedule.id), "schedule should appear in state");
+
+  // run-now materializes a queued task through the normal pipeline
+  const ran = await request(`/api/schedules/${schedule.id}/run`, { method: "POST", headers: operatorHeaders });
+  assert(ran.task && ran.task.status === "queued", "run-now should create a queued task");
+  assert(ran.task.scheduleId === schedule.id, "materialized task should link back to the schedule");
+  assert(ran.schedule.runCount === 1 && ran.schedule.lastTaskId === ran.task.id, "run-now should advance the schedule");
+  const stateAfterRun = await request("/api/state", { headers: operatorHeaders });
+  assert(stateAfterRun.tasks.some((item) => item.id === ran.task.id), "materialized task should appear in state");
+
+  // disable clears the next run; re-enable recomputes it
+  const disabled = await request(`/api/schedules/${schedule.id}`, { method: "PATCH", headers: operatorHeaders, body: { enabled: false } });
+  assert(disabled.enabled === false && !disabled.nextRunAt, "disabling a schedule clears its next run");
+  const reenabled = await request(`/api/schedules/${schedule.id}`, { method: "PATCH", headers: operatorHeaders, body: { enabled: true } });
+  assert(reenabled.enabled === true && reenabled.nextRunAt, "re-enabling recomputes the next run");
+
+  // the agent key cannot manage schedules
+  await expectStatus("/api/schedules", { method: "POST", headers: agentHeaders }, 403);
+
+  await request(`/api/schedules/${schedule.id}`, { method: "DELETE", headers: operatorHeaders });
+  const stateAfterDelete = await request("/api/state", { headers: operatorHeaders });
+  assert(!stateAfterDelete.schedules.some((item) => item.id === schedule.id), "deleted schedule should be gone");
+
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
