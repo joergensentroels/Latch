@@ -49,7 +49,7 @@ const defaultMessageChannels = [
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
-const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "email_thread_continue", "mcp_tool_call", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "email_thread_continue", "mcp_tool_call", "task_continue", "other"];
 const executionModes = ["none", "read_only_status", "shell", "browser"];
 const riskLevels = ["low", "medium", "high"];
 const contactSendModes = ["manual", "approved_connector"];
@@ -591,9 +591,13 @@ async function handleApi(req, res, url) {
 
     const body = await readJsonBody(req);
     const db = await readDb();
+    const currentPolicy = publicAutonomyPolicy(db.meta.autonomyPolicy);
     db.meta.autonomyPolicy = {
-      ...publicAutonomyPolicy(db.meta.autonomyPolicy),
-      mode: cleanChoice(body.mode, autonomyModes, db.meta.autonomyPolicy?.mode || "default_permissions"),
+      ...currentPolicy,
+      mode: cleanChoice(body.mode, autonomyModes, currentPolicy.mode),
+      defaultStepBudget: body.defaultStepBudget === undefined
+        ? currentPolicy.defaultStepBudget
+        : cleanInteger(body.defaultStepBudget, 1, 50, currentPolicy.defaultStepBudget),
       updatedAt: new Date().toISOString()
     };
     db.events.unshift(event("autonomy.updated", "operator", "autonomyPolicy", autonomyModeLabel(db.meta.autonomyPolicy.mode)));
@@ -992,6 +996,15 @@ async function handleApi(req, res, url) {
       priority: cleanChoice(body.priority, ["normal", "high", "low"], "normal"),
       routingPreference: cleanChoice(body.routingPreference, routingPreferences, "auto"),
       allowNetwork: cleanBoolean(body.allowNetwork, body.routingPreference === "auto" || body.routingPreference === "network"),
+      // Multi-step loop guardrail (slice 1: recorded + enforced-as-boundary; the loop itself lands
+      // in a later slice). stepBudget = how many actions before it must summarize and ask to
+      // continue (per-task depth, defaulting to the operator's global default). subGoals = ordered
+      // milestones; reaching one is a natural stop-and-report checkpoint.
+      stepBudget: cleanInteger(body.stepBudget ?? body.depth, 1, 50, publicAutonomyPolicy(db.meta.autonomyPolicy).defaultStepBudget),
+      subGoals: cleanTextArray(body.subGoals, 20, 500),
+      subGoalIndex: 0,
+      stepCount: 0,
+      loopStatus: "idle",
       createdAt: now,
       updatedAt: now
     };
@@ -3341,6 +3354,11 @@ function materializeScheduleTask(db, schedule, actor = "scheduler") {
     allowNetwork: schedule.allowNetwork !== false,
     channel,
     scheduleId: schedule.id,
+    stepBudget: publicAutonomyPolicy(db.meta.autonomyPolicy).defaultStepBudget,
+    subGoals: [],
+    subGoalIndex: 0,
+    stepCount: 0,
+    loopStatus: "idle",
     createdAt: now,
     updatedAt: now
   };
@@ -3657,6 +3675,9 @@ function publicAgentProfile(profile = {}) {
 function publicAutonomyPolicy(policy = {}) {
   return {
     mode: cleanChoice(policy.mode, autonomyModes, "default_permissions"),
+    // Default step budget ("loops") for multi-step tasks: how many actions a task may take before it
+    // must summarize state and ask to continue. A per-task depth overrides this at queue time.
+    defaultStepBudget: cleanInteger(policy.defaultStepBudget, 1, 50, 5),
     updatedAt: cleanText(policy.updatedAt || "", 80)
   };
 }
@@ -3823,8 +3844,8 @@ function humanBoundaryReason(approval) {
     return "Human boundary: browser/research plans using HTTP URLs, embedded URL credentials, or login/credential steps require operator approval.";
   }
   if (approval.type === "github_file" && isOwnRepoGithubFileApproval(approval)) return false;
-  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "email_campaign"].includes(approval.type)) {
-    return "Human boundary: credentials, purchases, external contact, GitHub repo creation, account setup, verification, or context answers require the operator.";
+  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "email_campaign", "email_thread_continue", "task_continue"].includes(approval.type)) {
+    return "Human boundary: credentials, purchases, external contact, GitHub repo creation, account setup, verification, continue-checkpoints, or context answers require the operator.";
   }
   return "";
 }

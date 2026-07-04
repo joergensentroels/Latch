@@ -200,6 +200,14 @@
               <label for="taskDetails">Instructions</label>
               <textarea id="taskDetails" rows="3" placeholder="Tools to use, files to avoid, style preferences, or how to verify it"></textarea>
             </details>
+            <details id="taskAutonomyDetails" class="optional-instructions pro-only">
+              <summary>Autonomy &amp; sub-goals</summary>
+              <label for="taskSubGoals">Sub-goals — one per line. It stops and reports after each.</label>
+              <textarea id="taskSubGoals" rows="3" placeholder="Research 3 competitors&#10;Draft a comparison&#10;Email me the draft"></textarea>
+              <label for="taskDepth">Max steps before it checks in</label>
+              <input id="taskDepth" type="number" min="1" max="50" step="1" inputmode="numeric" placeholder="default">
+              <p class="help-note">Leave depth blank to use the default in Settings &rarr; Review Policy. It always summarizes and asks before going past the limit or a sub-goal.</p>
+            </details>
             <div class="form-row">
               <select id="taskRouting" class="pro-only-inline" title="Compute routing" aria-label="Compute routing">
                 <option value="auto">Auto</option>
@@ -447,6 +455,13 @@ The companion should help the user think clearly and act responsibly; it should 
                 </select>
               </label>
               <div id="autonomySummary" class="approval-summary"></div>
+            </div>
+            <div class="form-row autonomy-row">
+              <label for="autonomyStepBudget">
+                Default steps before a task checks in
+                <input id="autonomyStepBudget" type="number" min="1" max="50" step="1" inputmode="numeric" />
+              </label>
+              <div class="approval-summary">A multi-step task summarizes its state and asks before going past this many actions (or a sub-goal). Per-task depth can override it.</div>
             </div>
             <p id="autonomyStatus" class="form-status" aria-live="polite"></p>
           </form>
