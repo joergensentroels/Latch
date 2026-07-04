@@ -290,7 +290,7 @@ def run_browser_plan(plan: dict, browser_dir: Path, default_download_dir: Path) 
                     text = page.locator("body").inner_text(timeout=action["timeoutMs"] or 10000)
                     notes.append(f"Title: {title}\n{text[:2500]}")
                 elif action_type == "screenshot":
-                    target = Path(action["path"] or str(default_download_dir / "screenshot.png"))
+                    target = confine_path(action["path"], default_download_dir, "screenshot.png")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(target), full_page=True)
                     notes.append(f"Screenshot: {target}")
@@ -307,7 +307,7 @@ def run_browser_plan(plan: dict, browser_dir: Path, default_download_dir: Path) 
                     page.wait_for_timeout(action["timeoutMs"] or 1000)
                     notes.append("Waited")
                 elif action_type == "download":
-                    target = Path(action["path"] or str(default_download_dir / "download"))
+                    target = confine_path(action["path"], default_download_dir, "download")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     if action["url"]:
                         reject_private_url(action["url"])
@@ -431,6 +431,23 @@ def format_execution_report(result: dict) -> str:
     if result.get("stderr"):
         text.append(f"Errors:\n{result['stderr']}")
     return "\n\n".join(text)[:6000]
+
+
+def confine_path(requested: str, base_dir: Path, default_name: str) -> Path:
+    """Constrain a plan-supplied write path to base_dir.
+
+    SECURITY (pre-public review F3): screenshot/download actions carried a free-form `path`. The
+    executor runs as root, so an approved plan whose path was rewritten or misjudged could write
+    anywhere on the worker (e.g. /etc). Resolve the request relative to base_dir and reject any
+    result that escapes it; fall back to a safe name inside base_dir.
+    """
+    base = base_dir.resolve()
+    candidate = (base / (requested or default_name)).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        candidate = base / default_name
+    return candidate
 
 
 def clamp_int(value: object, minimum: int, maximum: int, fallback: int) -> int:

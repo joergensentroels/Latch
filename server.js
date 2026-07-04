@@ -475,6 +475,12 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/state" && req.method === "GET") {
+    // SECURITY (pre-public review F2): visibleState() is the full operator console -- every
+    // message, task, approval, execution, all context items (incl. unshared), users and network.
+    // The agent key must never read it; the worker gets only its scoped feed via /api/agent/poll.
+    // Gate to operator so a valid-but-agent key cannot pull the whole console.
+    requireOperator(role, res);
+    if (res.writableEnded) return;
     const db = await readDb();
     sendJson(res, 200, visibleState(db));
     return;
@@ -1009,6 +1015,16 @@ async function handleApi(req, res, url) {
     const userId = cleanText(body.userId || sourceTask?.userId || sourceMessage?.userId || "", 120);
     const approvalType = cleanChoice(body.type || body.kind, approvalTypes, "other");
     const executionMode = cleanChoice(body.executionMode, executionModes, "none");
+    // SECURITY (pre-public review F1): the root executor runs `executionPlan.commands`, but the
+    // operator's "exact commands" view reads `renderedCommands`. Both arrive from the untrusted
+    // worker, so a compromised bridge could show benign commands while shipping different ones to
+    // the executor -- defeating the operator review that is the primary control. Make the plan the
+    // single source of truth: for shell mode, DERIVE the displayed commands from the plan the
+    // executor will run. What you approve is exactly what runs.
+    const normalizedExecutionPlan = normalizeExecutionPlan(body.executionPlan || {});
+    const displayedCommands = executionMode === "shell" && normalizedExecutionPlan.commands?.length
+      ? normalizedExecutionPlan.commands.slice(0, 20)
+      : cleanTextArray(body.renderedCommands, 8, 500);
     const suppliedGithubRepoName = cleanText(body.githubRepoName || body.repoName || "", 120);
     const githubConfigForApproval = approvalType === "github_file" && !suppliedGithubRepoName
       ? await loadGithubConfig()
@@ -1074,9 +1090,9 @@ async function handleApi(req, res, url) {
       githubCreatedAt: "",
       actionTemplate: cleanChoice(body.actionTemplate, actionTemplates, ""),
       actionPreview: cleanText(body.actionPreview || "", 500),
-      renderedCommands: cleanTextArray(body.renderedCommands, 8, 500),
+      renderedCommands: displayedCommands,
       executionMode,
-      executionPlan: normalizeExecutionPlan(body.executionPlan || {}),
+      executionPlan: normalizedExecutionPlan,
       status: "pending",
       decisionMode: "human",
       decisionReason: "Human review required.",
