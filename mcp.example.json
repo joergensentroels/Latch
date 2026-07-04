@@ -1,0 +1,31 @@
+{
+  "_comment": "Copy to data/mcp.json (gitignored). Latch is an approval-gating MCP HOST: it connects to these MCP servers (which hold their own credentials in 'env'); the worker never sees them. The worker can only REQUEST a tool call, which becomes an 'mcp_tool_call' approval; the trusted host runs it after you approve. Set MCP_ENABLED=1 or enabled:true to turn it on.",
+  "enabled": false,
+  "servers": [
+    {
+      "name": "filesystem",
+      "description": "Read/list files under an allowed directory",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/you/shared"],
+      "env": {},
+      "allowedTools": ["read_file", "list_directory"],
+      "autoApprove": []
+    },
+    {
+      "name": "example-with-secret",
+      "description": "An MCP server that needs an API key (kept on the host, never on the worker)",
+      "transport": "stdio",
+      "command": "some-mcp-server",
+      "args": [],
+      "env": { "API_KEY": "REPLACE_WITH_KEY" },
+      "allowedTools": [],
+      "autoApprove": []
+    }
+  ],
+  "_fields": {
+    "transport": "'stdio' spawns the server as a subprocess and speaks JSON-RPC over stdin/stdout; 'mock' is for tests.",
+    "allowedTools": "Optional. If non-empty, ONLY these tool names may be called on this server. Empty = allow any tool the server exposes (still approval-gated).",
+    "autoApprove": "Optional. Tool names pre-authorised for autonomy auto-approval once bridge-side detection lands. Still audited. Leave empty to require a human for every call."
+  }
+}
