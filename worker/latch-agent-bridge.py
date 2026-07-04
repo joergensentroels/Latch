@@ -105,6 +105,10 @@ class ApprovalNeed:
     email_subject: str = ""
     email_body: str = ""
     email_compose_brief: str = ""
+    mcp_server: str = ""
+    mcp_tool: str = ""
+    mcp_args: dict | None = None
+    mcp_compose_brief: str = ""
 
 
 READ_ONLY_TEMPLATE_LABELS = {
@@ -231,6 +235,8 @@ class Bridge:
 
         # Operator-adjustable settings delivered via the poll (fall back to CLI/env defaults).
         self.remote_email_reply_cap = (payload.get("agentEmailPolicy") or {}).get("replyCap")
+        # MCP tool catalog (server + tool names/schemas, no credentials) used to plan mcp_tool_call.
+        self.remote_mcp_catalog = payload.get("mcp") or {}
 
         tasks = payload.get("tasks", [])
         messages = payload.get("messages", [])
@@ -328,6 +334,8 @@ class Bridge:
                 if approval:
                     if approval.type == "command" and approval.execution_mode == "none":
                         approval = self.plan_execution_approval(title, details, approval, routing_preference, allow_network)
+                    if approval.type == "mcp_tool_call" and not approval.mcp_tool:
+                        approval = self.plan_mcp_tool_call(title, details, approval, routing_preference, allow_network)
                     approval = enrich_status_template(approval, self.args)
                     approval = self.compose_email_if_needed(approval)
                     self.patch_task(task_id, "waiting", "Waiting for operator approval or human help.")
@@ -412,6 +420,8 @@ class Bridge:
                 if approval:
                     if approval.type == "command" and approval.execution_mode == "none":
                         approval = self.plan_execution_approval("Inbox instruction", text, approval, routing_preference, allow_network)
+                    if approval.type == "mcp_tool_call" and not approval.mcp_tool:
+                        approval = self.plan_mcp_tool_call("Inbox instruction", text, approval, routing_preference, allow_network)
                     approval = enrich_status_template(approval, self.args)
                     approval = self.compose_email_if_needed(approval)
                     created = self.create_approval(approval, message_id=message_id)
@@ -536,6 +546,103 @@ class Bridge:
             rendered_commands=rendered,
             execution_mode=plan.get("mode") or "shell",
             execution_plan=plan,
+        )
+
+    def plan_mcp_tool_call(
+        self,
+        title: str,
+        details: str,
+        approval: ApprovalNeed,
+        routing_preference: str,
+        allow_network: bool,
+    ) -> ApprovalNeed:
+        """Resolve an explicit MCP request to a concrete (server, tool, args) using the tool catalog
+        from the last poll. The host still gates the call behind an approval; this only proposes it.
+        Falls back to a plain human approval if no MCP tools are available or the LLM can't map it."""
+        catalog = getattr(self, "remote_mcp_catalog", {}) or {}
+        servers = catalog.get("servers", []) if catalog.get("enabled") else []
+        available = [
+            {
+                "server": server.get("name", ""),
+                "tools": [
+                    {"name": tool.get("name", ""), "description": tool.get("description", ""), "inputSchema": tool.get("inputSchema", {})}
+                    for tool in server.get("tools", [])
+                    if tool.get("name")
+                ],
+            }
+            for server in servers
+            if server.get("name")
+        ]
+        if not any(entry["tools"] for entry in available):
+            return replace(
+                approval,
+                type="other",
+                title="MCP requested but no tools are available",
+                details=(
+                    f"{approval.details}\n\n"
+                    "No MCP servers/tools are currently reachable from the host, so this needs the operator."
+                ),
+                risk_level="low",
+            )
+        try:
+            raw = self.ask_llm(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return JSON only. Choose ONE MCP tool to satisfy the request, using only the tools "
+                            "listed below. Build arguments that match the tool's inputSchema.\n"
+                            "Schema: {\"server\":\"...\",\"tool\":\"...\",\"args\":{...},\"summary\":\"...\"}.\n"
+                            "If no listed tool fits, return {\"server\":\"\",\"tool\":\"\",\"args\":{},\"summary\":\"none fit\"}.\n"
+                            "Do not invent tools or servers. Do not include secrets.\n\n"
+                            f"Available MCP tools:\n{json.dumps(available)[:6000]}"
+                        ),
+                    },
+                    {"role": "user", "content": f"Title: {title}\n\nRequest:\n{details or '(no details)'}"},
+                ],
+                routing_preference=routing_preference,
+                allow_network=allow_network,
+            )
+            plan = json.loads(extract_json_object(raw))
+        except Exception as exc:  # noqa: BLE001 - fall back to a manual approval
+            return replace(
+                approval,
+                details=f"{approval.details}\n\nMCP planning failed, so the operator must decide manually: {exc}",
+            )
+
+        server_name = clean(plan.get("server") or "", 120)
+        tool_name = clean(plan.get("tool") or "", 200)
+        args = plan.get("args") if isinstance(plan.get("args"), dict) else {}
+        # Validate the choice against the catalog; never trust the model to invent a server/tool.
+        valid = next(
+            (entry for entry in available if entry["server"] == server_name and any(t["name"] == tool_name for t in entry["tools"])),
+            None,
+        )
+        if not valid:
+            return replace(
+                approval,
+                type="other",
+                title="MCP request could not be mapped to a tool",
+                details=(
+                    f"{approval.details}\n\n"
+                    "The request didn't map to any available MCP tool, so it needs the operator."
+                ),
+                risk_level="low",
+            )
+        summary = clean(plan.get("summary") or f"Call {server_name}/{tool_name}", 300)
+        return replace(
+            approval,
+            title=f"MCP tool call: {server_name}/{tool_name}",
+            details=(
+                f"{approval.details}\n\n"
+                f"Proposed MCP call: {server_name}/{tool_name}\n"
+                f"Summary: {summary}\n"
+                f"Arguments: {json.dumps(args)[:1000]}"
+            ),
+            action_preview=summary,
+            mcp_server=server_name,
+            mcp_tool=tool_name,
+            mcp_args=args,
         )
 
     def process_inbound_email(self, profile: dict) -> None:
@@ -749,6 +856,9 @@ class Bridge:
                 "emailTo": approval.email_to,
                 "emailSubject": approval.email_subject,
                 "emailBody": approval.email_body,
+                "mcpServer": approval.mcp_server,
+                "mcpTool": approval.mcp_tool,
+                "mcpArgs": approval.mcp_args or {},
                 "actionTemplate": approval.action_template,
                 "actionPreview": approval.action_preview,
                 "renderedCommands": list(approval.rendered_commands),
@@ -1202,6 +1312,14 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
     if email_send:
         return email_send
 
+    # An explicit MCP request ("use mcp...", "via the ... MCP server") is classified before the
+    # github/vm detectors so that mentioning e.g. a "github" MCP server doesn't misroute into a
+    # file-commit. The actual server/tool/args are filled in by the LLM planner (plan_mcp_tool_call)
+    # using the tool catalog from the last poll, since a pure text detector can't know them.
+    mcp_call = detect_mcp_tool_call(title, details)
+    if mcp_call:
+        return mcp_call
+
     github_file = detect_github_file_request(title, details)
     if github_file:
         return github_file
@@ -1239,6 +1357,29 @@ def detect_approval_need(title: str, details: str) -> ApprovalNeed | None:
                 command=command,
             )
     return None
+
+
+def detect_mcp_tool_call(title: str, details: str) -> ApprovalNeed | None:
+    """Fire only on an explicit MCP request. The server/tool/args are resolved later by
+    plan_mcp_tool_call() against the tool catalog from the last poll -- a text-only detector can't
+    know which tools exist, so it just flags the intent and carries the raw request as a brief."""
+    raw = clean(f"{title}\n{details}", 2500)
+    text = f" {raw.lower()} "
+    triggers = (" mcp ", " mcp.", " mcp:", " mcp tool", "use mcp", "via mcp", "model context protocol")
+    if not any(trigger in text for trigger in triggers):
+        return None
+    return ApprovalNeed(
+        type="mcp_tool_call",
+        title="MCP tool call approval needed",
+        details=(
+            "The request appears to ask for an MCP (Model Context Protocol) tool call.\n\n"
+            f"Original request:\n{raw}"
+        ),
+        expected_response="Approve to run the resolved MCP tool on the host, or deny to skip it.",
+        sensitive=False,
+        risk_level="low",
+        mcp_compose_brief=raw,
+    )
 
 
 def detect_github_repo_request(title: str, details: str) -> ApprovalNeed | None:
