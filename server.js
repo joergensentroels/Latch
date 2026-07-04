@@ -6,6 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadEmailConfig, sendEmail, pollInbox, classifySend } from "./email.mjs";
+import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed } from "./mcp.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
@@ -17,6 +18,7 @@ const notificationConfigPath = path.join(dataDir, "notifications.json");
 const localSettingsPath = path.join(dataDir, "local-settings.json");
 const githubConfigPath = path.join(dataDir, "github.json");
 const agentEmailConfigPath = path.join(dataDir, "agent-email.json");
+const mcpConfigPath = path.join(dataDir, "mcp.json");
 const companionAnchorPath = path.join(__dirname, "COMPANION-ANCHOR.md");
 const contextFilesDir = path.join(dataDir, "context-files");
 const backupsDir = path.join(dataDir, "backups");
@@ -46,7 +48,7 @@ const defaultMessageChannels = [
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
-const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "email_thread_continue", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "email_thread_continue", "mcp_tool_call", "other"];
 const executionModes = ["none", "read_only_status", "shell", "browser"];
 const riskLevels = ["low", "medium", "high"];
 const contactSendModes = ["manual", "approved_connector"];
@@ -522,7 +524,8 @@ async function handleApi(req, res, url) {
       agencyWorkers: publicAgencyWorkers(db),
       llm: publicLlmConfig(llm),
       notifications: publicNotificationConfig(notifications),
-      github: publicGithubConfig(github)
+      github: publicGithubConfig(github),
+      mcp: publicMcpConfig(await loadMcpConfig(mcpConfigPath))
     });
     return;
   }
@@ -786,6 +789,27 @@ async function handleApi(req, res, url) {
 
     const config = await loadGithubConfig();
     sendJson(res, 200, publicGithubConfig(config));
+    return;
+  }
+
+  if (url.pathname === "/api/mcp/servers" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const config = await loadMcpConfig(mcpConfigPath);
+    const summary = publicMcpConfig(config);
+    // Best-effort live tool discovery per server; a failing server reports its error rather than
+    // taking down the whole listing.
+    summary.servers = await Promise.all(summary.servers.map(async (server) => {
+      const full = findServer(config, server.name);
+      try {
+        const tools = await listTools(full);
+        return { ...server, ready: true, tools };
+      } catch (error) {
+        return { ...server, ready: false, tools: [], error: cleanText(error.message, 500) };
+      }
+    }));
+    sendJson(res, 200, summary);
     return;
   }
 
@@ -1074,6 +1098,12 @@ async function handleApi(req, res, url) {
       emailSubject: approvalType === "email_campaign" ? cleanText(body.emailSubject || "", 300) : "",
       emailBody: approvalType === "email_campaign" ? cleanText(body.emailBody || body.body || "", 20000) : "",
       emailSentAt: "",
+      mcpServer: approvalType === "mcp_tool_call" ? cleanText(body.mcpServer || "", 120) : "",
+      mcpTool: approvalType === "mcp_tool_call" ? cleanText(body.mcpTool || "", 200) : "",
+      mcpArgs: approvalType === "mcp_tool_call" ? cleanJsonObject(body.mcpArgs, 8000) : {},
+      mcpResult: "",
+      mcpIsError: false,
+      mcpRanAt: "",
       githubRepoName: githubApprovalRepoName(approvalType, suppliedGithubRepoName, body.title, body.details, githubConfigForApproval?.defaultRepo || ""),
       githubDescription: approvalType === "github_repo" ? cleanText(body.githubDescription || body.description || "", 500) : "",
       githubVisibility: approvalType === "github_repo" ? cleanChoice(body.githubVisibility || body.visibility, ["private", "public"], "private") : "private",
@@ -2286,6 +2316,42 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
         approval.responseNote = `Outreach plan approved, but the first message failed to send: ${cleanText(error.message, 500)}. ${approval.responseNote || ""}`.trim();
         db.events.unshift(event("email.send.failed", actor, approval.id, cleanText(error.message, 300)));
       }
+    }
+  }
+  if (approval.type === "mcp_tool_call") {
+    // Host-brokered MCP: the trusted host runs the approved tool call against the configured MCP
+    // server (which holds its own credentials). The worker never sees those credentials -- it only
+    // requested the call and receives the result.
+    try {
+      const config = await loadMcpConfig(mcpConfigPath);
+      if (!config.enabled) {
+        throw new Error("MCP is not configured on the host (data/mcp.json).");
+      }
+      const server = findServer(config, approval.mcpServer);
+      if (!server) {
+        throw new Error(`MCP server "${approval.mcpServer}" is not configured.`);
+      }
+      if (!isToolAllowed(server, approval.mcpTool)) {
+        throw new Error(`Tool "${approval.mcpTool}" is not permitted on server "${approval.mcpServer}".`);
+      }
+      const result = await callTool(server, approval.mcpTool, approval.mcpArgs || {});
+      approval.mcpResult = cleanText(result.text || "", 12000);
+      approval.mcpIsError = Boolean(result.isError);
+      approval.mcpRanAt = new Date().toISOString();
+      if (result.isError) {
+        approval.responseNote = `MCP tool ${approval.mcpServer}/${approval.mcpTool} returned an error: ${approval.mcpResult}`.slice(0, 2000);
+        db.events.unshift(event("mcp.tool.error", actor, approval.id, `${approval.mcpServer}/${approval.mcpTool}`));
+      } else {
+        approval.responseNote = approval.responseNote || `MCP tool ${approval.mcpServer}/${approval.mcpTool} ran.`;
+        db.events.unshift(event("mcp.tool.ran", actor, approval.id, `${approval.mcpServer}/${approval.mcpTool}`));
+      }
+    } catch (error) {
+      // Transport/config failure (not a tool-level error): revert to pending so the operator can
+      // fix config and retry, mirroring the GitHub connector's behaviour.
+      approval.status = "pending";
+      approval.decisionReason = "MCP tool call failed; operator review required.";
+      approval.responseNote = `MCP tool call failed: ${cleanText(error.message, 1500)}`;
+      db.events.unshift(event("mcp.tool.failed", actor, approval.id, `${approval.mcpServer}/${approval.mcpTool}`));
     }
   }
 }
@@ -5336,6 +5402,19 @@ function cleanTextArray(value, maxItems, maxLength) {
     .map((item) => cleanText(item, maxLength))
     .filter(Boolean)
     .slice(0, maxItems);
+}
+
+// Accept a plain JSON object (e.g. MCP tool arguments) and reject anything that isn't a serializable
+// object within the size cap. Returns {} on anything unexpected rather than throwing.
+function cleanJsonObject(value, maxSerializedLength) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > maxSerializedLength) return {};
+    return JSON.parse(serialized);
+  } catch {
+    return {};
+  }
 }
 
 function orderedUnique(values) {
