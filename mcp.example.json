@@ -26,8 +26,9 @@
   ],
   "_fields": {
     "transport": "'stdio' spawns the server as a subprocess and speaks JSON-RPC over stdin/stdout; 'mock' is for tests.",
+    "command_args": "Pin the server to an explicit version rather than letting a floating fetch pull the latest -- e.g. '@modelcontextprotocol/server-filesystem@X.Y.Z' instead of the bare package name. An unpinned 'npx -y pkg' re-resolves to the newest release on every spawn, so a compromised or rug-pulled upstream release silently becomes the server you vetted. Pinning (plus a lockfile or registry mirror) is the supply-chain control.",
     "allowedTools": "Optional. If non-empty, ONLY these tool names may be called on this server. Empty = allow any tool the server exposes (still approval-gated).",
-    "autoApprove": "Optional. Tool names pre-authorised for autonomy auto-approval once bridge-side detection lands. Still audited. Leave empty to require a human for every call.",
+    "autoApprove": "Optional. Tool names pre-authorised for autonomy auto-approval (Full access only). Still audited. Leave empty to require a human for every call. Auto-approval is bound to the tool's fingerprint (name + description + inputSchema): if the server later changes that tool's description or schema, the fingerprint no longer matches and the call falls back to a human approval instead of auto-running -- blocking the MCP tool-poisoning / rug-pull vector where a trusted tool's description is mutated into an injection payload after you allowlisted it.",
     "argConstraints": "Optional per-tool argument bounds enforced host-side before the call runs, for tools that don't self-sandbox. Per field: {\"prefix\":\"...\"} | {\"equals\":value} | {\"enum\":[...]}. Tool arguments are also validated against the tool's own inputSchema regardless."
   }
 }
