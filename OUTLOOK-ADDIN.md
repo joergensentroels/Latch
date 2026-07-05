@@ -33,8 +33,23 @@ it into a reply. So:
 
 ## Use
 
-Open a message → **Draft with Latch** → optional guidance → *Draft a reply* → edit the suggestion →
-*Open reply with this draft* → review and **Send** in Outlook.
+Open a message → **Draft with Latch** → pick what to do (**Draft a reply / Summarize / Extract
+action items / Rewrite**) → optional guidance → **Run**. For a reply, edit the suggestion and *Open
+reply with this* → review and **Send** in Outlook. Summaries/action items are read-only — copy them or
+just read.
+
+## Attachments & meeting invites
+
+The add-in works on the **message text** (subject + body). It does **not** yet read attachments or
+calendar invites:
+
+- **Attachments/files** — not sent to Latch. Latch has no built-in PDF/Office parser (Node
+  built-ins only), so a file's contents would need a text extractor (a future MCP tool) or you paste
+  the text. Plain-text you paste in works fine.
+- **Meeting invitations** — the add-in currently targets *message* reads, not calendar items.
+  Summarizing an invite (read-only) is an easy future extension (read the invite's fields and send
+  them to `/api/assist`); *accepting/declining* would stay an action you take in Outlook (a calendar
+  write is a boundary, like sending).
 
 ## Notes
 

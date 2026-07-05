@@ -24,16 +24,23 @@
   </style>
 </head>
 <body>
-  <h1>Draft with Latch 🧭</h1>
+  <h1>Latch 🧭</h1>
   <p class="status" id="context"></p>
-  <label for="guidance">Guidance (optional)</label>
+  <label for="mode">What should Latch do?</label>
+  <select id="mode">
+    <option value="reply">Draft a reply</option>
+    <option value="summarize">Summarize</option>
+    <option value="action_items">Extract action items</option>
+    <option value="rewrite">Rewrite (paste in the box below)</option>
+  </select>
+  <label for="guidance">Guidance / tone (optional)</label>
   <input id="guidance" placeholder="e.g. keep it short and say yes">
-  <button id="draftBtn">Draft a reply</button>
+  <button id="runBtn">Run</button>
   <p class="status" id="status"></p>
-  <label for="draft">Suggested reply — edit before sending</label>
-  <textarea id="draft" placeholder="The draft will appear here"></textarea>
+  <label for="draft" id="draftLabel">Result — edit before using</label>
+  <textarea id="draft" placeholder="The result will appear here"></textarea>
   <div class="row">
-    <button id="replyBtn" class="secondary">Open reply with this draft</button>
+    <button id="replyBtn" class="secondary">Open reply with this</button>
     <button id="copyBtn" class="secondary">Copy</button>
   </div>
 
