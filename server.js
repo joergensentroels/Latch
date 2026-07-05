@@ -2599,22 +2599,28 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
     const to = String(approval.recipient || "").trim().toLowerCase();
     const bodyText = cleanText(approval.contactBody || approval.bodyPreview || "", 20000);
     if (to.includes("@") && bodyText) {
-      try {
-        const config = await loadEmailConfig(operatorEmailConfigPath, {});
-        if (!config.enabled) {
-          throw new Error("Operator send connector is not configured on the host (data/operator-email.json).");
+      const config = await loadEmailConfig(operatorEmailConfigPath, {});
+      if (!config.enabled) {
+        // No operator send connector on this host: the draft cannot be auto-sent, but the operator
+        // has still reviewed and approved it. Downgrade to manual and keep it approved (with a clear
+        // note to send it manually) rather than silently bouncing the approval back to pending.
+        approval.sendMode = "manual";
+        approval.responseNote = `Reviewed. No operator send connector is configured (data/operator-email.json), so this draft was not auto-sent — copy it and send from your own mail app. ${approval.responseNote || ""}`.trim();
+        db.events.unshift(event("operator.email.manual", actor, approval.id, `${to}`.slice(0, 200)));
+      } else {
+        try {
+          const subject = cleanText(approval.subject || "", 300);
+          const result = await sendEmail(config, { to, subject, body: bodyText });
+          approval.emailSentAt = new Date().toISOString();
+          approval.responseNote = `Sent from your address (${config.fromAddress || "operator connector"}) to ${to}. ${approval.responseNote || ""}`.trim();
+          db.emailLog.unshift({ id: newId("elog"), to, subject, at: approval.emailSentAt, approvalId: approval.id, connector: "operator" });
+          db.events.unshift(event("operator.email.sent", actor, result.id || approval.id, `${to}: ${subject}`.slice(0, 200)));
+        } catch (error) {
+          approval.status = "pending";
+          approval.decisionReason = "Operator send failed; review required.";
+          approval.responseNote = `Send from your address failed: ${cleanText(error.message, 500)}. ${approval.responseNote || ""}`.trim();
+          db.events.unshift(event("operator.email.send.failed", actor, approval.id, cleanText(error.message, 300)));
         }
-        const subject = cleanText(approval.subject || "", 300);
-        const result = await sendEmail(config, { to, subject, body: bodyText });
-        approval.emailSentAt = new Date().toISOString();
-        approval.responseNote = `Sent from your address (${config.fromAddress || "operator connector"}) to ${to}. ${approval.responseNote || ""}`.trim();
-        db.emailLog.unshift({ id: newId("elog"), to, subject, at: approval.emailSentAt, approvalId: approval.id, connector: "operator" });
-        db.events.unshift(event("operator.email.sent", actor, result.id || approval.id, `${to}: ${subject}`.slice(0, 200)));
-      } catch (error) {
-        approval.status = "pending";
-        approval.decisionReason = "Operator send failed; review required.";
-        approval.responseNote = `Send from your address failed: ${cleanText(error.message, 500)}. ${approval.responseNote || ""}`.trim();
-        db.events.unshift(event("operator.email.send.failed", actor, approval.id, cleanText(error.message, 300)));
       }
     }
   }
