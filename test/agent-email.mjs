@@ -110,18 +110,18 @@ assert.ok(!decoded.includes("--bnd"), "decodeImapText should drop MIME boundarie
 // must still yield the address - this is the bug that made the companion silently skip real replies.
 const foldedFetch = [
   "* 5 FETCH (BODY[HEADER.FIELDS (FROM SUBJECT MESSAGE-ID)] {140}",
-  "From: =?iso-8859-1?Q?Troels_Anker_J=F8rgensen?=",
-  " <troels.anker.joergensen@pdc.com>",
+  "From: =?iso-8859-1?Q?Jane_D=F8e?=",
+  " <jane.doe@example.com>",
   "Subject: Re: Message from the Compass companion",
-  "Message-ID: <abc123@pdc.com>",
+  "Message-ID: <abc123@example.com>",
   "",
   ")",
   "a9 OK FETCH completed"
 ].join("\r\n");
 const parsed = parseImapHeaders(foldedFetch);
-assert.ok(/troels\.anker\.joergensen@pdc\.com/.test(parsed.from), "folded From must still expose the address");
-assert.match(extractEmailForTest(parsed.from), /^troels\.anker\.joergensen@pdc\.com$/);
-assert.equal(parsed.messageId, "<abc123@pdc.com>", "Message-ID should parse");
+assert.ok(/jane\.doe@example\.com/.test(parsed.from), "folded From must still expose the address");
+assert.match(extractEmailForTest(parsed.from), /^jane\.doe@example\.com$/);
+assert.equal(parsed.messageId, "<abc123@example.com>", "Message-ID should parse");
 assert.ok(parsed.subject.startsWith("Re: Message from the Compass"), "Subject should parse");
 assert.equal(decodeMimeWords("=?UTF-8?B?SGVsbG8=?="), "Hello", "decodeMimeWords should decode base64 words");
 assert.equal(decodeMimeWords("=?utf-8?Q?a_b?="), "a b", "decodeMimeWords should decode Q words");

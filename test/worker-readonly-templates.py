@@ -358,9 +358,9 @@ assert _none.type == "other", "no MCP tools available should defer to the operat
 assert bridge.reply_subject("Hello") == "Re: Hello"
 assert bridge.reply_subject("Re: Hello") == "Re: Hello"
 assert bridge.reply_subject("") == "Re: your message"
-assert bridge.is_automated_or_self("compass_companion@fastmail.com", "compass_companion@fastmail.com") is True
+assert bridge.is_automated_or_self("companion@example.com", "companion@example.com") is True
 assert bridge.is_automated_or_self("no-reply@svc.com", "a@b.com") is True
-assert bridge.is_automated_or_self("troels@pdc.com", "a@b.com") is False
+assert bridge.is_automated_or_self("owner@example.com", "a@b.com") is False
 
 _eb = bridge.Bridge(argparse.Namespace(
     state_path=str(Path(tempfile.gettempdir()) / "latch-test-inbox-state.json"),
@@ -378,11 +378,11 @@ _INBOX = {"messages": []}
 
 def _fake_request(method, path, body=None):
     if path == "/api/agent/email/poll":
-        return {"ok": True, "fromAddress": "compass_companion@fastmail.com", "messages": _INBOX["messages"]}
+        return {"ok": True, "fromAddress": "companion@example.com", "messages": _INBOX["messages"]}
     if path == "/api/agent/email/send":
         _sent.append(body)
-        # simulate server known-contact gating: only troels@pdc.com is a known contact
-        return {"ok": True, "to": body["to"]} if body["to"] == "troels@pdc.com" else {"status": "needs_approval"}
+        # simulate server known-contact gating: only owner@example.com is a known contact
+        return {"ok": True, "to": body["to"]} if body["to"] == "owner@example.com" else {"status": "needs_approval"}
     if path == "/api/approvals":
         _approvals.append(body)
         return {"id": "appr_test"}
@@ -399,12 +399,12 @@ def _poll_one(mid, sender, subject="Re: Hello", text="ok"):
 
 
 # 1) known sender -> auto-reply sent, threaded, surfaced
-_poll_one("<m1>", "Troels <troels@pdc.com>")
-assert len(_sent) == 1 and _sent[0]["to"] == "troels@pdc.com" and _sent[0]["inReplyTo"] == "<m1>", _sent
-assert any("Replied to troels@pdc.com" in t for _c, t in _reports), _reports
+_poll_one("<m1>", "Owner <owner@example.com>")
+assert len(_sent) == 1 and _sent[0]["to"] == "owner@example.com" and _sent[0]["inReplyTo"] == "<m1>", _sent
+assert any("Replied to owner@example.com" in t for _c, t in _reports), _reports
 
 # 2) same message id again -> deduped
-_poll_one("<m1>", "troels@pdc.com")
+_poll_one("<m1>", "owner@example.com")
 assert len(_sent) == 1, "an already-seen email must not be answered twice"
 
 # 3) unknown sender -> NOT auto-replied; surfaced for approval
@@ -415,7 +415,7 @@ assert any("have not emailed them first" in t for _c, t in _reports), _reports
 _before = len(_sent)
 _eb.state["lastEmailPollAt"] = 0
 _INBOX["messages"] = [
-    {"messageId": "<self1>", "from": "compass_companion@fastmail.com", "subject": "loop", "body": "x"},
+    {"messageId": "<self1>", "from": "companion@example.com", "subject": "loop", "body": "x"},
     {"messageId": "<auto1>", "from": "no-reply@svc.com", "subject": "auto", "body": "y"},
 ]
 _eb.process_inbound_email({})
@@ -428,26 +428,26 @@ _approvals.clear()
 _eb.state["email_threads"] = {}
 _eb.state["seen_emails"] = []
 for _i in range(1, 4):
-    _poll_one(f"<t{_i}>", "troels@pdc.com")
+    _poll_one(f"<t{_i}>", "owner@example.com")
 assert len(_sent) == 3, f"should auto-reply up to the cap (3), got {len(_sent)}"
-_poll_one("<t4>", "troels@pdc.com")
+_poll_one("<t4>", "owner@example.com")
 assert len(_sent) == 3, "must NOT send a 4th auto-reply past the cap"
-assert any(a.get("type") == "email_thread_continue" and a.get("emailTo") == "troels@pdc.com" for a in _approvals), _approvals
-assert _eb.state["email_threads"]["troels@pdc.com"]["paused"] is True
+assert any(a.get("type") == "email_thread_continue" and a.get("emailTo") == "owner@example.com" for a in _approvals), _approvals
+assert _eb.state["email_threads"]["owner@example.com"]["paused"] is True
 
 # paused thread: further inbound -> no send, no duplicate continue approval
 _appr_before = len(_approvals)
-_poll_one("<t5>", "troels@pdc.com")
+_poll_one("<t5>", "owner@example.com")
 assert len(_sent) == 3 and len(_approvals) == _appr_before, "paused thread must not reply or re-ask"
 
 # 6) operator approves the continue -> thread resumes
 _eb.handle_approved_decision(
-    {"type": "email_thread_continue", "status": "approved", "emailTo": "troels@pdc.com", "title": "continue"},
+    {"type": "email_thread_continue", "status": "approved", "emailTo": "owner@example.com", "title": "continue"},
     "continue", "", "t", {}, {}, [], {},
 )
-assert _eb.state["email_threads"]["troels@pdc.com"]["paused"] is False
-assert _eb.state["email_threads"]["troels@pdc.com"]["count"] == 0
-_poll_one("<t6>", "troels@pdc.com")
+assert _eb.state["email_threads"]["owner@example.com"]["paused"] is False
+assert _eb.state["email_threads"]["owner@example.com"]["count"] == 0
+_poll_one("<t6>", "owner@example.com")
 assert len(_sent) == 4, "after approving continue, auto-replies resume"
 
 Path(_eb.state_path).unlink()
