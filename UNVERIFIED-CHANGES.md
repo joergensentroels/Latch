@@ -35,6 +35,9 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
   (`test/worker-readonly-templates.py`)
 - MCP tool fingerprint: stable across `inputSchema` key-order; changes on name/description/inputSchema
   mutation. (`test/mcp.mjs`)
+- MCP rug-pull gate end-to-end (real server process): an allowlisted `autoApprove` tool auto-approves
+  and records its fingerprint; after its description is mutated (+ restart), the same tool falls back
+  to a human (`mcp.tool.fingerprint.changed`). (`test/mcp-fingerprint.mjs`)
 
 ## Not yet verified live — check these on the real host + worker
 
@@ -79,13 +82,13 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
       finds Firefox via `PLAYWRIGHT_BROWSERS_PATH`), and a **shell** plan still runs. Watch for
       permission errors in `journalctl -u latch-agent-executor` — the non-root + Playwright-path
       interaction is the most likely thing to need a fix.
-- [ ] **MCP tool-poisoning / rug-pull guard (`280888d`)**: with an MCP server (mock or real) exposing
-      a tool listed in that server's `autoApprove`, under Full access → the first request auto-approves
-      AND records a fingerprint (timeline event `mcp.tool.fingerprint.recorded`). Then change that
-      tool's **description** (or `inputSchema`) at the server and request it again → it must **NOT**
-      auto-approve; it files a human approval (event `mcp.tool.fingerprint.changed`). Also confirm a
-      tool that isn't currently discoverable falls back to a human. Host-side, computed at approval
-      creation → **takes effect on host restart** (no worker redeploy needed).
+- [x] **MCP tool-poisoning / rug-pull guard (`280888d`)** — verified by `test/mcp-fingerprint.mjs`
+      (end-to-end against a real server process: first use auto-approves + records the fingerprint;
+      mutated description + restart → same tool falls back to a human with `mcp.tool.fingerprint.changed`).
+      The real stdio transport is separately proven in `test/mcp.mjs`. OPTIONAL confidence-only live
+      check on the real host with a real (non-mock) MCP server: same steps, and confirm a tool that
+      isn't currently discoverable also falls back to a human. Host-side, computed at approval creation
+      → takes effect on host restart (no worker redeploy needed).
 - [ ] **Browser `extract_text` trust (static review says safe — spot-confirm)**: reviewed at
       server.js:3632 (extract_text isn't saved as agent-shared context), bridge:407 (agent-authored
       report messages aren't re-ingested — `operator_to_agent` only), and the sub-goal loop feeds model
