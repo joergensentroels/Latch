@@ -99,6 +99,21 @@ body.pro-mode .simple-only {
   height: 42px;
 }
 
+.brand-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.brand-suffix {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--accent);
@@ -367,6 +382,16 @@ button[type="submit"]:hover,
   background: var(--danger);
 }
 
+/* Slim-header connection dot: a button (tap to reveal the status strip); only shown on mobile
+   (see the max-width:759px block). */
+#connectionDotMini {
+  display: none;
+  appearance: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
 .route-warning {
   margin-bottom: 12px;
   padding: 12px;
@@ -505,6 +530,34 @@ button[type="submit"]:hover,
 }
 
 @media (max-width: 759px) {
+  /* Reclaim vertical space for content (esp. the channels list): slim the header and drop the
+     always-on status strip. A mini connection dot stays in the header; the full strip slides back
+     in only when the connection goes offline (body.app-offline, set by markConnection). */
+  .topbar {
+    padding: 6px 0 8px;
+  }
+  .topbar .brand-mark.compact {
+    width: 34px;
+    height: 34px;
+  }
+  .topbar h1 {
+    font-size: 1.1rem;
+  }
+  #connectionDotMini {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    align-self: center;
+  }
+  .status-strip {
+    display: none;
+  }
+  /* Revealed either by tapping the header dot (status-expanded) or automatically when offline. */
+  body.app-offline .status-strip,
+  body.status-expanded .status-strip {
+    display: flex;
+  }
+
   .tabs .mobile-secondary-tab {
     display: none;
   }
@@ -516,6 +569,13 @@ button[type="submit"]:hover,
   /* Chat-shell height + overflow come from the base rule (a clamped 100dvh calc with
      overflow:hidden), which already produces a single, internally-scrolling message list.
      Only the mobile-specific channel-rail sizing is overridden here. */
+
+  /* When the status strip is shown (offline, or tapped open) it takes vertical space above the
+     shell, so shorten the shell by that much to keep the composer above the fixed nav. */
+  body.app-offline .chat-shell,
+  body.status-expanded .chat-shell {
+    height: clamp(320px, calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 129px), 720px);
+  }
 
   .channel-rail {
     max-height: 210px;
@@ -671,7 +731,11 @@ button[type="submit"]:hover,
 
 .chat-shell {
   --channel-rail-width: 260px;
-  height: clamp(360px, calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 152px), 720px);
+  /* Mobile height: fill from below the (now slim) header to just above the fixed nav. The status
+     strip is hidden on phones (see the max-width:759px block), so the top chrome is small; the
+     offset below is sized for that. When the strip reappears (offline/expanded) an override adds
+     back its height so the composer still clears the nav. Desktop overrides this at min-width:760. */
+  height: clamp(360px, calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 75px), 720px);
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
