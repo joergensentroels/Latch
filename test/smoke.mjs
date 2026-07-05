@@ -38,6 +38,7 @@ const port = String(19000 + Math.floor(Math.random() * 1000));
 const baseUrl = `http://127.0.0.1:${port}`;
 const operatorToken = "op_test_operator";
 const agentToken = "agent_test_agent";
+const draftToken = "draft_test_token";
 const mockLlmPort = String(21000 + Math.floor(Math.random() * 1000));
 const mockLlmUrl = `http://127.0.0.1:${mockLlmPort}/v1`;
 const mockLlmRequests = [];
@@ -136,6 +137,7 @@ const child = spawn(process.execPath, ["server.js"], {
     PORT: port,
     OPERATOR_TOKEN: operatorToken,
     AGENT_TOKEN: agentToken,
+    DRAFT_TOKEN: draftToken,
     LATCH_ENABLE_DEV_LOGIN: "1",
     LLM_PROVIDER: "mock-openai-compatible",
     LLM_BASE_URL: mockLlmUrl,
@@ -959,6 +961,20 @@ try {
   });
   assert(sentReply.status === "approved" && sentReply.emailSentAt, "approving an approved_connector reply sends it via the operator connector");
   assert(sentReply.contactBody.includes("Tuesday at 2pm"), "the host sends the operator-edited body (WYSIWYG)");
+
+  // --- Scoped "Draft with Latch" endpoint (for the Outlook add-in / any client) ---
+  const draftHeaders = { authorization: `Bearer ${draftToken}` };
+  const draftRes = await request("/api/draft", {
+    method: "POST",
+    headers: draftHeaders,
+    body: { message: "Are you free Tuesday?", from: "bob@example.com", subject: "meeting", guidance: "say yes" }
+  });
+  assert(draftRes.ok && typeof draftRes.draft === "string" && draftRes.draft.length > 0, "draft endpoint returns a suggested reply");
+  assert(draftRes.subject === "Re: meeting", "draft endpoint normalizes the subject to Re:");
+  // The draft token is scoped: it cannot reach anything else, and other tokens cannot draft.
+  await expectStatus("/api/state", { headers: draftHeaders }, 401);
+  await expectStatus("/api/approvals", { method: "POST", headers: draftHeaders }, 401);
+  await expectStatus("/api/draft", { method: "POST", headers: operatorHeaders }, 401);
 
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Draft with Latch</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    :root { --accent: #0f766e; --border: #e2e8f0; --muted: #64748b; --danger: #b91c1c; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 12px; color: #101828; }
+    h1 { font-size: 1rem; margin: 0 0 8px; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin: 8px 0 2px; }
+    input, textarea, button { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+    textarea { min-height: 140px; resize: vertical; }
+    button { background: var(--accent); color: #fff; border: none; margin-top: 8px; cursor: pointer; }
+    button.secondary { background: #f1f5f9; color: #101828; border: 1px solid var(--border); }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    .status { font-size: 0.8rem; color: var(--muted); margin-top: 6px; min-height: 1.1em; }
+    .status.error { color: var(--danger); }
+    details { margin-top: 10px; }
+    summary { font-size: 0.8rem; color: var(--muted); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Draft with Latch 🧭</h1>
+  <p class="status" id="context"></p>
+  <label for="guidance">Guidance (optional)</label>
+  <input id="guidance" placeholder="e.g. keep it short and say yes">
+  <button id="draftBtn">Draft a reply</button>
+  <p class="status" id="status"></p>
+  <label for="draft">Suggested reply — edit before sending</label>
+  <textarea id="draft" placeholder="The draft will appear here"></textarea>
+  <div class="row">
+    <button id="replyBtn" class="secondary">Open reply with this draft</button>
+    <button id="copyBtn" class="secondary">Copy</button>
+  </div>
+
+  <details id="settings">
+    <summary>Settings (Latch URL + draft key)</summary>
+    <label for="baseUrl">Latch base URL</label>
+    <input id="baseUrl" placeholder="https://your-host.tailnet.ts.net">
+    <label for="draftKey">Draft key (from data/auth.json → draftToken)</label>
+    <input id="draftKey" type="password" placeholder="draft_...">
+    <button id="saveSettings" class="secondary">Save</button>
+  </details>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>
