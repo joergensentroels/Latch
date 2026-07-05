@@ -23,7 +23,7 @@ This axis does not relax as you raise the tier. It is about **identity**, not vo
 The agent may be given its **own** dedicated, low-trust, revocable accounts (e.g. its own email mailbox, its own scratch logins). It operates them itself, governed by the autonomy tier above. Its email is *its* email.
 
 ### The operator's ("your") accounts — the agent may never hold these
-Your personal email, your GitHub token, provider API keys, notification tokens, bank/finance sessions, your main logins. The agent **never receives these credentials**. When a task needs one, the agent creates an approval; after you approve, the **credentials machine** (the trusted host) performs the action with your credential and returns only the result. The worker never sees the secret.
+Your personal email, your GitHub token, provider API keys, notification tokens, bank/finance sessions, your main logins. The agent **never receives these credentials**. When a task needs one, the agent creates an approval; after you approve, the **trusted host** performs the action with your credential and returns only the result. The worker never sees the secret.
 
 **The template already exists: GitHub.** The agent asks for a `github_file`/`github_repo` approval; the host commits with the token; the worker never touches it. Every operator-owned account follows this same broker pattern.
 
@@ -53,7 +53,7 @@ Your personal email, your GitHub token, provider API keys, notification tokens, 
 
 The agent may operate its **own** mailbox. Rules:
 
-- **Host-brokered:** the mailbox credentials live on the credentials machine, not the worker. The agent calls the host to send/read; the worker never holds SMTP/IMAP credentials.
+- **Host-brokered:** the mailbox credentials live on the host, not the worker. The agent calls the host to send/read; the worker never holds SMTP/IMAP credentials.
 - **Never your mailbox:** sending as *you* remains an operator-owned action (broker + approval). The agent sends only as itself.
 - **Cold first-contact needs approval with a stated plan:** before the first message to a *new* recipient, the agent files an approval that states the outreach plan — how many recipients it expects to contact and why. The operator approves the campaign scope; the agent then sends first-contacts within that approved scope and handles the ongoing reply threads autonomously (subject to the tier). Exceeding the approved count/scope needs a new approval.
 - **Rate-limited and audited:** even on its own account, the host enforces a send rate limit and logs every send/read, so a compromised agent cannot quietly blast mail.
