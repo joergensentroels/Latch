@@ -220,6 +220,22 @@
               <button type="submit">Queue</button>
             </div>
           </form>
+          <details id="replyDraftDetails" class="task-form optional-instructions pro-only">
+            <summary>Draft a reply to a message</summary>
+            <p class="help-note">Paste a message you received (email, chat, etc.). The companion drafts a reply; you review and edit it, then it's sent from your address only after you approve. The worker never gets your account or the send button.</p>
+            <form id="replyDraftForm">
+              <label for="replyDraftMessage">Message you received</label>
+              <textarea id="replyDraftMessage" rows="4" placeholder="Paste the message to reply to" required></textarea>
+              <div class="form-row">
+                <input id="replyDraftTo" type="email" placeholder="Reply to (email address)" required>
+                <input id="replyDraftSubject" type="text" maxlength="300" placeholder="Subject (optional)">
+              </div>
+              <label for="replyDraftGuidance">Guidance (optional)</label>
+              <input id="replyDraftGuidance" type="text" maxlength="500" placeholder="e.g. keep it short and say yes">
+              <button type="submit">Draft reply</button>
+              <p id="replyDraftStatus" class="form-status" aria-live="polite"></p>
+            </form>
+          </details>
           <div class="panel-toolbar">
             <div class="segmented-control" aria-label="Task filter">
               <button class="segment active" type="button" data-task-filter="open">Open</button>
@@ -650,6 +666,8 @@ The companion should help the user think clearly and act responsibly; it should 
             </button>
           </div>
           <p id="approvalDialogSummary" class="item-body"></p>
+          <label id="approvalEditBodyLabel" for="approvalEditBody" class="hidden">Reply to send (edit before approving)</label>
+          <textarea id="approvalEditBody" rows="7" class="hidden" placeholder="The reply that will be sent from your address"></textarea>
           <label for="approvalDecisionNote">Review note</label>
           <textarea id="approvalDecisionNote" rows="4" placeholder="Optional note or result for the agent"></textarea>
           <label id="approvalGrantLabel" for="approvalGrantScope" class="hidden">Allow this kind of operation</label>

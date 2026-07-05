@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { loadEmailConfig, sendEmail, pollInbox, classifySend } from "./email.mjs";
+import { loadEmailConfig, sendEmail, pollInbox, classifySend, publicEmailConfig } from "./email.mjs";
 import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed } from "./mcp.mjs";
 import { normalizeCadence, describeCadence, computeNextRun, dueSchedules } from "./schedule.mjs";
 
@@ -19,6 +19,9 @@ const notificationConfigPath = path.join(dataDir, "notifications.json");
 const localSettingsPath = path.join(dataDir, "local-settings.json");
 const githubConfigPath = path.join(dataDir, "github.json");
 const agentEmailConfigPath = path.join(dataDir, "agent-email.json");
+// Operator SEND connector: sends replies from YOUR address after your approval. Separate from the
+// companion's own mailbox; ideally a send-only credential (SMTP), never on the worker.
+const operatorEmailConfigPath = path.join(dataDir, "operator-email.json");
 const mcpConfigPath = path.join(dataDir, "mcp.json");
 const companionAnchorPath = path.join(__dirname, "COMPANION-ANCHOR.md");
 const contextFilesDir = path.join(dataDir, "context-files");
@@ -533,7 +536,8 @@ async function handleApi(req, res, url) {
       llm: publicLlmConfig(llm),
       notifications: publicNotificationConfig(notifications),
       github: publicGithubConfig(github),
-      mcp: publicMcpConfig(await loadMcpConfig(mcpConfigPath))
+      mcp: publicMcpConfig(await loadMcpConfig(mcpConfigPath)),
+      operatorEmail: publicEmailConfig(await loadEmailConfig(operatorEmailConfigPath, {}))
     });
     return;
   }
@@ -1008,6 +1012,11 @@ async function handleApi(req, res, url) {
       subGoalIndex: 0,
       stepCount: 0,
       loopStatus: "idle",
+      // "Draft a reply" composer: when replyTo is set, the worker drafts a reply to the pasted
+      // (untrusted) message and files an external_contact/approved_connector approval; the host
+      // sends from your address only after you approve. The worker never gets your send credential.
+      replyTo: cleanText(body.replyTo || "", 320),
+      replySubject: cleanText(body.replySubject || "", 300),
       createdAt: now,
       updatedAt: now
     };
@@ -1204,6 +1213,9 @@ async function handleApi(req, res, url) {
       subject: cleanText(body.subject || "", 300),
       contactPurpose: cleanText(body.contactPurpose || body.purpose || "", 1000),
       bodyPreview: cleanText(body.bodyPreview || "", 2000),
+      // The full reply body the host would send when sendMode is "approved_connector" (draft from
+      // the worker; the operator can edit it before approving). bodyPreview stays a short preview.
+      contactBody: cleanText(body.contactBody || body.bodyPreview || "", 20000),
       attachments: cleanTextArray(body.attachments, 8, 240),
       sendMode: cleanChoice(body.sendMode, contactSendModes, "manual"),
       allowedDomains: cleanTextArray(body.allowedDomains, 12, 120),
@@ -1316,6 +1328,11 @@ async function handleApi(req, res, url) {
       });
       db.contextItems.unshift(contextItem);
       db.events.unshift(event("context.answer.saved", "operator", contextItem.id, contextItem.title));
+    }
+    // Operator can edit an approved_connector reply draft before it's sent (you rarely send an AI
+    // draft verbatim). The host will send exactly this edited body.
+    if (approval.type === "external_contact" && body.editedBody !== undefined) {
+      approval.contactBody = cleanText(body.editedBody, 20000);
     }
     // "Allow this session / always": on approval, optionally record an operation grant so the same
     // typed operation auto-approves next time (Claude-Code-style allowlist). Only grantable for
@@ -2506,6 +2523,32 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
       approval.decisionReason = "MCP tool call failed; operator review required.";
       approval.responseNote = `MCP tool call failed: ${cleanText(error.message, 1500)}`;
       db.events.unshift(event("mcp.tool.failed", actor, approval.id, `${approval.mcpServer}/${approval.mcpTool}`));
+    }
+  }
+  if (approval.type === "external_contact" && approval.sendMode === "approved_connector") {
+    // Host-brokered send from YOUR address, after your explicit approval. The worker only ever
+    // drafted this; the send credential lives here on the trusted host. WYSIWYG: send exactly the
+    // (possibly operator-edited) body that was approved.
+    const to = String(approval.recipient || "").trim().toLowerCase();
+    const bodyText = cleanText(approval.contactBody || approval.bodyPreview || "", 20000);
+    if (to.includes("@") && bodyText) {
+      try {
+        const config = await loadEmailConfig(operatorEmailConfigPath, {});
+        if (!config.enabled) {
+          throw new Error("Operator send connector is not configured on the host (data/operator-email.json).");
+        }
+        const subject = cleanText(approval.subject || "", 300);
+        const result = await sendEmail(config, { to, subject, body: bodyText });
+        approval.emailSentAt = new Date().toISOString();
+        approval.responseNote = `Sent from your address (${config.fromAddress || "operator connector"}) to ${to}. ${approval.responseNote || ""}`.trim();
+        db.emailLog.unshift({ id: newId("elog"), to, subject, at: approval.emailSentAt, approvalId: approval.id, connector: "operator" });
+        db.events.unshift(event("operator.email.sent", actor, result.id || approval.id, `${to}: ${subject}`.slice(0, 200)));
+      } catch (error) {
+        approval.status = "pending";
+        approval.decisionReason = "Operator send failed; review required.";
+        approval.responseNote = `Send from your address failed: ${cleanText(error.message, 500)}. ${approval.responseNote || ""}`.trim();
+        db.events.unshift(event("operator.email.send.failed", actor, approval.id, cleanText(error.message, 300)));
+      }
     }
   }
 }

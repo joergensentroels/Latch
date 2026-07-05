@@ -509,4 +509,34 @@ assert any(p[0] == "/api/tasks/task_loop_2" and p[1].get("status") == "paused" f
 
 Path(_lb.state_path).unlink()
 
+# --- Draft-a-reply (operator send connector): worker drafts, files approved_connector approval ---
+_cr = bridge.Bridge(argparse.Namespace(state_path=str(Path(tempfile.gettempdir()) / "latch-test-reply-state.json"), worker_name="test"))
+if Path(_cr.state_path).exists():
+    Path(_cr.state_path).unlink()
+_cr.ask_llm = lambda messages, **k: "Sure, Tuesday works."
+_cr.report = lambda text, task_id="", channel="": None
+_cr_approvals = []
+
+
+def _cr_request(method, path, body=None):
+    if path == "/api/approvals":
+        _cr_approvals.append(body)
+        return {"id": "appr_reply"}
+    if path.startswith("/api/tasks/"):
+        return {"ok": True}
+    return {}
+
+
+_cr.request_json = _cr_request
+_cr.draft_connector_reply(
+    {"id": "task_reply", "title": "Reply to bob@example.com", "details": "Are you free Tuesday?", "replySubject": "Re: meeting"},
+    "bob@example.com", {}, "operations", "local", False,
+)
+assert len(_cr_approvals) == 1, _cr_approvals
+_reply_appr = _cr_approvals[0]
+assert _reply_appr["type"] == "external_contact" and _reply_appr["sendMode"] == "approved_connector", _reply_appr
+assert _reply_appr["recipient"] == "bob@example.com", _reply_appr
+assert "Tuesday" in _reply_appr["contactBody"], _reply_appr
+Path(_cr.state_path).unlink(missing_ok=True)
+
 print("Worker read-only template tests passed.")

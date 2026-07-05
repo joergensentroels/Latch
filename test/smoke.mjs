@@ -26,6 +26,14 @@ await writeFile(path.join(dataDir, "mcp.json"), JSON.stringify({
     }
   ]
 }));
+
+// Operator SEND connector (personal-reply sends). Mock transport so no network is used.
+await writeFile(path.join(dataDir, "operator-email.json"), JSON.stringify({
+  enabled: true,
+  transport: "mock",
+  fromAddress: "you@example.com",
+  fromName: "You"
+}));
 const port = String(19000 + Math.floor(Math.random() * 1000));
 const baseUrl = `http://127.0.0.1:${port}`;
 const operatorToken = "op_test_operator";
@@ -917,6 +925,40 @@ try {
   });
   assert(research3.status === "pending", "revoking a grant restores human review");
   await request("/api/autonomy", { method: "PATCH", headers: operatorHeaders, body: { mode: "full_access" } });
+
+  // --- Operator send connector: draft a reply -> approve -> host sends from YOUR address ---
+  const replyTask = await request("/api/tasks", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { goal: "Draft a reply", details: "Are you free Tuesday?", replyTo: "bob@example.com", replySubject: "Re: meeting" }
+  });
+  assert(replyTask.replyTo === "bob@example.com" && replyTask.replySubject === "Re: meeting", "reply-draft task stores the connector recipient/subject");
+
+  // The worker would file this after drafting; it must NEVER auto-approve (operator-identity send),
+  // even under full access, and the host sends the exact operator-edited body on approval.
+  const replyDraft = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "external_contact",
+      title: "Reply to bob@example.com",
+      details: "Drafted reply",
+      riskLevel: "low",
+      recipient: "bob@example.com",
+      subject: "Re: meeting",
+      sendMode: "approved_connector",
+      bodyPreview: "Sure, Tuesday works.",
+      contactBody: "Sure, Tuesday works."
+    }
+  });
+  assert(replyDraft.status === "pending", "an approved_connector reply must never auto-approve, even under full access");
+  const sentReply = await request(`/api/approvals/${replyDraft.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved", editedBody: "Hi Bob, yes — Tuesday at 2pm works. See you then." }
+  });
+  assert(sentReply.status === "approved" && sentReply.emailSentAt, "approving an approved_connector reply sends it via the operator connector");
+  assert(sentReply.contactBody.includes("Tuesday at 2pm"), "the host sends the operator-edited body (WYSIWYG)");
 
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",

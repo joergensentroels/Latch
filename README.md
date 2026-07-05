@@ -235,6 +235,10 @@ Repository creation is still supported with `github_repo`, but it requires broad
 
 Latch can act as an approval-gating **MCP host**: the trusted host connects to configured MCP servers (each holding its own credentials in `data\mcp.json`), and the worker can only *request* a tool call. The request becomes an `mcp_tool_call` approval; the host runs the tool after approval and returns the result. The worker never sees MCP server credentials. Copy [`mcp.example.json`](./mcp.example.json) to `data\mcp.json` to enable it. Full details in [MCP.md](./MCP.md).
 
+## Draft replies to your messages
+
+The companion can draft replies to your *personal* messages without touching your accounts: you paste the message (**Tasks → Draft a reply to a message**), it suggests a reply, you review/edit, and the trusted host sends it from your address only after you approve — the worker never holds your credentials or the send button. Setup: copy [`operator-email.example.json`](./operator-email.example.json) to `data/operator-email.json` (a send-only SMTP key is enough). Details in [DRAFT-REPLIES.md](./DRAFT-REPLIES.md).
+
 ## Scheduled tasks
 
 Compass can run instructions on a schedule (daily, weekly, or every N minutes). Each run queues a normal task that flows through the usual approval pipeline — scheduling adds no new powers, it just queues work for you. Manage schedules in **Settings → Automation → Scheduled tasks**. Full details in [SCHEDULING.md](./SCHEDULING.md).
