@@ -154,6 +154,8 @@ const approvalDialogEyebrow = document.querySelector("#approvalDialogEyebrow");
 const approvalDialogTitle = document.querySelector("#approvalDialogTitle");
 const approvalDialogSummary = document.querySelector("#approvalDialogSummary");
 const approvalDecisionNote = document.querySelector("#approvalDecisionNote");
+const approvalEditBody = document.querySelector("#approvalEditBody");
+const approvalEditBodyLabel = document.querySelector("#approvalEditBodyLabel");
 const approvalGrantScope = document.querySelector("#approvalGrantScope");
 const approvalGrantLabel = document.querySelector("#approvalGrantLabel");
 const approvalDecisionSubmit = document.querySelector("#approvalDecisionSubmit");
@@ -432,6 +434,36 @@ subGoalRows?.addEventListener("click", (event) => {
 // Seed one row the first time the section is opened, so the default depth is visible.
 taskAutonomyDetails?.addEventListener("toggle", () => {
   if (taskAutonomyDetails.open && subGoalRows && !subGoalRows.children.length) addSubGoalRow();
+});
+
+document.querySelector("#replyDraftForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = document.querySelector("#replyDraftMessage")?.value.trim();
+  const replyTo = document.querySelector("#replyDraftTo")?.value.trim();
+  if (!message || !replyTo) return;
+  const subject = document.querySelector("#replyDraftSubject")?.value.trim() || "";
+  const guidance = document.querySelector("#replyDraftGuidance")?.value.trim() || "";
+  const status = document.querySelector("#replyDraftStatus");
+  setFormStatus(status, "Asking the companion to draft a reply...", "");
+  try {
+    await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        goal: `Draft a reply to a message from ${replyTo}`,
+        details: guidance ? `${message}\n\nGuidance: ${guidance}` : message,
+        replyTo,
+        replySubject: subject
+      })
+    });
+    ["#replyDraftMessage", "#replyDraftTo", "#replyDraftSubject", "#replyDraftGuidance"].forEach((sel) => {
+      const el = document.querySelector(sel);
+      if (el) el.value = "";
+    });
+    setFormStatus(status, "Queued — the draft will appear in Review for your approval.", "success");
+    await refresh();
+  } catch (error) {
+    setFormStatus(status, `Could not queue: ${error.message}`, "error");
+  }
 });
 
 contactDraftForm.addEventListener("submit", async (event) => {
@@ -1952,6 +1984,13 @@ function openApprovalDialog(approvalId, status) {
   approvalDecisionSubmit.textContent = isApproved ? "Save" : "Save";
   approvalDecisionSubmit.classList.toggle("danger-button", !isApproved);
   approvalDecisionSubmit.classList.toggle("action-button", isApproved);
+  // Editable reply body for an operator-connector send: you review/edit exactly what will be sent.
+  const editableReply = isApproved && approval.type === "external_contact" && approval.sendMode === "approved_connector";
+  if (approvalEditBody && approvalEditBodyLabel) {
+    approvalEditBody.value = editableReply ? (approval.contactBody || approval.bodyPreview || "") : "";
+    approvalEditBody.classList.toggle("hidden", !editableReply);
+    approvalEditBodyLabel.classList.toggle("hidden", !editableReply);
+  }
   // Offer "allow this typed operation" only when approving a grantable operation (host says so).
   const grantable = isApproved && isProMode() && Boolean(approval.grantKey);
   if (approvalGrantScope && approvalGrantLabel) {
@@ -1979,11 +2018,13 @@ async function submitApprovalDecision(event) {
     const grantScope = status === "approved" && approvalGrantScope && !approvalGrantScope.classList.contains("hidden")
       ? approvalGrantScope.value
       : "once";
+    const editingReply = approvalEditBody && !approvalEditBody.classList.contains("hidden");
     await api(approvalApiPath(`/${approval.id}`), {
       method: "PATCH",
       body: JSON.stringify({
         status,
         note: approvalDecisionNote.value.trim(),
+        ...(editingReply ? { editedBody: approvalEditBody.value } : {}),
         ...(grantScope === "session" || grantScope === "always" ? { grant: grantScope } : {})
       })
     });
