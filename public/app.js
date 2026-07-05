@@ -1,6 +1,6 @@
 const tabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings"];
-const simpleTabs = ["inbox", "tasks", "approvals", "context", "credits", "settings"];
-const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings", "credits"];
+const simpleTabs = ["inbox", "tasks", "approvals", "context", "settings"];
+const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings"];
 const initialParams = new URLSearchParams(location.search);
 // Android/desktop "Share -> Compass" (Web Share Target): shared text arrives here.
 const initialShareText = [initialParams.get("share_text"), initialParams.get("share_title"), initialParams.get("share_url")]
@@ -140,8 +140,8 @@ const exportContextButton = document.querySelector("#exportContextButton");
 const backupStatus = document.querySelector("#backupStatus");
 const connectionDot = document.querySelector("#connectionDot");
 const connectionText = document.querySelector("#connectionText");
+const connectionDotMini = document.querySelector("#connectionDotMini");
 const pendingSummary = document.querySelector("#pendingSummary");
-const creditSummary = document.querySelector("#creditSummary");
 const routeWarning = document.querySelector("#routeWarning");
 const pinDialog = document.querySelector("#pinDialog");
 const pinForm = document.querySelector("#pinForm");
@@ -288,7 +288,7 @@ messageForm.addEventListener("submit", async (event) => {
   if (!text) return;
 
   await withSubmitLock(messageForm, async () => {
-    const routingPreference = isProMode() ? (messageRouting.value || "auto") : "auto";
+    const routingPreference = isProMode() ? (messageRouting.value || "local") : "local";
     const active = activeChannel();
     await api(state.authMode === "user" ? "/api/me/messages" : "/api/messages", {
       method: "POST",
@@ -296,12 +296,12 @@ messageForm.addEventListener("submit", async (event) => {
         text,
         channel: active.id,
         routingPreference,
-        allowNetwork: routingPreference !== "local"
+        allowNetwork: routingPreference === "network"
       })
     });
     messageText.value = "";
     resizeMessageText();
-    messageRouting.value = "auto";
+    messageRouting.value = "local";
     state.forceMessageScrollBottom = true;
     await refresh();
   });
@@ -401,7 +401,7 @@ taskForm.addEventListener("submit", async (event) => {
   }
 
   await withSubmitLock(taskForm, async () => {
-    const routingPreference = isProMode() ? (taskRouting.value || "auto") : "auto";
+    const routingPreference = isProMode() ? (taskRouting.value || "local") : "local";
     const subGoals = isProMode() ? collectSubGoals() : [];
     const task = await api(state.authMode === "user" ? "/api/me/tasks" : "/api/tasks", {
       method: "POST",
@@ -412,7 +412,7 @@ taskForm.addEventListener("submit", async (event) => {
         details: composeTaskDetails(goal, instructions),
         priority: taskPriority.value,
         routingPreference,
-        allowNetwork: routingPreference !== "local",
+        allowNetwork: routingPreference === "network",
         subGoals
       })
     });
@@ -422,7 +422,7 @@ taskForm.addEventListener("submit", async (event) => {
     if (subGoalRows) subGoalRows.innerHTML = "";
     if (taskAutonomyDetails) taskAutonomyDetails.open = false;
     taskPriority.value = "normal";
-    taskRouting.value = "auto";
+    taskRouting.value = "local";
     if (task.channel && isProMode()) {
       state.activeChannel = task.channel;
       localStorage.setItem("latchActiveChannel", state.activeChannel);
@@ -693,12 +693,19 @@ pinCancelButton.addEventListener("click", () => {
 });
 
 lockButton.addEventListener("click", () => {
+  if (!window.confirm("Log out of Compass? You'll need your operator key to sign back in.")) return;
   localStorage.removeItem("latchOperatorToken");
   localStorage.removeItem("latchUserToken");
   localStorage.removeItem("commandCenterToken");
   localStorage.removeItem("latchAuthMode");
   state.token = "";
   showLogin();
+});
+
+// Tapping the slim-header connection dot reveals the full status strip (connection, tasks, LLM,
+// credits) on mobile, where the strip is otherwise collapsed to save space. Tap again to hide.
+connectionDotMini?.addEventListener("click", () => {
+  document.body.classList.toggle("status-expanded");
 });
 
 window.addEventListener("beforeinstallprompt", (event) => {
@@ -1157,23 +1164,19 @@ function isPrivateRoute() {
 }
 
 function renderStatus() {
-  const pendingApprovals = (state.data?.approvals || []).filter((item) => item.status === "pending").length;
-  const openTasks = (state.data?.tasks || []).filter((item) => ["queued", "running", "waiting"].includes(item.status)).length;
   const llmStatus = state.llmConfig?.enabled ? `LLM ${state.llmConfig.model}` : "LLM not set";
+  // Approval and task counts live in the bottom tab badges (see tabBadgeValue); the top strip carries
+  // only the LLM status (primary + your external backup, when configured) alongside the connection
+  // indicator. Credits are hidden until the Latch Network economy exists (gated-credits follow-up).
   if (isProMode()) {
-    pendingSummary.innerHTML = `
-      <span class="status-chip${pendingApprovals > 0 ? " alert" : ""}">${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"}</span>
-      <span class="status-chip">${openTasks} task${openTasks === 1 ? "" : "s"}</span>
-      <span class="status-chip subtle">${escapeHtml(llmStatus)}</span>
-    `;
+    const chips = [`<span class="status-chip subtle">${escapeHtml(llmStatus)}</span>`];
+    if (state.llmConfig?.fallback?.model) {
+      chips.push(`<span class="status-chip subtle">${escapeHtml(`Backup ${state.llmConfig.fallback.model}`)}</span>`);
+    }
+    pendingSummary.innerHTML = chips.join("");
   } else {
-    pendingSummary.innerHTML = `
-      <span class="status-chip${openTasks > 0 ? " alert" : ""}">${openTasks} open task${openTasks === 1 ? "" : "s"}</span>
-      <span class="status-chip subtle">${escapeHtml(friendlyComputeSummary())}</span>
-    `;
+    pendingSummary.innerHTML = `<span class="status-chip subtle">${escapeHtml(friendlyComputeSummary())}</span>`;
   }
-  const balance = creditBalance();
-  creditSummary.textContent = `${balance} credits`;
 }
 
 function creditBalance() {
@@ -1693,11 +1696,12 @@ function titleFromBrief(value) {
 
 function routingLabel(value) {
   const labels = {
-    auto: "Auto routing",
     local: "Local only",
-    network: "Network allowed"
+    backup: "Local + external backup",
+    network: "Latch network",
+    auto: "Auto routing"
   };
-  return labels[value] || "Auto routing";
+  return labels[value] || "Local only";
 }
 
 function composeTaskDetails(goal, instructions) {
@@ -4353,6 +4357,13 @@ function markConnection(isOnline) {
   connectionDot.classList.toggle("online", isOnline);
   connectionDot.classList.toggle("offline", !isOnline);
   connectionText.textContent = isOnline ? "Online" : "Offline";
+  // Mirror onto the slim-header mini dot, and flip the body flag that (on mobile) reveals the full
+  // status strip when offline so a dropped connection is impossible to miss.
+  if (connectionDotMini) {
+    connectionDotMini.classList.toggle("online", isOnline);
+    connectionDotMini.classList.toggle("offline", !isOnline);
+  }
+  document.body.classList.toggle("app-offline", !isOnline);
 }
 
 function formatTime(value) {
