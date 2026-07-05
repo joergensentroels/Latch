@@ -57,4 +57,4 @@ calendar invites:
   sends.
 - Same idea works for any client that can POST to `/api/draft` with the draft key (a shortcut, a
   bookmarklet, a mobile Shortcut). The add-in is just the nicest Outlook wrapper.
-- Not yet tested in a live Outlook client — see [UNVERIFIED-CHANGES.md](./UNVERIFIED-CHANGES.md).
+- Not yet tested in a live Outlook client — see [TESTING-STATUS.md](./TESTING-STATUS.md).
