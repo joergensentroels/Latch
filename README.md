@@ -137,9 +137,11 @@ powershell -ExecutionPolicy Bypass -File .\Test-External-LLM.ps1
 
 See [LLM-PROVIDER.md](./LLM-PROVIDER.md) for the agent endpoint and security notes.
 
-## Latch Network private alpha
+## Latch Network (planned, not yet implemented)
 
-Latch can now coordinate trusted private compute workers. This is a private-alpha worker marketplace: operators create one-time worker invites in Timeline > Latch Network, workers poll Latch over Tailscale/HTTPS, and eligible non-sensitive LLM calls can route to them with internal credits.
+The Latch Network is a **planned** private-alpha worker marketplace and is **not yet implemented** for end users. Its credits/economy UI is gated behind a feature flag (`NETWORK_ENABLED` in [`public/app.js`](./public/app.js)) and is **off by default**, so no credits, balances, or network-billing surfaces are reachable. When the network is actually built, flip `NETWORK_ENABLED` to `true` (or wire it to a config/env value) to restore the full credits experience, and update the descriptions in this README (here and in the "Planned (not yet implemented)" note above) to match.
+
+When enabled, the design is: operators create one-time worker invites in Timeline > Latch Network, workers poll Latch over Tailscale/HTTPS, and eligible non-sensitive LLM calls can route to them with internal credits. The server-side plumbing below is included for reference and testing.
 
 Run a lending worker on a trusted machine with either Ollama or an OpenAI-compatible local endpoint:
 
