@@ -121,6 +121,7 @@ const emptyDb = {
   emailCampaigns: [],
   emailLog: [],
   schedules: [],
+  operationGrants: [],
   users: [],
   sessions: [],
   purchases: [],
@@ -340,11 +341,30 @@ async function preserveUnreadableDb(error) {
   }
 }
 
+// Pick the meta object with the later updatedAt (ties -> the writer's, same value). Prevents a stale
+// concurrent writer from reverting a fresher operator change.
+function newerMetaObject(currentObj, incomingObj) {
+  if (!currentObj) return incomingObj || {};
+  if (!incomingObj) return currentObj;
+  const tCurrent = Date.parse(currentObj.updatedAt || "") || 0;
+  const tIncoming = Date.parse(incomingObj.updatedAt || "") || 0;
+  return tIncoming >= tCurrent ? incomingObj : currentObj;
+}
+
 function mergeConcurrentDb(current, incoming) {
   const merged = incoming;
   const deletedRecords = mergeDeletedRecords(current.meta?.deletedRecords, merged.meta?.deletedRecords);
   const deleted = new Set(deletedRecords);
   merged.meta.deletedRecords = deletedRecords;
+  // db.meta is read-modify-written by several concurrent writers (operator actions, the agent poll,
+  // the planner, the scheduler). Without this, a writer that read meta BEFORE an operator change and
+  // writes AFTER it would clobber the change (autonomy mode, profile, email policy). Keep the version
+  // whose updatedAt is newest per object.
+  merged.meta.autonomyPolicy = newerMetaObject(current.meta?.autonomyPolicy, merged.meta?.autonomyPolicy);
+  merged.meta.agentEmailPolicy = newerMetaObject(current.meta?.agentEmailPolicy, merged.meta?.agentEmailPolicy);
+  merged.meta.agentProfile = newerMetaObject(current.meta?.agentProfile, merged.meta?.agentProfile);
+  // Operation grants are a top-level record collection so create/revoke survive concurrent writes.
+  merged.operationGrants = mergeRecordsById(current.operationGrants, merged.operationGrants, "operationGrants", deleted);
   merged.messages = mergeRecordsById(current.messages, merged.messages, "messages", deleted);
   merged.tasks = mergeRecordsById(current.tasks, merged.tasks, "tasks", deleted);
   merged.approvals = mergeRecordsById(current.approvals, merged.approvals, "approvals", deleted);
@@ -1407,15 +1427,7 @@ async function handleApi(req, res, url) {
     requireOperator(role, res);
     if (res.writableEnded) return;
 
-    const id = url.pathname.split("/").at(-1);
-    const db = await readDb();
-    const before = (db.meta.operationGrants || []).length;
-    db.meta.operationGrants = (db.meta.operationGrants || []).filter((grant) => grant.id !== id);
-    if (db.meta.operationGrants.length !== before) {
-      db.events.unshift(event("operation.grant.revoked", "operator", id, id));
-    }
-    await writeDb(db);
-    sendJson(res, 200, { ok: true, grants: publicGrants(db) });
+    await removeDbItem(res, "operationGrants", url.pathname.split("/").at(-1), "operation.grant.revoked");
     return;
   }
 
@@ -3444,8 +3456,16 @@ function normalizeDb(db) {
   db.meta = db.meta || {};
   db.meta.agentProfile = publicAgentProfile(db.meta.agentProfile);
   db.meta.autonomyPolicy = publicAutonomyPolicy(db.meta.autonomyPolicy);
-  db.meta.operationGrants = Array.isArray(db.meta.operationGrants) ? db.meta.operationGrants : [];
   db.meta.deletedRecords = mergeDeletedRecords([], db.meta.deletedRecords);
+  // Operation grants live in a top-level collection (migrate any left in meta from an earlier build).
+  db.operationGrants = Array.isArray(db.operationGrants) ? db.operationGrants : [];
+  if (Array.isArray(db.meta.operationGrants) && db.meta.operationGrants.length) {
+    const seen = new Set(db.operationGrants.map((grant) => grant.id));
+    for (const grant of db.meta.operationGrants) {
+      if (grant && grant.id && !seen.has(grant.id)) db.operationGrants.push(grant);
+    }
+  }
+  delete db.meta.operationGrants;
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.approvals = Array.isArray(db.approvals) ? db.approvals : [];
@@ -4002,12 +4022,12 @@ function isOperationGranted(db, approval) {
   const key = grantKeyForApproval(approval);
   if (!key) return false;
   const now = Date.now();
-  return (db.meta?.operationGrants || []).some((grant) => grant.key === key && isGrantActive(grant, now));
+  return (db.operationGrants || []).some((grant) => grant.key === key && isGrantActive(grant, now));
 }
 
 function publicGrants(db) {
   const now = Date.now();
-  return (db.meta?.operationGrants || [])
+  return (db.operationGrants || [])
     .filter((grant) => isGrantActive(grant, now))
     .map((grant) => ({
       id: grant.id,
@@ -4024,10 +4044,10 @@ function publicGrants(db) {
 function grantOperationFromApproval(db, approval, scope, actor = "operator") {
   const key = grantKeyForApproval(approval);
   if (!key || !["session", "always"].includes(scope)) return null;
-  db.meta.operationGrants = Array.isArray(db.meta.operationGrants) ? db.meta.operationGrants : [];
+  db.operationGrants = Array.isArray(db.operationGrants) ? db.operationGrants : [];
   const now = new Date();
   const expiresAt = scope === "session" ? new Date(now.getTime() + grantSessionTtlMs).toISOString() : "";
-  const existing = db.meta.operationGrants.find((grant) => grant.key === key);
+  const existing = db.operationGrants.find((grant) => grant.key === key);
   const record = existing || { id: newId("grant"), key, createdAt: now.toISOString() };
   record.label = grantLabelForApproval(approval);
   record.sessionScoped = scope === "session";
@@ -4035,7 +4055,7 @@ function grantOperationFromApproval(db, approval, scope, actor = "operator") {
   record.expiresAt = expiresAt;
   record.createdBy = actor;
   record.updatedAt = now.toISOString();
-  if (!existing) db.meta.operationGrants.unshift(record);
+  if (!existing) db.operationGrants.unshift(record);
   db.events.unshift(event("operation.granted", actor, record.id, `${scope}: ${record.label}`));
   return record;
 }
