@@ -6,8 +6,24 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$env:HOST = if ($env:HOST) { $env:HOST } else { "127.0.0.1" }
 $env:PORT = if ($env:PORT) { $env:PORT } else { "8787" }
+
+# Bind localhost AND the host's Tailscale IP so the OpenClaw worker's bridge (which reaches this
+# host over the tailnet by IP) can poll it. The Tailscale range is tailnet-only, so this is not
+# exposed to the LAN or the internet, and Tailscale permits the traffic without a Windows Firewall
+# rule. If HOSTS/HOST is already set, respect it; otherwise auto-detect the tailnet IP.
+if (-not $env:HOSTS -and -not $env:HOST) {
+    $BindHosts = @("127.0.0.1")
+    try {
+        $TailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+        if (-not (Test-Path -LiteralPath $TailscaleExe)) { $TailscaleExe = "tailscale" }
+        $TsIp = (& $TailscaleExe ip -4 2>$null | Select-Object -First 1)
+        if ($TsIp -and ($TsIp -match '^\d+\.\d+\.\d+\.\d+$')) { $BindHosts += $TsIp.Trim() }
+    } catch { }
+    $env:HOSTS = ($BindHosts -join ",")
+}
+# For the pre-flight probe below, pick a single reachable address.
+$env:HOST = if ($env:HOST) { $env:HOST } else { "127.0.0.1" }
 $BundledNode = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
 $NodeExe = if (Test-Path -LiteralPath $BundledNode) { $BundledNode } else { "node" }
 

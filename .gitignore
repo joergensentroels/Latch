@@ -13,3 +13,4 @@ Desktop.ini
 node_modules/
 __pycache__/
 *.pyc
+outlook-addin/manifest.local.xml
