@@ -119,8 +119,8 @@ const foldedFetch = [
   "a9 OK FETCH completed"
 ].join("\r\n");
 const parsed = parseImapHeaders(foldedFetch);
-assert.ok(/troels\.anker\.joergensen@pdc\.com/.test(parsed.from), "folded From must still expose the address");
-assert.match(extractEmailForTest(parsed.from), /^troels\.anker\.joergensen@pdc\.com$/);
+assert.ok(/jane\.doe@example\.com/.test(parsed.from), "folded From must still expose the address");
+assert.match(extractEmailForTest(parsed.from), /^jane\.doe@example\.com$/);
 assert.equal(parsed.messageId, "<abc123@example.com>", "Message-ID should parse");
 assert.ok(parsed.subject.startsWith("Re: Message from the Compass"), "Subject should parse");
 assert.equal(decodeMimeWords("=?UTF-8?B?SGVsbG8=?="), "Hello", "decodeMimeWords should decode base64 words");
