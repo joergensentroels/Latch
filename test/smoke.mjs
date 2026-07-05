@@ -611,6 +611,15 @@ try {
   assert(poll.contextItems.some((item) => item.id === fileItem.id), "agent poll should keep shared file metadata");
   assert(poll.networkContextItems.some((item) => item.id === networkNote.id), "network context should include network-shared note");
   assert(!poll.networkContextItems.some((item) => item.id === note.id), "network context should exclude ordinary agent-shared note");
+  // Boundary: an UNSHARED context note must not reach the worker at all -- not even its metadata
+  // (title/tags/filename can be sensitive). Bodies were already gated; this checks the metadata too.
+  const privateNote = await request("/api/context/notes", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: { title: "Bank recovery codes", text: "operator-only secret note", category: "security", shareWithAgent: false }
+  });
+  const pollAfterPrivate = await request("/api/agent/poll", { headers: agentHeaders });
+  assert(!pollAfterPrivate.contextItems.some((item) => item.id === privateNote.id), "unshared context must not reach the agent, not even its metadata");
 
   const invite = await request("/api/network/workers", {
     method: "POST",
