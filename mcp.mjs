@@ -16,6 +16,7 @@
 
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_OP_TIMEOUT_MS = 20_000;
@@ -106,6 +107,28 @@ export function isToolAllowed(server, toolName) {
 
 export function isToolAutoApprovable(server, toolName) {
   return (server.autoApprove || []).includes(String(toolName || "").trim());
+}
+
+// Stable JSON stringify: sort object keys recursively so inputSchema key-order variations between
+// server runs don't change the fingerprint. Arrays keep their order (semantically meaningful).
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+}
+
+// Fingerprint the security-relevant, model-visible surface of a tool: its name, its description
+// (the tool-poisoning channel), and its declared inputSchema. A change here means the tool the
+// worker/model now sees is not the tool the operator allowlisted -- so auto-approval must not
+// carry over to the changed definition.
+export function toolFingerprint(tool) {
+  const canonical = stableStringify({
+    name: String(tool?.name || ""),
+    description: String(tool?.description || ""),
+    inputSchema: tool?.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : {}
+  });
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 // ---------------------------------------------------------------------------
