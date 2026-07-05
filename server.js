@@ -35,7 +35,10 @@ const agencyWorkerStaleMs = Number(process.env.LATCH_AGENCY_WORKER_STALE_MS || 1
 const simplePlannerIntervalMs = Number(process.env.LATCH_SIMPLE_PLANNER_INTERVAL_MS || 15_000);
 const defaultNetworkCredits = Number(process.env.LATCH_DEFAULT_NETWORK_CREDITS || 10_000);
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
-const routingPreferences = ["auto", "local", "network"];
+// local = your primary (local) model only; backup = primary then your own external provider on
+// failure; network = the (not-yet-implemented) shared Latch Network. "auto" is accepted as a legacy
+// alias for "backup".
+const routingPreferences = ["local", "backup", "network", "auto"];
 const autonomyModes = ["default_permissions", "auto_review", "auto_browse", "full_access"];
 const workerBackendTypes = ["ollama", "openai-compatible"];
 const networkWorkerStatuses = ["active", "paused"];
@@ -2407,6 +2410,20 @@ async function loadLlmConfig() {
     fileLoaded: Object.keys(fileConfig).length > 0
   };
   config.enabled = Boolean(config.baseUrl && config.model && config.apiKey);
+
+  // Optional fallback provider = the operator's OWN external model (e.g. a hosted API) used when the
+  // primary (local) model fails and the routing preference allows it. Credentials stay on the host,
+  // same as the primary. Configured via a "fallback" block in llm-provider.json or LLM_FALLBACK_* env.
+  const fb = fileConfig.fallback || {};
+  const fallback = {
+    provider: process.env.LLM_FALLBACK_PROVIDER || fb.provider || "openai-compatible",
+    baseUrl: process.env.LLM_FALLBACK_BASE_URL || fb.baseUrl || "",
+    model: process.env.LLM_FALLBACK_MODEL || fb.model || "",
+    apiKey: String(process.env.LLM_FALLBACK_API_KEY || fb.apiKey || "").trim(),
+    timeoutMs: Number(process.env.LLM_FALLBACK_TIMEOUT_MS || fb.timeoutMs || config.timeoutMs)
+  };
+  fallback.enabled = Boolean(fallback.baseUrl && fallback.model && fallback.apiKey);
+  config.fallback = fallback.enabled ? fallback : null;
   return config;
 }
 
@@ -2801,6 +2818,15 @@ function publicLlmConfig(config) {
     fileLoaded: config.fileLoaded,
     configPath: config.configPath,
     endpointMode: "openai-compatible-chat-completions",
+    // The operator's own external fallback model (redacted key), shown in the UI alongside the
+    // primary so both are visible. Null when no fallback is configured.
+    fallback: config.fallback ? {
+      provider: config.fallback.provider,
+      baseUrl: config.fallback.baseUrl,
+      model: config.fallback.model,
+      enabled: true,
+      hasApiKey: true
+    } : null,
     note: "Use /api/llm/chat through Latch to keep the external API key off the OpenClaw machine."
   };
 }
@@ -2949,38 +2975,38 @@ async function callLlmRouter(config, body, role, user = null) {
   const allowNetwork = cleanBoolean(body.allowNetwork, false);
   const messages = normalizeMessages(body);
   const requestedModel = cleanText(body.model || config.model || "", 160);
-  const decision = networkRoutingDecision({
-    body,
-    messages,
-    config,
-    routingPreference,
-    allowNetwork
-  });
+  const fallback = config.fallback && config.fallback.enabled ? config.fallback : null;
+  const decision = networkRoutingDecision({ body, messages, config, routingPreference, allowNetwork });
 
+  // Shared Latch Network path (not implemented yet -> returns no worker; we then fall through to the
+  // operator's own primary/fallback providers).
   if (decision.useNetwork) {
-    const networkResult = await tryNetworkLlm({
-      body,
-      messages,
-      requestedModel,
-      routingPreference,
-      decision,
-      role,
-      user
-    });
+    const networkResult = await tryNetworkLlm({ body, messages, requestedModel, routingPreference, decision, role, user });
     if (networkResult?.ok) return networkResult;
-    if (networkResult && !config.enabled) return networkResult;
+    if (networkResult && !config.enabled && !fallback) return networkResult;
   }
 
-  const localResult = await callExternalLlm(config, body);
+  // Primary (local) provider.
+  let primaryResult;
+  try {
+    primaryResult = await callExternalLlm(config, body);
+  } catch (error) {
+    // Preserve prior behaviour (propagate) when there's nowhere to fall back to.
+    if (routingPreference === "local" || !fallback) throw error;
+    primaryResult = { ok: false, provider: config.provider, model: requestedModel, status: error.statusCode || 500, error: error.message };
+  }
+  if (primaryResult.ok || routingPreference === "local" || !fallback) {
+    return {
+      ...primaryResult,
+      routing: { mode: "local", preference: routingPreference, allowNetwork, reason: decision.reason, usedFallback: false, fallbackFromNetwork: decision.useNetwork || false }
+    };
+  }
+
+  // Fall back to the operator's OWN external provider (its own model + key; credentials stay on host).
+  const fallbackResult = await callExternalLlm(fallback, { ...body, model: fallback.model });
   return {
-    ...localResult,
-    routing: {
-      mode: "local",
-      preference: routingPreference,
-      allowNetwork,
-      reason: decision.reason,
-      fallbackFromNetwork: decision.useNetwork || false
-    }
+    ...fallbackResult,
+    routing: { mode: "backup", preference: routingPreference, allowNetwork, reason: `${decision.reason}; primary_failed`, usedFallback: true, primaryError: primaryResult.error, fallbackFromNetwork: decision.useNetwork || false }
   };
 }
 

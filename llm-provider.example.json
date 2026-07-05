@@ -1,7 +1,14 @@
 {
+  "_comment": "Copy to data/mcp.json's sibling data/llm-provider.json (gitignored). PRIMARY provider is used first — point baseUrl at your local Ollama for a local-first setup. The optional 'fallback' is your OWN external provider (e.g. a hosted API), used only when the primary fails AND the send/task routing isn't 'Local only'. Both API keys stay on this host; the OpenClaw worker never receives them (it calls Latch's /api/llm/chat with the agent key). Set via env instead with LLM_* (primary) and LLM_FALLBACK_* (fallback).",
   "provider": "openai-compatible",
-  "baseUrl": "https://api.openai.com/v1",
-  "model": "replace-with-model-name",
-  "apiKey": "replace-with-api-key",
-  "timeoutMs": 60000
+  "baseUrl": "http://127.0.0.1:11434/v1",
+  "model": "qwen3:14b",
+  "apiKey": "ollama",
+  "timeoutMs": 60000,
+  "fallback": {
+    "provider": "openai-compatible",
+    "baseUrl": "https://api.mistral.ai/v1",
+    "model": "mistral-large-latest",
+    "apiKey": "replace-with-api-key"
+  }
 }

@@ -43,6 +43,33 @@ powershell -ExecutionPolicy Bypass -File .\Test-External-LLM.ps1
 
 If no API key is configured, the test reports that the external LLM is not enabled yet.
 
+## Primary + your own external fallback
+
+You can configure two providers: a **primary** (the flat `provider`/`baseUrl`/`model`/`apiKey`
+fields — point it at your local Ollama for a local-first setup) and an optional **`fallback`** block
+(your OWN external provider, e.g. a hosted API). Both keys stay on this host; the worker never
+receives them.
+
+```jsonc
+{
+  "baseUrl": "http://127.0.0.1:11434/v1", "model": "qwen3:14b", "apiKey": "ollama",
+  "fallback": {
+    "baseUrl": "https://api.mistral.ai/v1", "model": "mistral-large-latest", "apiKey": "..."
+  }
+}
+```
+
+Or via env: `LLM_*` for the primary, `LLM_FALLBACK_*` for the fallback.
+
+The send/task **routing** control chooses how these are used:
+
+- **Local only** — primary model only; never falls back.
+- **Local + external backup** — try the primary; if it fails, use your external fallback.
+- **Latch network** — the shared community-compute network (not yet implemented; shown disabled).
+
+The fallback is only reached when the primary call fails and the routing preference is not
+"Local only". The UI shows both the primary and the fallback model.
+
 ## Agent Call Shape
 
 OpenClaw can call the private gateway with the agent key:
