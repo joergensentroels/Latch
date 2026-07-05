@@ -34,6 +34,13 @@ own mailbox ([AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md#agent-email-agent-owned-mai
 The one secret this places on the host is a send-only key for your address. That's consistent with
 the trust model (the host holds all secrets); a host compromise is a separate, higher bar.
 
+## In Outlook directly
+
+Instead of pasting, you can drive this from a **"Draft with Latch" button inside Outlook** — an
+add-in that reads the message you're viewing, gets a draft from Latch's scoped `/api/draft` endpoint,
+and opens a prefilled reply you send yourself. That path needs **no account credential on Latch at
+all** (Outlook stays the sender). See [OUTLOOK-ADDIN.md](./OUTLOOK-ADDIN.md).
+
 ## Other channels
 
 Email has a clean send path, so it's fully host-brokered. Messenger / WhatsApp have no safe send API,

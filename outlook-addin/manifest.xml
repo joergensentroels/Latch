@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  "Draft with Latch" Outlook add-in.
+
+  BEFORE USE: replace every https://YOUR-LATCH-HOST below with your Latch Tailscale Serve HTTPS URL
+  (e.g. https://yourname.tailXXXX.ts.net). The taskpane and icons are served by Latch from /addin and
+  /icons; Office requires HTTPS, which Tailscale Serve provides. The device running Outlook must be on
+  your tailnet to reach it. Permission is ReadItem only: the add-in reads the message you are viewing
+  and opens a prefilled reply. It never sends; you do.
+
+  Sideload: Outlook (web), Settings, Add-ins, Custom add-ins, Add from file, this manifest.xml.
+-->
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+           xsi:type="MailApp">
+  <Id>b2a7f6d0-4c1e-4a9b-9f2e-1a7c0ade0001</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Latch</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Draft with Latch"/>
+  <Description DefaultValue="Draft a reply with your Compass/Latch companion. Reads the message you're viewing and opens a prefilled reply; you review and send."/>
+  <IconUrl DefaultValue="https://YOUR-LATCH-HOST/icons/icon-192.png"/>
+  <HighResolutionIconUrl DefaultValue="https://YOUR-LATCH-HOST/icons/icon-512.png"/>
+  <SupportUrl DefaultValue="https://YOUR-LATCH-HOST/"/>
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+  <Requirements>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.3"/>
+    </Sets>
+  </Requirements>
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://YOUR-LATCH-HOST/addin/taskpane.html"/>
+        <RequestedHeight>450</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+  <Permissions>ReadItem</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Requirements>
+      <bt:Sets DefaultMinVersion="1.3">
+        <bt:Set Name="Mailbox"/>
+      </bt:Sets>
+    </Requirements>
+    <Hosts>
+      <Host xsi:type="MailHost">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="MessageReadCommandSurface">
+            <OfficeTab id="TabDefault">
+              <Group id="latchGroup">
+                <Label resid="groupLabel"/>
+                <Control xsi:type="Button" id="latchDraftButton">
+                  <Label resid="buttonLabel"/>
+                  <Supertip>
+                    <Title resid="buttonLabel"/>
+                    <Description resid="buttonTip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="icon16"/>
+                    <bt:Image size="32" resid="icon32"/>
+                    <bt:Image size="80" resid="icon80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="taskpaneUrl"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="icon16" DefaultValue="https://YOUR-LATCH-HOST/icons/icon-192.png"/>
+        <bt:Image id="icon32" DefaultValue="https://YOUR-LATCH-HOST/icons/icon-192.png"/>
+        <bt:Image id="icon80" DefaultValue="https://YOUR-LATCH-HOST/icons/icon-512.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="taskpaneUrl" DefaultValue="https://YOUR-LATCH-HOST/addin/taskpane.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="groupLabel" DefaultValue="Latch"/>
+        <bt:String id="buttonLabel" DefaultValue="Draft with Latch"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="buttonTip" DefaultValue="Draft a reply to this message with your Latch companion."/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>
