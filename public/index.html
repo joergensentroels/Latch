@@ -53,14 +53,16 @@
         <header class="topbar">
           <div class="brand-lockup">
             <img src="/icons/icon.svg" alt="" class="brand-mark compact">
-            <div>
-              <p class="eyebrow">powered by Latch</p>
-              <h1>Compass</h1>
-            </div>
+            <h1 class="brand-title">Compass<span class="brand-suffix">powered by Latch</span></h1>
           </div>
           <div class="topbar-actions">
-            <button id="lockButton" class="icon-button" title="Lock" aria-label="Lock">
-              <span aria-hidden="true">L</span>
+            <button class="status-dot status-dot-toggle" id="connectionDotMini" title="Connection — tap for LLM &amp; credits" aria-label="Connection status; tap to show LLM and credits"></button>
+            <button id="lockButton" class="icon-button" title="Log out" aria-label="Log out">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
             </button>
           </div>
         </header>
@@ -70,8 +72,7 @@
             <span class="status-dot" id="connectionDot"></span>
             <span id="connectionText">Checking</span>
           </div>
-          <div id="pendingSummary">0 approvals - 0 tasks</div>
-          <div id="creditSummary" class="credit-summary">0 credits</div>
+          <div id="pendingSummary"></div>
         </section>
 
         <section id="routeWarning" class="route-warning hidden" aria-live="polite">
@@ -179,9 +180,9 @@
               <div id="messagesList" class="chat-list"></div>
               <form id="messageForm" class="composer chat-composer">
                 <select id="messageRouting" class="pro-only-inline" title="Compute routing" aria-label="Compute routing">
-                  <option value="auto">Auto</option>
-                  <option value="local">Local</option>
-                  <option value="network">Allow network</option>
+                  <option value="local">Local only</option>
+                  <option value="backup">Local + external backup</option>
+                  <option value="network" disabled>Latch network (coming soon)</option>
                 </select>
                 <textarea id="messageText" rows="1" placeholder="Message Compass Companion"></textarea>
                 <button type="submit">Send</button>
@@ -211,9 +212,9 @@
             </details>
             <div class="form-row">
               <select id="taskRouting" class="pro-only-inline" title="Compute routing" aria-label="Compute routing">
-                <option value="auto">Auto</option>
-                <option value="local">Local</option>
-                <option value="network">Allow network</option>
+                <option value="local">Local only</option>
+                <option value="backup">Local + external backup</option>
+                <option value="network" disabled>Latch network (coming soon)</option>
               </select>
               <select id="taskPriority">
                 <option value="normal">Normal</option>
