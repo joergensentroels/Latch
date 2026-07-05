@@ -151,7 +151,10 @@
           <div class="chat-shell">
             <aside class="channel-rail pro-only" aria-label="Inbox channels">
               <div class="channel-bar">
-                <div class="channel-heading">Channels</div>
+                <button id="channelCollapse" class="channel-collapse" type="button" aria-expanded="true" aria-controls="channelList" title="Show or hide channels">
+                  <span class="channel-heading">Channels</span>
+                  <span class="channel-collapse-caret" aria-hidden="true">▾</span>
+                </button>
                 <label class="archive-toggle">
                   <input id="showArchivedChannels" type="checkbox">
                   <span>Archived</span>
