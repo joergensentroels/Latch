@@ -6,11 +6,26 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/latch-agent-executor.env
+# Least-privilege (pre-public hardening #5): run as a dedicated NON-ROOT user with an isolated
+# writable area, so an approved-but-wrong plan can't touch the system or other users. The env file
+# (which holds the agent key) is read by systemd as root before dropping privileges, so it stays
+# root-only 0600 even though the process runs unprivileged.
+User=latch-executor
+Group=latch-executor
+Environment=HOME=/var/lib/latch-agent-executor
+# Playwright browsers live in a shared, world-readable path so the non-root user can find them.
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/latch-agent-executor/ms-playwright
 ExecStart=/opt/latch-agent-executor/bin/python /usr/local/bin/latch-agent-executor.py --state-path /var/lib/latch-agent-executor/state.json
 Restart=always
 RestartSec=10
 StateDirectory=latch-agent-executor
 WorkingDirectory=/var/lib/latch-agent-executor/work
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

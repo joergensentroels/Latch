@@ -11,6 +11,7 @@ then verify. This file gets deleted once everything below is confirmed.
 
 ## Commits in this batch
 
+- hardening #3/#4/#5: untrusted inbound-email replies, web-content not auto-shared, non-root executor
 - hardening #1 + #2: CI/hook paths never auto/grant; MCP args validated + constrainable
 - `a533a3e` autonomy recut: auto-approve only host-verified typed operations + operator grants
 - `0d86d67` structured sub-goals (`{text, depth}`)
@@ -48,6 +49,16 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
       even under full access, and isn't offered a grant option; a normal file still does.
 - [ ] **Hardening #2**: an MCP tool call with malformed/extra args (or args violating a configured
       `argConstraints` prefix) is rejected host-side before running.
+- [ ] **Hardening #3**: inbound auto-reply still works for known contacts and doesn't leak internal
+      details / obey instructions embedded in a (test) email.
+- [ ] **Hardening #4**: after a `search_web` execution, the "Web findings" note appears in Context
+      but is NOT shared with the agent (must be manually shared to become agent memory).
+- [ ] **Hardening #5 (RISKIEST — worker redeploy + install re-run)**: after re-running
+      `install-latch-agent-executor.sh`, the executor starts as `latch-executor` (non-root:
+      `systemctl show latch-agent-executor -p User`), a **browser** plan still works (Playwright
+      finds Firefox via `PLAYWRIGHT_BROWSERS_PATH`), and a **shell** plan still runs. Watch for
+      permission errors in `journalctl -u latch-agent-executor` — the non-root + Playwright-path
+      interaction is the most likely thing to need a fix.
 
 ## Known scope limits (by design, not bugs)
 
