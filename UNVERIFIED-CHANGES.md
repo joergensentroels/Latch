@@ -11,6 +11,7 @@ then verify. This file gets deleted once everything below is confirmed.
 
 ## Commits in this batch
 
+- boundary sweep: F6 fix — unshared context metadata no longer reaches the worker (host restart)
 - hardening #3/#4/#5: untrusted inbound-email replies, web-content not auto-shared, non-root executor
 - hardening #1 + #2: CI/hook paths never auto/grant; MCP args validated + constrainable
 - `a533a3e` autonomy recut: auto-approve only host-verified typed operations + operator grants

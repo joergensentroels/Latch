@@ -1553,7 +1553,10 @@ async function handleApi(req, res, url) {
       autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
       agentEmailPolicy: publicAgentEmailPolicy(db.meta.agentEmailPolicy),
       profile: publicAgentProfile(db.meta.agentProfile),
-      contextItems: await agentContextItems(activeItems(db.contextItems).slice(0, 50)),
+      // Only items explicitly shared with the agent reach the worker -- previously the body was
+      // gated but the metadata (title/tags/filename) of ALL context items leaked. Mirror the
+      // network path, which already pre-filters on shareWithNetwork.
+      contextItems: await agentContextItems(activeItems(db.contextItems).filter((item) => item.shareWithAgent).slice(0, 50)),
       networkContextItems: await networkContextItems(activeItems(db.contextItems).filter((item) => item.shareWithNetwork).slice(0, 50)),
       executions: activeItems(db.executions).slice(0, 20),
       mcp: await agentMcpCatalog()
