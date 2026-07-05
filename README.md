@@ -16,11 +16,11 @@ Naming:
 Product tiers:
 
 - **Chat-only**: conversation only.
-- **Compass Simple**: durable memory, goals, task queue, approvals, continuity, history, and credit-backed stronger reasoning. It does not have direct browser, shell, file, download, or external-action powers.
+- **Compass Simple**: durable memory, goals, task queue, approvals, continuity, and history. It does not have direct browser, shell, file, download, or external-action powers.
 - **Compass Pro/self-hosted**: Compass Simple plus a paired OpenClaw worker for real agency under Latch approvals and audit.
 - **Future hosted Compass**: Compass Simple plus a managed hosted worker using the same scoped worker contract, so nontechnical users do not need to run their own VM.
 
-Credits and Latch Network compute can make reasoning stronger, but they are not an agent runtime. Real action requires a worker somewhere: self-hosted, community-operated, or future hosted.
+**Planned (not yet implemented):** a *Latch Network* — shared, credit-metered compute contributed by community nodes. The credits/economy UI is disabled for now because the network doesn't exist yet; it will return when the network does. Either way, credits are not an agent runtime — real action always requires a worker somewhere (self-hosted, community-operated, or future hosted).
 
 > ⚠️ **Security first.** Latch is designed so the worker running your AI agent never holds your credentials — but it is still early software. Do not expose it beyond localhost or your private Tailscale network before reading [SECURITY.md](./SECURITY.md), and don't run "Full auto" autonomy against anything you can't afford to lose. Found a vulnerability? See [Reporting a Vulnerability](./SECURITY.md#reporting-a-vulnerability).
 

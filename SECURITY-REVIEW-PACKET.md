@@ -23,8 +23,8 @@ OpenClaw should inspect source through its VM-local read-only checkout. It shoul
 | LLM gateway calls | Enabled through Latch, provider key stays on Windows |
 | Read-only diagnostics | Approval-gated named templates only |
 | Exact-URL web research | Approval-gated, public URLs only |
-| External contact | Draft/manual only |
-| Email sending | Disabled |
+| External contact | Host-brokered; first contact to a new recipient requires operator approval |
+| Email sending | Host-brokered via approval; SMTP/IMAP credentials stay on the host, the worker never holds them |
 | Browser automation | Full-access executor gated |
 | Arbitrary shell commands | Full-access executor gated |
 | Write/system commands | Full-access executor gated |
