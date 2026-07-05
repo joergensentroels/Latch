@@ -980,6 +980,15 @@ try {
   assert(revealedKey.key === draftToken, "operator can reveal the draft key");
   await expectStatus("/api/draft-key", { headers: agentHeaders }, 403);
 
+  // Generalized assist (summarize/action_items/rewrite) shares the scoped draft token.
+  const summarize = await request("/api/assist", {
+    method: "POST",
+    headers: draftHeaders,
+    body: { mode: "summarize", message: "Email 1: can we meet Tuesday?\nEmail 2: also please send the report." }
+  });
+  assert(summarize.ok && summarize.mode === "summarize" && typeof summarize.output === "string" && summarize.output.length > 0, "assist summarize returns output");
+  await expectStatus("/api/assist", { method: "POST", headers: operatorHeaders }, 401);
+
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
