@@ -41,6 +41,29 @@ add-in that reads the message you're viewing, gets a draft from Latch's scoped `
 and opens a prefilled reply you send yourself. That path needs **no account credential on Latch at
 all** (Outlook stays the sender). See [OUTLOOK-ADDIN.md](./OUTLOOK-ADDIN.md).
 
+## On your phone (Android)
+
+Two ways, both work from any app's Share button:
+
+**A. Share → Compass (no extra app).** The Compass PWA registers as an Android share target. In any
+app (Gmail, Outlook, Messenger, SMS…), select the message → **Share → Compass**. Compass opens with
+the text already in the *Draft a reply* composer — add the reply-to address and get a draft, review,
+and (if the operator send connector is set up) send, or copy it. Requires the Compass PWA installed
+and Tailscale up on the phone (as you already have).
+
+**B. Instant draft with the [HTTP Shortcuts](https://http-shortcuts.rmy.ch/) app (fastest).** For a
+"just give me a draft to paste" flow that doesn't open Compass:
+1. Install *HTTP Shortcuts* (Play Store / F-Droid, open source).
+2. New shortcut → **POST** `https://<your-tailnet-host>.ts.net/api/draft`.
+3. Header: `Authorization: Bearer <your draft key>` (Settings → Drafting → Draft key → Copy).
+4. Request body (JSON): `{"message": "{{shared_text}}", "guidance": "{{guidance}}"}` — use the app's
+   variables: bind `shared_text` to the share-intent text, and add an optional prompt variable
+   `guidance`.
+5. Enable **"Add to share menu"**, and set the response handling to show/copy `{{response}}` (the
+   `draft` field). Now: select a message anywhere → Share → your shortcut → draft appears → paste.
+
+Both use the scoped draft key, so they can only request drafts — never read, approve, or send.
+
 ## Other channels
 
 Email has a clean send path, so it's fully host-brokered. Messenger / WhatsApp have no safe send API,
