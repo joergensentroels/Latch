@@ -702,9 +702,11 @@ lockButton.addEventListener("click", () => {
   showLogin();
 });
 
-// Tapping the slim-header connection dot reveals the full status strip (connection, tasks, LLM,
-// credits) on mobile, where the strip is otherwise collapsed to save space. Tap again to hide.
-connectionDotMini?.addEventListener("click", () => {
+// Tapping anywhere on the slim header (except the log-out button) reveals the full status strip
+// (connection, tasks, LLM, credits) on mobile, where the strip is otherwise collapsed to save
+// space. Tap again to hide. The whole bar is the target so it's an easy hit, not just the tiny dot.
+document.querySelector(".topbar")?.addEventListener("click", (event) => {
+  if (event.target.closest("#lockButton")) return;
   document.body.classList.toggle("status-expanded");
 });
 
