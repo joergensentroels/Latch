@@ -873,6 +873,15 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // Reveal the scoped drafting key so the operator can paste it into the "Draft with Latch" add-in
+  // (or any client). Operator-only; the key itself only works on /api/draft.
+  if (url.pathname === "/api/draft-key" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+    sendJson(res, 200, { key: auth.draftToken || "" });
+    return;
+  }
+
   if (url.pathname === "/api/mcp/servers" && req.method === "GET") {
     requireOperator(role, res);
     if (res.writableEnded) return;

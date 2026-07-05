@@ -489,6 +489,21 @@ The companion should help the user think clearly and act responsibly; it should 
             <p class="help-note">Typed operations you've allowed to run without asking (from a "session" or "always" approval). Kept only on the trusted host, never on the worker. Arbitrary shell/browser can never be added here.</p>
             <div id="grantList" class="list compact-list"></div>
           </div>
+          <div class="ops-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
+                <p class="eyebrow">Drafting</p>
+                <h2 class="section-title">Draft key</h2>
+              </div>
+              <button id="draftKeyReveal" class="secondary-button compact-button" type="button">Reveal</button>
+            </div>
+            <p class="help-note">Scoped key for the "Draft with Latch" add-in (or any client). It works only on <code>/api/draft</code> — it can't read state, approve, or send. See <a href="https://github.com/joergensentroels/Latch/blob/main/OUTLOOK-ADDIN.md" target="_blank" rel="noopener noreferrer">OUTLOOK-ADDIN.md</a>.</p>
+            <div class="form-row">
+              <input id="draftKeyValue" type="text" readonly value="••••••••••••••••" aria-label="Draft key">
+              <button id="draftKeyCopy" class="secondary-button" type="button">Copy</button>
+            </div>
+            <p id="draftKeyStatus" class="form-status" aria-live="polite"></p>
+          </div>
           <form id="agentEmailForm" class="ops-panel autonomy-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>

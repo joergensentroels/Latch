@@ -190,6 +190,10 @@ const scheduleDayOfWeek = document.querySelector("#scheduleDayOfWeek");
 const scheduleList = document.querySelector("#scheduleList");
 const scheduleStatus = document.querySelector("#scheduleStatus");
 const grantList = document.querySelector("#grantList");
+const draftKeyReveal = document.querySelector("#draftKeyReveal");
+const draftKeyCopy = document.querySelector("#draftKeyCopy");
+const draftKeyValue = document.querySelector("#draftKeyValue");
+const draftKeyStatus = document.querySelector("#draftKeyStatus");
 const capabilityGrid = document.querySelector("#capabilityGrid");
 const userTierList = document.querySelector("#userTierList");
 const securityChecklist = document.querySelector("#securityChecklist");
@@ -2849,6 +2853,37 @@ function renderGrants() {
     </article>
   `).join("");
 }
+
+async function fetchDraftKey() {
+  const { key } = await api("/api/draft-key");
+  return key || "";
+}
+draftKeyReveal?.addEventListener("click", async () => {
+  try {
+    const revealed = draftKeyValue && !draftKeyValue.dataset.revealed;
+    if (revealed) {
+      draftKeyValue.value = await fetchDraftKey();
+      draftKeyValue.dataset.revealed = "1";
+      draftKeyReveal.textContent = "Hide";
+      setFormStatus(draftKeyStatus, "", "");
+    } else if (draftKeyValue) {
+      draftKeyValue.value = "••••••••••••••••";
+      delete draftKeyValue.dataset.revealed;
+      draftKeyReveal.textContent = "Reveal";
+    }
+  } catch (error) {
+    setFormStatus(draftKeyStatus, `Could not load key: ${error.message}`, "error");
+  }
+});
+draftKeyCopy?.addEventListener("click", async () => {
+  try {
+    const key = await fetchDraftKey();
+    await navigator.clipboard.writeText(key);
+    setFormStatus(draftKeyStatus, "Draft key copied.", "success");
+  } catch (error) {
+    setFormStatus(draftKeyStatus, `Could not copy: ${error.message}`, "error");
+  }
+});
 
 grantList?.addEventListener("click", async (event) => {
   const id = event.target.closest("[data-grant-revoke]")?.dataset.grantRevoke;
