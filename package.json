@@ -19,6 +19,6 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node test/secret-scan.mjs && node test/run-python-tests.mjs && node test/agent-email.mjs && node test/mcp.mjs && node test/mcp-fingerprint.mjs && node test/schedule.mjs && node test/smoke.mjs"
+    "test": "node test/secret-scan.mjs && node test/run-python-tests.mjs && node test/agent-email.mjs && node test/mcp.mjs && node test/mcp-fingerprint.mjs && node test/llm-fallback.mjs && node test/schedule.mjs && node test/smoke.mjs"
   }
 }
