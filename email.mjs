@@ -23,7 +23,9 @@ import tls from "node:tls";
 export async function loadEmailConfig(configPath, env = process.env) {
   let fileConfig = {};
   try {
-    fileConfig = JSON.parse(await readFile(configPath, "utf8"));
+    // Strip a UTF-8 BOM if present: PowerShell 5.1's `Set-Content -Encoding UTF8` prepends one,
+    // and JSON.parse rejects it. Being tolerant here keeps script-written configs loadable.
+    fileConfig = JSON.parse((await readFile(configPath, "utf8")).replace(/^﻿/, ""));
   } catch {
     fileConfig = {};
   }
@@ -60,11 +62,18 @@ export async function loadEmailConfig(configPath, env = process.env) {
     ? !["0", "false", "no", ""].includes(String(env.AGENT_EMAIL_ENABLED).toLowerCase())
     : Boolean(fileConfig.enabled);
 
-  // mock is usable as soon as it's enabled + has a from address; smtp_imap needs real hosts/creds.
+  // mock:      usable as soon as it's enabled + has a from address (no-network dry run).
+  // smtp:      send-only connector (needs SMTP creds only; never reads an inbox). Used by the
+  //            operator send connector — you paste the message to reply to, so no IMAP is needed.
+  // smtp_imap: send + read (needs both SMTP and IMAP creds). Used by the agent's own mailbox.
   const hasSmtp = Boolean(config.smtp.host && config.smtp.user && config.smtp.pass);
   const hasImap = Boolean(config.imap.host && config.imap.user && config.imap.pass);
-  config.enabled = enabledFlag && Boolean(config.fromAddress) &&
-    (config.transport === "mock" || (hasSmtp && hasImap));
+  const credsReady = config.transport === "mock"
+    ? true
+    : config.transport === "smtp"
+      ? hasSmtp
+      : (hasSmtp && hasImap);
+  config.enabled = enabledFlag && Boolean(config.fromAddress) && credsReady;
   return config;
 }
 
@@ -360,8 +369,16 @@ function tlsConnect(host, port, timeoutMs) {
       return {
         // SMTP: read until a line begins with the expected 3-digit code (and not a continuation "-").
         async expect(code) {
-          // SMTP final reply line is "<code> ..."; continuations are "<code>-...". Wait for the final.
-          return drainMatching(new RegExp(`^${code} `, "m"));
+          // SMTP final reply line is "<code> ..."; continuations are "<code>-...". Wait for the final
+          // line matching the expected code OR any 4xx/5xx error, so a rejection (e.g. 535 bad
+          // credentials) fails fast with the server's message instead of hanging until timeout.
+          const out = await drainMatching(new RegExp(`^(?:${code} |[45]\\d\\d )`, "m"));
+          const finalLine = out.split(/\r?\n/).filter(Boolean).pop() || "";
+          const got = finalLine.match(/^(\d{3}) /);
+          if (got && Number(got[1]) !== Number(code)) {
+            throw new Error(`SMTP error: ${finalLine.trim().slice(0, 200)}`);
+          }
+          return out;
         },
         async command(line, code) {
           socket.write(line + "\r\n");

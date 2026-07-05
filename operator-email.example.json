@@ -1,7 +1,7 @@
 {
-  "_comment": "Copy to data/operator-email.json (gitignored). This is YOUR personal SEND connector: the trusted host sends replies from YOUR address after you approve them (external_contact / approved_connector). It is SEPARATE from the companion's own mailbox (agent-email.json). The worker never receives these credentials. Prefer a SEND-ONLY app password (SMTP) -- you paste the messages to reply to, so the host does not need to read your inbox. Set transport to 'mock' for a no-network dry run.",
-  "enabled": false,
-  "transport": "smtp_imap",
+  "_comment": "Copy to data/operator-email.json (gitignored). This is YOUR personal SEND connector: the trusted host sends replies from YOUR address after you approve them (external_contact / approved_connector). It is SEPARATE from the companion's own mailbox (agent-email.json). The worker never receives these credentials. Use a SEND-ONLY app password (SMTP) -- you paste the messages to reply to, so the host never reads your inbox and no IMAP is needed. Set transport to 'mock' for a no-network dry run.",
+  "enabled": true,
+  "transport": "smtp",
   "fromAddress": "you@your-domain.example",
   "fromName": "Your Name",
   "smtp": {
