@@ -151,6 +151,44 @@ assert research.seed_urls == ("https://example.com/docs",)
 assert research.max_pages == 5
 assert research.token_budget == 3000
 
+# A bare host/domain the operator explicitly names (no scheme) is trusted intent: it is
+# normalized to an https:// seed URL and its domain is derived, so the run fetches directly
+# instead of falling through to an empty, failed "no approved domains" research run.
+bare_host = bridge.detect_approval_need("Browse a site", "Browse cph.ai and extract the page text.")
+assert bare_host.type == "web_research", f"bare-host browse should route to web_research, got {bare_host and bare_host.type}"
+assert bare_host.seed_urls == ("https://cph.ai",), bare_host.seed_urls
+assert bare_host.allowed_domains == ("cph.ai",), bare_host.allowed_domains
+
+# A bare host with a path keeps the path when normalized.
+bare_host_path = bridge.detect_approval_need("Browse", "Please browse example.com/pricing and summarize it.")
+assert bare_host_path.seed_urls == ("https://example.com/pricing",), bare_host_path.seed_urls
+assert bare_host_path.allowed_domains == ("example.com",), bare_host_path.allowed_domains
+
+# Guard against false positives: dotted tokens that are not domains (version numbers, file
+# names, email addresses, abbreviations) must NOT be treated as seed URLs.
+assert bridge.extract_bare_hosts("Bump to version 1.2.3 today") == (), "version numbers are not domains"
+assert bridge.extract_bare_hosts("Read the file notes.txt for details") == (), "file names are not domains"
+assert bridge.extract_bare_hosts("Update README.md and config.py") == (), "code file names are not domains"
+assert bridge.extract_bare_hosts("Handle edge cases, e.g. empty input") == (), "abbreviations are not domains"
+assert bridge.extract_bare_hosts("Email reviewer@example.com about it") == (), "email domains are not seed URLs"
+assert bridge.extract_bare_hosts("See https://example.com/docs") == (), "schemed URLs are handled by extract_urls, not double-counted"
+# A plain bare host with no web verb still isn't misrouted: detect_web_research only fires on a
+# browse/research phrase, so a filename-like task never becomes a web_research run.
+no_verb = bridge.detect_approval_need("Notes", "Read the file notes.txt and summarize it.")
+assert no_verb is None or no_verb.type != "web_research", f"a non-browse task must not become web_research, got {no_verb and no_verb.type}"
+
+# The SSRF guard still applies to bare-host seeds once approved: a bare host resolving to a
+# private/local address (or outside the approved domain) is rejected before any fetch.
+for _url, _domains in (
+    ("https://cph.ai/page", ["example.com"]),  # outside approved domain
+    ("https://localhost/page", ["localhost"]),  # local hostname
+):
+    try:
+        bridge.validate_research_url(_url, _domains)
+        raise AssertionError(f"bare-host seed bypassed the SSRF/domain guard: {_url}")
+    except RuntimeError:
+        pass
+
 open_search = bridge.detect_approval_need(
     "Inbox instruction",
     "Can you Google Jane Doe working at Example Corp and write down in your context what you learn about me?",

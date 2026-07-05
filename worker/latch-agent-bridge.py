@@ -1919,8 +1919,10 @@ def detect_web_research(title: str, details: str) -> ApprovalNeed | None:
     )
     if not any(phrase in text for phrase in phrases):
         return None
-    seed_urls = extract_urls(raw)
-    allowed_domains = extract_domains(raw)
+    seed_urls = extract_seed_urls(raw)
+    # Derive the allowed domain list from the resolved seeds (schemed + normalized bare hosts)
+    # so a bare-hostname seed carries its own approved domain instead of an empty list.
+    allowed_domains = extract_domains(" ".join(seed_urls))
     if not seed_urls and is_open_web_search_request(text):
         query = search_query_from_request(raw)
         plan = {
@@ -2212,6 +2214,56 @@ def extract_urls(text: str) -> tuple[str, ...]:
     return tuple(urls[:12])
 
 
+# Plausible top-level domains used to recognize a BARE host/domain (no scheme) as an
+# intended seed URL. Finite by design: an arbitrary dotted token whose final label is
+# not a known TLD - version numbers ("1.2.3"), file names ("notes.txt", "README.md"),
+# abbreviations ("e.g.", "i.e.") - is never mistaken for a domain. Deliberately omits
+# TLDs that collide with common file extensions (md, sh, py, ...) to stay conservative.
+KNOWN_TLDS = frozenset({
+    # generic
+    "com", "org", "net", "io", "ai", "co", "dev", "app", "edu", "gov", "mil",
+    "info", "biz", "me", "xyz", "tech", "cloud", "page", "site", "online",
+    "store", "blog", "news", "live", "media", "world", "systems", "solutions",
+    # country-code
+    "us", "uk", "ca", "de", "fr", "es", "it", "nl", "se", "no", "dk", "fi",
+    "au", "nz", "jp", "cn", "in", "br", "ru", "ch", "at", "be", "pl", "ie",
+    "pt", "gr", "cz", "eu", "kr", "sg", "hk", "za", "mx", "ar", "cl",
+})
+
+
+def extract_bare_hosts(text: str) -> tuple[str, ...]:
+    """Recognize bare host/domain names the operator explicitly named (no scheme), e.g.
+    "browse cph.ai", and normalize them to https:// seed URLs - naming a specific site is
+    trusted intent. Only hosts whose final label is a known TLD (KNOWN_TLDS) are accepted,
+    so version numbers, file names, and abbreviations are not treated as domains. The SSRF
+    guard (validate_research_url / reject_private_host) still runs before any fetch."""
+    pattern = re.compile(
+        # not preceded by a word char, @, ., -, or / so we skip email domains and the host
+        # inside an already-schemed URL (that path is covered by extract_urls).
+        r"(?<![\w@.\-/])"
+        r"((?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})"  # host with labels
+        r"(/[^\s)>\]\"']*)?",  # optional path
+        re.IGNORECASE,
+    )
+    hosts = []
+    for host_match, path_match in pattern.findall(text):
+        host = host_match.lower().strip(".")
+        if host.rsplit(".", 1)[-1] not in KNOWN_TLDS:
+            continue
+        path = (path_match or "").rstrip(".,;:")
+        url = clean(f"https://{host}{path}", 500)
+        if url and url not in hosts:
+            hosts.append(url)
+    return tuple(hosts[:12])
+
+
+def extract_seed_urls(text: str) -> tuple[str, ...]:
+    """Seed URLs an operator named explicitly: full http(s) URLs plus bare host/domain names
+    normalized to https://. Used so that naming a site by bare hostname fetches it directly
+    instead of falling through to an empty, failed research run."""
+    return tuple(ordered_unique(list(extract_urls(text)) + list(extract_bare_hosts(text)))[:12])
+
+
 def guess_subject(text: str) -> str:
     lowered = text.lower()
     if "security" in lowered and "review" in lowered:
@@ -2226,9 +2278,9 @@ def perform_read_only_research(approval: dict, args: argparse.Namespace) -> dict
     question = clean(approval.get("researchQuestion") or approval.get("details") or "", 1000)
     seed_urls = ordered_unique(
         list(approval.get("seedUrls") or [])
-        + list(extract_urls(approval.get("details") or ""))
-        + list(extract_urls(approval.get("researchQuestion") or ""))
-        + list(extract_urls(approval.get("responseNote") or ""))
+        + list(extract_seed_urls(approval.get("details") or ""))
+        + list(extract_seed_urls(approval.get("researchQuestion") or ""))
+        + list(extract_seed_urls(approval.get("responseNote") or ""))
     )[:12]
     allowed_domains = ordered_unique(list(approval.get("allowedDomains") or []) + list(extract_domains(" ".join(seed_urls))))[:12]
     max_pages = clamp_int(approval.get("maxPages"), 1, 5, 3)
