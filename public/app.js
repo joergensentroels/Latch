@@ -366,6 +366,31 @@ showArchivedChannels?.addEventListener("change", () => {
   renderMessages();
 });
 
+// Channels panel behavior on phones: it shows expanded when you enter the Inbox, then collapses to
+// a single "Channels" bar as soon as you start reading (drag-scroll the chat) or focus the composer,
+// giving the conversation the space. Tap the bar to expand again. Desktop always shows the panel.
+const channelCollapse = document.querySelector("#channelCollapse");
+function isNarrowViewport() {
+  return window.matchMedia("(max-width: 759px)").matches;
+}
+function setChannelsCollapsed(collapsed) {
+  document.body.classList.toggle("channels-collapsed", collapsed);
+  if (channelCollapse) channelCollapse.setAttribute("aria-expanded", String(!collapsed));
+}
+function expandChannelsForInbox() {
+  if (isNarrowViewport()) setChannelsCollapsed(false);
+}
+if (channelCollapse) {
+  channelCollapse.addEventListener("click", () => {
+    setChannelsCollapsed(!document.body.classList.contains("channels-collapsed"));
+  });
+  const collapseOnEngage = () => { if (isNarrowViewport()) setChannelsCollapsed(true); };
+  // touchmove (not scroll) so the programmatic auto-scroll-to-latest doesn't count as engagement.
+  lists.messages?.addEventListener("touchmove", collapseOnEngage, { passive: true });
+  messageText?.addEventListener("focus", collapseOnEngage);
+  if (isNarrowViewport() && state.tab === "inbox") setChannelsCollapsed(false);
+}
+
 taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const goal = taskTitle.value.trim();
@@ -1042,6 +1067,7 @@ function openTab(tabId) {
   closeMoreTabs();
   renderTabs();
   renderContextView();
+  if (state.tab === "inbox") expandChannelsForInbox();
 }
 
 function updateRoute(options = {}) {
@@ -1163,44 +1189,56 @@ function friendlyComputeSummary() {
 function maybeNotify() {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
 
-  const candidates = [
-    ...(state.data?.approvals || [])
-      .filter((item) => item.status === "pending")
-      .map((item) => ({
-        id: item.id,
-        title: "Compass needs attention",
-        body: item.type === "human_verification" || item.type === "context_question"
-          ? "Human input is needed. Open Compass to review."
-          : "Approval requested. Open Compass to review.",
-        url: reviewApprovalUrl(item.id)
-      })),
-    ...(state.data?.messages || [])
-      .filter((item) => item.direction === "agent_to_operator")
-      .map((item) => ({
-        id: item.id,
-        title: "Compass Companion update",
-        body: "Open Compass to read the latest update.",
-        url: "/?tab=inbox"
-      }))
-  ];
+  const pendingApprovals = (state.data?.approvals || []).filter((item) => item.status === "pending");
+  const updates = (state.data?.messages || []).filter((item) => item.direction === "agent_to_operator");
+  const everything = [...pendingApprovals, ...updates];
 
   if (!state.notificationBaselineReady) {
-    candidates.forEach((item) => state.seenNotificationIds.add(item.id));
+    everything.forEach((item) => state.seenNotificationIds.add(item.id));
     state.notificationBaselineReady = true;
     saveSeenNotificationIds();
     return;
   }
 
-  candidates.forEach((item) => {
-    if (state.seenNotificationIds.has(item.id)) return;
-    state.seenNotificationIds.add(item.id);
-    showNotification(item.title, {
-      body: item.body,
-      tag: item.id,
-      data: { url: item.url }
-    });
-  });
+  const hasNewApproval = pendingApprovals.some((item) => !state.seenNotificationIds.has(item.id));
+  const newUpdates = updates.filter((item) => !state.seenNotificationIds.has(item.id));
+  everything.forEach((item) => state.seenNotificationIds.add(item.id));
   saveSeenNotificationIds();
+
+  // Coalesce into at most two standing notifications (approvals, updates) rather than one card per
+  // item. A shared tag makes each new notification REPLACE the previous one instead of stacking; the
+  // count lives in the title/body, and renotify re-alerts the device when the count changes.
+  if (hasNewApproval && pendingApprovals.length) {
+    const count = pendingApprovals.length;
+    const first = pendingApprovals[0];
+    const needsInput = first.type === "human_verification" || first.type === "context_question";
+    showNotification(
+      count === 1 ? "Compass needs attention" : `Compass — ${count} items need review`,
+      {
+        body: count === 1
+          ? (needsInput ? "Human input is needed. Open Compass to review." : "Approval requested. Open Compass to review.")
+          : `${count} approvals are waiting. Open Compass to review.`,
+        tag: "compass-approvals",
+        renotify: true,
+        data: { url: count === 1 ? reviewApprovalUrl(first.id) : "/?tab=review" }
+      }
+    );
+  }
+
+  if (newUpdates.length) {
+    const count = newUpdates.length;
+    showNotification(
+      count === 1 ? "Compass Companion update" : `Compass — ${count} new updates`,
+      {
+        body: count === 1
+          ? "Open Compass to read the latest update."
+          : `${count} new updates from Compass. Open to read.`,
+        tag: "compass-updates",
+        renotify: true,
+        data: { url: "/?tab=inbox" }
+      }
+    );
+  }
 }
 
 async function showNotification(title, options = {}) {

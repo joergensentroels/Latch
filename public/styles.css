@@ -513,23 +513,43 @@ button[type="submit"]:hover,
     display: grid;
   }
 
-  .chat-shell {
-    height: auto;
-    grid-template-rows: auto auto;
-    overflow: visible;
-  }
-
-  body.simple-mode .chat-shell {
-    height: calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 88px);
-    overflow: hidden;
-  }
+  /* Chat-shell height + overflow come from the base rule (a clamped 100dvh calc with
+     overflow:hidden), which already produces a single, internally-scrolling message list.
+     Only the mobile-specific channel-rail sizing is overridden here. */
 
   .channel-rail {
-    max-height: 230px;
+    max-height: 210px;
     grid-template-rows: auto minmax(0, 1fr);
     gap: 6px;
     padding: 8px;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* Collapse the Channels panel to just its header bar, giving the conversation the full
+     height. Defaults to collapsed on phones (set in app.js). */
+  .channel-collapse {
+    cursor: pointer;
+  }
+
+  .channel-collapse-caret {
+    display: inline-block;
+    font-size: 0.7rem;
+    color: #b8c3d6;
+    transition: transform 0.15s ease;
+  }
+
+  body.channels-collapsed .channel-collapse-caret {
+    transform: rotate(-90deg);
+  }
+
+  body.channels-collapsed .channel-list,
+  body.channels-collapsed .channel-form {
+    display: none;
+  }
+
+  body.channels-collapsed .channel-rail {
+    grid-template-rows: auto;
+    max-height: none;
   }
 
   .channel-list {
@@ -564,8 +584,10 @@ button[type="submit"]:hover,
   }
 
   .chat-pane {
-    height: calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 126px);
-    min-height: 420px;
+    /* Fill the shell's grid cell instead of forcing an explicit height taller than the cell,
+       which previously made the message list overflow and overlap the composer. */
+    height: auto;
+    min-height: 0;
   }
 
   .chat-list {
@@ -649,7 +671,7 @@ button[type="submit"]:hover,
 
 .chat-shell {
   --channel-rail-width: 260px;
-  height: clamp(420px, calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 118px), 720px);
+  height: clamp(360px, calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom) - 152px), 720px);
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -714,6 +736,24 @@ body.simple-mode .chat-composer {
   font-size: 0.75rem;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+/* The Channels heading doubles as a collapse toggle on mobile (see the max-width media query).
+   On desktop it is a plain, non-interactive label with no caret. */
+.channel-collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+.channel-collapse-caret {
+  display: none;
 }
 
 .archive-toggle {
