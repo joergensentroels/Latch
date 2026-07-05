@@ -138,3 +138,34 @@ host-brokered email boundary.
   (`sudo install ... && systemctl restart latch-agent-executor`).
 - Re-run `node test/smoke.mjs`, `node test/agent-email.mjs`, `node test/secret-scan.mjs` (all green
   as of this review) and, on the worker, `test/executor.py` / `test/worker-ssrf.py`.
+
+---
+
+## Addendum — 2026-07-05 boundary sweep
+
+A follow-up pass enumerated every route's auth guard and each trust domain (operator, agent,
+Compass-Simple user, network worker). The operator/agent split is clean — after the global auth gate
+every route is `requireOperator` or `requireAgent`, except `/api/llm/chat` and `POST /api/approvals`
+which are intentionally reachable by the worker. The user and network-worker feeds are scoped to the
+caller's own records. One real finding:
+
+### F6 — Unshared context metadata leaked to the worker (Low, Fixed)
+
+**Where:** `/api/agent/poll` → `agentContextItems(activeItems(db.contextItems).slice(0, 50))`.
+
+**What:** The item *body* was correctly gated on `shareWithAgent`, but the poll passed **all** active
+context items to `agentContextItems`, so the worker received the **title, tags, category, and
+filename** of context the operator never shared with it. Titles/filenames can themselves be sensitive
+("Bank recovery codes", "salary.pdf"). This contradicted "the worker sees only shared context." The
+network path already pre-filtered on `shareWithNetwork`; the agent path did not — an asymmetry.
+
+**Fix:** the poll now pre-filters to `shareWithAgent` before building the agent context list, mirroring
+the network path. Regression test in `test/smoke.mjs` (an unshared note must not appear in the poll at
+all). Applies on host restart.
+
+**Also reviewed, no change needed:** profile/anchor are operator-only + file-locked; approval
+decisions operator-only; auto-approval is typed-only; the executor runs only approved plans as a
+non-root user; `publicAuthConfig` exposes no secrets; user/network-worker feeds are per-caller scoped.
+(Very-minor notes, not acted on: the network-worker token is matched by hash equality rather than
+`timingSafeEqual` — acceptable since the stored value is already a hash; channel labels are returned
+to signed-in users unfiltered — labels are not secrets.)
