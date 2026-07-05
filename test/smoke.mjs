@@ -975,6 +975,10 @@ try {
   await expectStatus("/api/state", { headers: draftHeaders }, 401);
   await expectStatus("/api/approvals", { method: "POST", headers: draftHeaders }, 401);
   await expectStatus("/api/draft", { method: "POST", headers: operatorHeaders }, 401);
+  // The operator can reveal the draft key (to paste into the add-in); the agent cannot.
+  const revealedKey = await request("/api/draft-key", { headers: operatorHeaders });
+  assert(revealedKey.key === draftToken, "operator can reveal the draft key");
+  await expectStatus("/api/draft-key", { headers: agentHeaders }, 403);
 
   const operatorHttpsBrowserApproval = await request("/api/approvals", {
     method: "POST",
