@@ -38,34 +38,46 @@ function getBodyText() {
   });
 }
 
-async function draftReply() {
+const MODE_LABELS = {
+  reply: "Suggested reply — edit before sending",
+  summarize: "Summary",
+  action_items: "Action items",
+  rewrite: "Rewritten text"
+};
+
+async function run() {
   const key = draftKey();
   if (!key) {
     setStatus("Add your Latch draft key in Settings first.", true);
     el("settings").open = true;
     return;
   }
-  setStatus("Asking Latch to draft a reply…");
+  const mode = el("mode").value;
+  el("replyBtn").style.display = mode === "reply" ? "" : "none";
+  el("draftLabel").textContent = MODE_LABELS[mode] || "Result";
+  setStatus("Working…");
   try {
     const item = Office.context.mailbox.item;
     const from = item.from ? `${item.from.displayName || ""} <${item.from.emailAddress || ""}>`.trim() : "";
     const subject = item.subject || "";
-    const message = await getBodyText();
-    const response = await fetch(`${baseUrl()}/api/draft`, {
+    // Rewrite works on what you've typed in the box; the others work on the email you're reading.
+    const message = mode === "rewrite" ? el("draft").value.trim() : await getBodyText();
+    if (!message) { setStatus(mode === "rewrite" ? "Type something to rewrite first." : "No message content.", true); return; }
+    const response = await fetch(`${baseUrl()}/api/assist`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-      body: JSON.stringify({ message, from, subject, guidance: el("guidance").value.trim() })
+      body: JSON.stringify({ mode, message, from, subject, guidance: el("guidance").value.trim() })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
-      setStatus(`Draft failed: ${data.error || response.status}`, true);
+      setStatus(`Failed: ${data.error || response.status}`, true);
       return;
     }
-    el("draft").value = data.draft || "";
+    el("draft").value = data.output || "";
     lastSubject = data.subject || (subject ? `Re: ${subject}` : "");
-    setStatus("Draft ready — review and edit, then open a reply.");
+    setStatus(mode === "reply" ? "Draft ready — review, then open a reply." : "Done — review or copy.");
   } catch (error) {
-    setStatus(`Draft failed: ${error.message}`, true);
+    setStatus(`Failed: ${error.message}`, true);
   }
 }
 
@@ -92,12 +104,20 @@ function saveSettings() {
   el("settings").open = false;
 }
 
+function onModeChange() {
+  const mode = el("mode").value;
+  el("replyBtn").style.display = mode === "reply" ? "" : "none";
+  el("draftLabel").textContent = MODE_LABELS[mode] || "Result";
+}
+
 Office.onReady(() => {
   loadSettings();
   const item = Office.context.mailbox.item;
   const who = item && item.from ? (item.from.emailAddress || item.from.displayName || "this message") : "this message";
-  el("context").textContent = `Replying to: ${who}`;
-  el("draftBtn").addEventListener("click", draftReply);
+  el("context").textContent = `Message from: ${who}`;
+  onModeChange();
+  el("mode").addEventListener("change", onModeChange);
+  el("runBtn").addEventListener("click", run);
   el("replyBtn").addEventListener("click", openReply);
   el("copyBtn").addEventListener("click", copyDraft);
   el("saveSettings").addEventListener("click", saveSettings);
