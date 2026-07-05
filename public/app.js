@@ -1,6 +1,13 @@
+// Feature flag: the Latch Network (shared, credit-metered community compute) is not built yet.
+// The entire credits/economy + network credit-accounting UI stays behind this flag, OFF by
+// default, so none of it is reachable or rendered in the everyday UI until the network actually
+// exists. Flip NETWORK_ENABLED to true (or wire it to a server config/env value) to restore the
+// full pre-existing credits experience — and when you do, also restore the README's credits /
+// Latch-Network description (currently "planned, not yet implemented").
+const NETWORK_ENABLED = false;
 const tabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings"];
-const simpleTabs = ["inbox", "tasks", "approvals", "context", "settings"];
-const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings"];
+const simpleTabs = ["inbox", "tasks", "approvals", "context", ...(NETWORK_ENABLED ? ["credits"] : []), "settings"];
+const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings", ...(NETWORK_ENABLED ? ["credits"] : [])];
 const initialParams = new URLSearchParams(location.search);
 // Android/desktop "Share -> Compass" (Web Share Target): shared text arrives here.
 const initialShareText = [initialParams.get("share_text"), initialParams.get("share_title"), initialParams.get("share_url")]
@@ -25,6 +32,7 @@ const state = {
   token: localStorage.getItem("latchUserToken") || localStorage.getItem("latchOperatorToken") || localStorage.getItem("commandCenterToken") || "",
   authMode: localStorage.getItem("latchAuthMode") || (localStorage.getItem("latchUserToken") ? "user" : "operator"),
   proMode: localStorage.getItem("latchProMode") === "true",
+  networkEnabled: NETWORK_ENABLED,
   tab: proTabs.includes(initialTab) ? initialTab : "inbox",
   activeChannel: localStorage.getItem("latchActiveChannel") || "compass",
   channelRailWidth: Number(localStorage.getItem("latchChannelRailWidth") || 260),
@@ -1169,15 +1177,18 @@ function renderStatus() {
   const llmStatus = state.llmConfig?.enabled ? `LLM ${state.llmConfig.model}` : "LLM not set";
   // Approval and task counts live in the bottom tab badges (see tabBadgeValue); the top strip carries
   // only the LLM status (primary + your external backup, when configured) alongside the connection
-  // indicator. Credits are hidden until the Latch Network economy exists (gated-credits follow-up).
+  // indicator. The credits balance chip only returns once the Latch Network economy exists
+  // (gated behind NETWORK_ENABLED).
+  const creditsChip = state.networkEnabled ? `<span class="status-chip">${escapeHtml(`${creditBalance()} credits`)}</span>` : "";
   if (isProMode()) {
     const chips = [`<span class="status-chip subtle">${escapeHtml(llmStatus)}</span>`];
     if (state.llmConfig?.fallback?.model) {
       chips.push(`<span class="status-chip subtle">${escapeHtml(`Backup ${state.llmConfig.fallback.model}`)}</span>`);
     }
+    if (creditsChip) chips.push(creditsChip);
     pendingSummary.innerHTML = chips.join("");
   } else {
-    pendingSummary.innerHTML = `<span class="status-chip subtle">${escapeHtml(friendlyComputeSummary())}</span>`;
+    pendingSummary.innerHTML = `<span class="status-chip subtle">${escapeHtml(friendlyComputeSummary())}</span>${creditsChip}`;
   }
 }
 
@@ -1348,7 +1359,7 @@ function tabBadgeValue(tabId) {
   if (tabId === "inbox") return formatTabBadgeValue(unreadChannelCount());
   if (tabId === "tasks") return formatTabBadgeValue(openTaskCount());
   if (tabId === "approvals") return formatTabBadgeValue(pendingApprovalCount());
-  if (tabId === "credits") return creditBalance() <= 0 ? "!" : "";
+  if (state.networkEnabled && tabId === "credits") return creditBalance() <= 0 ? "!" : "";
   return "";
 }
 
@@ -1360,7 +1371,7 @@ function aggregateMoreTabBadge(tabIds) {
 }
 
 function tabBadgeAriaLabel(label, value, tabId) {
-  if (value === "!" && tabId === "credits") return `${label}, no credits left`;
+  if (state.networkEnabled && value === "!" && tabId === "credits") return `${label}, no credits left`;
   if (tabId === "inbox") return `${label}, ${value} unread channel${value === "1" ? "" : "s"}`;
   if (tabId === "tasks") return `${label}, ${value} open task${value === "1" ? "" : "s"}`;
   if (tabId === "approvals") return `${label}, ${value} pending request${value === "1" ? "" : "s"}`;
@@ -1435,7 +1446,7 @@ function renderMessages() {
           <strong>${escapeHtml(message.direction === "operator_to_agent" ? "You" : agentDisplayName())}</strong>
           <span>${formatTime(message.createdAt)}</span>
           ${message.routing ? `<span>${escapeHtml(message.routing.label || routingLabel(message.routingPreference))}</span>` : (isProMode() && message.routingPreference ? `<span>${escapeHtml(routingLabel(message.routingPreference))}</span>` : "")}
-          ${message.routing?.credits ? `<span>${escapeHtml(String(message.routing.credits))} credits</span>` : ""}
+          ${(state.networkEnabled && message.routing?.credits) ? `<span>${escapeHtml(String(message.routing.credits))} credits</span>` : ""}
           ${message.taskId ? `<button class="link-button" data-open-task="${escapeHtml(message.taskId)}" type="button">Task</button>` : ""}
         </div>
         <p>${messageTextMarkup(message)}</p>
@@ -3059,12 +3070,12 @@ function renderNetwork() {
   const activeJobs = jobs.filter((job) => ["queued", "assigned"].includes(job.status)).length;
 
   const cards = [
-    {
+    ...(state.networkEnabled ? [{
       label: "Network Balance",
       value: `${operator?.balance ?? 0} credits`,
       status: (operator?.balance ?? 0) > 0 ? "ok" : "warn",
       note: "Internal private-alpha ledger only"
-    },
+    }] : []),
     {
       label: "Workers",
       value: `${onlineWorkers}/${workers.length} online`,
@@ -3095,7 +3106,9 @@ function renderNetwork() {
   const items = [
     ...workers.map((worker) => ({ kind: "worker", sortTime: worker.lastSeenAt || worker.createdAt, worker })),
     ...jobs.slice(0, 8).map((job) => ({ kind: "job", sortTime: job.updatedAt || job.createdAt, job })),
-    ...groupedLedgerEntriesByDay(entries).slice(0, 6).map((group) => ({ kind: "ledgerDay", sortTime: group.date.toISOString(), group, open: false }))
+    ...(state.networkEnabled
+      ? groupedLedgerEntriesByDay(entries).slice(0, 6).map((group) => ({ kind: "ledgerDay", sortTime: group.date.toISOString(), group, open: false }))
+      : [])
   ].sort((left, right) => String(right.sortTime || "").localeCompare(String(left.sortTime || "")));
 
   renderList(lists.network, items.slice(0, 18), (item) => {
@@ -3120,7 +3133,7 @@ function networkWorkerCard(worker) {
       <div class="meta-row">
         <span class="type-pill network">${escapeHtml(worker.backendType)}</span>
         <span class="item-meta">${escapeHtml((worker.models || []).join(", ") || worker.defaultModel || "model unset")}</span>
-        <span class="item-meta">${escapeHtml(String(worker.inputCreditsPer1k))}/${escapeHtml(String(worker.outputCreditsPer1k))} cr / 1k</span>
+        ${state.networkEnabled ? `<span class="item-meta">${escapeHtml(String(worker.inputCreditsPer1k))}/${escapeHtml(String(worker.outputCreditsPer1k))} cr / 1k</span>` : ""}
       </div>
       <p class="item-body">Last seen ${formatTime(worker.lastSeenAt)}.</p>
       <div class="approval-actions">
@@ -3140,7 +3153,7 @@ function networkJobCard(job) {
       <div class="meta-row">
         <span class="type-pill network">${escapeHtml(job.workerName || job.workerId || "worker")}</span>
         <span class="item-meta">${escapeHtml(job.routingReason || "routed")}</span>
-        <span class="item-meta">${escapeHtml(String(job.chargedCredits || job.reservedCredits || 0))} credits</span>
+        ${state.networkEnabled ? `<span class="item-meta">${escapeHtml(String(job.chargedCredits || job.reservedCredits || 0))} credits</span>` : ""}
       </div>
       ${job.error ? `<p class="approval-advice">${escapeHtml(job.error)}</p>` : `<p class="item-body">${formatTime(job.updatedAt || job.createdAt)}</p>`}
     </article>
@@ -3292,6 +3305,7 @@ async function updateWorkerStatus(id, status) {
 }
 
 function renderCredits() {
+  if (!state.networkEnabled) return;
   if (!creditsGrid || !creditsList) return;
   const balance = creditBalance();
   const purchases = state.data?.purchases || [];
@@ -3420,12 +3434,12 @@ function renderSimpleSettings() {
       status: "ok",
       note: state.authMode === "user" ? "External auth-ready local session." : "Self-hosted operator session."
     },
-    {
+    ...(state.networkEnabled ? [{
       label: "Credits",
       value: `${creditBalance()} credits`,
       status: creditBalance() > 0 ? "ok" : "warn",
       note: "Extra compute uses credits when routing is eligible."
-    },
+    }] : []),
     {
       label: "Simple",
       value: "Durable companion",
