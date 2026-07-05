@@ -19,6 +19,7 @@ then verify. This file gets deleted once everything below is confirmed.
 - `a533a3e` autonomy recut: auto-approve only host-verified typed operations + operator grants
 - `0d86d67` structured sub-goals (`{text, depth}`)
 - `e4b084e` bridge multi-step loop (slice 2, cut 1)
+- `280888d` security(mcp): auto-approval bound to a tool fingerprint (tool-poisoning / rug-pull guard)
 
 (Plus the earlier already-pushed batch — MCP, scheduling, multi-step slice 1, security fixes — which
 is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch section.)
@@ -32,6 +33,8 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
 - Structured sub-goals stored as `{text, depth}` with default fallback + legacy coercion.
 - Bridge loop state machine: kickoff → checkpoint → advance → finish, and deny/stop.
   (`test/worker-readonly-templates.py`)
+- MCP tool fingerprint: stable across `inputSchema` key-order; changes on name/description/inputSchema
+  mutation. (`test/mcp.mjs`)
 
 ## Not yet verified live — check these on the real host + worker
 
@@ -76,6 +79,19 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
       finds Firefox via `PLAYWRIGHT_BROWSERS_PATH`), and a **shell** plan still runs. Watch for
       permission errors in `journalctl -u latch-agent-executor` — the non-root + Playwright-path
       interaction is the most likely thing to need a fix.
+- [ ] **MCP tool-poisoning / rug-pull guard (`280888d`)**: with an MCP server (mock or real) exposing
+      a tool listed in that server's `autoApprove`, under Full access → the first request auto-approves
+      AND records a fingerprint (timeline event `mcp.tool.fingerprint.recorded`). Then change that
+      tool's **description** (or `inputSchema`) at the server and request it again → it must **NOT**
+      auto-approve; it files a human approval (event `mcp.tool.fingerprint.changed`). Also confirm a
+      tool that isn't currently discoverable falls back to a human. Host-side, computed at approval
+      creation → **takes effect on host restart** (no worker redeploy needed).
+- [ ] **Browser `extract_text` trust (static review says safe — spot-confirm)**: reviewed at
+      server.js:3632 (extract_text isn't saved as agent-shared context), bridge:407 (agent-authored
+      report messages aren't re-ingested — `operator_to_agent` only), and the sub-goal loop feeds model
+      summaries not raw page text. Spot-check: a browse-and-`extract_text` task against a page carrying
+      adversarial "instructions" must not trigger any auto-executed follow-on action (all actions stay
+      human-gated). No code change was needed here.
 
 ## Known scope limits (by design, not bugs)
 
