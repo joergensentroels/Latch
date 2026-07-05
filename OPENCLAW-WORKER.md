@@ -114,7 +114,7 @@ Compass autonomy modes can auto-approve some approval cards before the worker se
 
 ## Install The Approved Executor
 
-The executor is a separate root-owned service. It installs Playwright-managed Firefox and runs only approved `executionPlan` records with `executionMode` set to `shell` or `browser`.
+The executor is a separate service that runs as a dedicated **non-root** user (`latch-executor`) with an isolated writable area (`/var/lib/latch-agent-executor`) and systemd hardening (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full`) — least-privilege, so an approved-but-wrong plan can't touch the system or other users. Playwright-managed Firefox is installed to a shared path (`PLAYWRIGHT_BROWSERS_PATH`) the user can read, and it runs only approved `executionPlan` records with `executionMode` set to `shell` or `browser`. (The agent-key env file stays root-only `0600`; systemd injects it before dropping privileges.)
 
 ```bash
 cd /path/to/worker

@@ -1718,9 +1718,12 @@ async function handleApi(req, res, url) {
         title: `Web findings: ${cleanText(sourceApproval.executionPlan?.summary || sourceApproval.title || "Search", 120)}`,
         text: execution.stdout,
         category: sourceApproval.contextCategory || "memory",
-        tags: ["web-search", "execution"],
-        shareWithAgent: true,
-        source: "agent",
+        tags: ["web-search", "execution", "untrusted"],
+        // Hardening: web content is attacker-controllable. Auto-saving it as agent-visible memory is a
+        // stored-injection / memory-poisoning vector, so it is NOT shared with the agent by default --
+        // it's kept for the operator to review and explicitly share if they trust it.
+        shareWithAgent: false,
+        source: "web",
         originApprovalId: sourceApproval.id,
         originTaskId: sourceApproval.taskId || "",
         originMessageId: sourceApproval.messageId || ""
@@ -3805,7 +3808,6 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false, db = nul
     if (research) return auto("bounded public research");
     if (mcpTyped) return auto("operator-listed MCP tool");
     if (isOwnRepoGithubFileApproval(approval) && proEligible) return auto("CompassProjects file update");
-    if (approval.type === "other" && approval.riskLevel === "low" && !approval.sensitive && proEligible) return auto("low-risk request");
     return { decisionMode: "human", reason: "Full access auto-approves typed operations only; arbitrary execution still needs you." };
   }
 

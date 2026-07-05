@@ -1668,6 +1668,13 @@ try {
     }
   });
   assert(browserSearchExecution.executionPlan.actions[0].type === "search_web", "execution audit should store search_web action");
+  // Hardening #4: web content auto-saved as context is untrusted and NOT auto-shared with the agent
+  // (stored-injection / memory-poisoning guard). It's kept for the operator to review.
+  const stateAfterSearch = await request("/api/state", { headers: operatorHeaders });
+  const webNote = stateAfterSearch.contextItems.find((item) => item.originApprovalId === browserSearchApproval.id);
+  assert(webNote, "web findings should be saved for the operator to review");
+  assert(webNote.shareWithAgent === false, "web-derived context must not be auto-shared with the agent");
+  assert(webNote.source === "web" && (webNote.tags || []).includes("untrusted"), "web-derived context is marked untrusted");
 
   await expectStatus("/api/agent/research-results", {
     method: "POST",
