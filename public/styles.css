@@ -535,6 +535,8 @@ button[type="submit"]:hover,
      in only when the connection goes offline (body.app-offline, set by markConnection). */
   .topbar {
     padding: 6px 0 8px;
+    /* The whole header taps to reveal/hide the status strip (handled in app.js). */
+    cursor: pointer;
   }
   .topbar .brand-mark.compact {
     width: 34px;
