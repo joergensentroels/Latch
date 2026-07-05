@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadEmailConfig, sendEmail, pollInbox, classifySend, publicEmailConfig } from "./email.mjs";
-import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed } from "./mcp.mjs";
+import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed, toolFingerprint } from "./mcp.mjs";
 import { normalizeCadence, describeCadence, computeNextRun, dueSchedules } from "./schedule.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -122,6 +122,7 @@ const emptyDb = {
   emailLog: [],
   schedules: [],
   operationGrants: [],
+  mcpToolFingerprints: [],
   users: [],
   sessions: [],
   purchases: [],
@@ -365,6 +366,8 @@ function mergeConcurrentDb(current, incoming) {
   merged.meta.agentProfile = newerMetaObject(current.meta?.agentProfile, merged.meta?.agentProfile);
   // Operation grants are a top-level record collection so create/revoke survive concurrent writes.
   merged.operationGrants = mergeRecordsById(current.operationGrants, merged.operationGrants, "operationGrants", deleted);
+  // MCP tool fingerprints likewise: a just-recorded fingerprint must not be dropped by a concurrent writer.
+  merged.mcpToolFingerprints = mergeRecordsById(current.mcpToolFingerprints, merged.mcpToolFingerprints, "mcpToolFingerprints", deleted);
   merged.messages = mergeRecordsById(current.messages, merged.messages, "messages", deleted);
   merged.tasks = mergeRecordsById(current.tasks, merged.tasks, "tasks", deleted);
   merged.approvals = mergeRecordsById(current.approvals, merged.approvals, "approvals", deleted);
@@ -1256,7 +1259,7 @@ async function handleApi(req, res, url) {
       ? await loadGithubConfig()
       : null;
     const mcpAutoApprovable = approvalType === "mcp_tool_call"
-      ? await computeMcpAutoApprovable(cleanText(body.mcpServer || "", 120), cleanText(body.mcpTool || "", 200))
+      ? await computeMcpAutoApprovable(db, cleanText(body.mcpServer || "", 120), cleanText(body.mcpTool || "", 200))
       : false;
     const existingApproval = findExistingSourceApproval(db, {
       taskId,
@@ -3472,6 +3475,7 @@ function normalizeDb(db) {
     }
   }
   delete db.meta.operationGrants;
+  db.mcpToolFingerprints = Array.isArray(db.mcpToolFingerprints) ? db.mcpToolFingerprints : [];
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.approvals = Array.isArray(db.approvals) ? db.approvals : [];
@@ -5932,13 +5936,40 @@ function surfaceMcpResult(db, approval, result) {
 }
 
 // Is this (server, tool) pair pre-authorised by the operator for autonomy auto-approval?
-async function computeMcpAutoApprovable(serverName, toolName) {
+async function computeMcpAutoApprovable(db, serverName, toolName) {
   try {
     const config = await loadMcpConfig(mcpConfigPath);
     if (!config.enabled) return false;
     const server = findServer(config, serverName);
     if (!server) return false;
-    return isToolAllowed(server, toolName) && (server.autoApprove || []).includes(String(toolName || "").trim());
+    const name = String(toolName || "").trim();
+    if (!isToolAllowed(server, name) || !(server.autoApprove || []).includes(name)) return false;
+    // Rug-pull / tool-poisoning guard: auto-approval is bound to the tool's fingerprint (name +
+    // description + inputSchema), not just its name. Trust-on-first-use: record the fingerprint the
+    // first time an allowlisted tool auto-approves; if the live definition later changes, DO NOT
+    // auto-approve -- fall back to a human so the operator re-blesses the mutated tool.
+    const liveTool = (await listTools(server, { timeoutMs: 8000 }).catch(() => []))
+      .find((tool) => tool.name === name);
+    if (!liveTool) return false; // can't verify the tool's identity right now -> require a human
+    const fingerprint = toolFingerprint(liveTool);
+    const key = `${server.name} ${name}`;
+    if (!Array.isArray(db.mcpToolFingerprints)) db.mcpToolFingerprints = [];
+    const record = db.mcpToolFingerprints.find((entry) => entry.key === key);
+    const now = new Date().toISOString();
+    if (!record) {
+      db.mcpToolFingerprints.unshift({
+        id: newId("mcpfp"), key, server: server.name, tool: name,
+        fingerprint, firstSeenAt: now, updatedAt: now
+      });
+      db.events.unshift(event("mcp.tool.fingerprint.recorded", "system", key, `${server.name}: ${name}`));
+      return true; // trust on first use (operator already opted in via autoApprove)
+    }
+    if (record.fingerprint !== fingerprint) {
+      db.events.unshift(event("mcp.tool.fingerprint.changed", "system", key,
+        `${server.name}: ${name} definition changed since allowlisting -- requiring human approval`));
+      return false; // definition drifted -> human must re-approve; do NOT silently re-bless
+    }
+    return true;
   } catch {
     return false;
   }
