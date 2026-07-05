@@ -11,6 +11,7 @@ then verify. This file gets deleted once everything below is confirmed.
 
 ## Commits in this batch
 
+- Draft-with-Latch: scoped /api/draft endpoint + Outlook add-in (draft in Outlook, you send)
 - draft-a-reply: host-brokered personal replies (worker drafts, you approve, host sends from your address)
 - boundary sweep: F6 fix — unshared context metadata no longer reaches the worker (host restart)
 - hardening #3/#4/#5: untrusted inbound-email replies, web-content not auto-shared, non-root executor
@@ -55,6 +56,11 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
       details / obey instructions embedded in a (test) email.
 - [ ] **Hardening #4**: after a `search_web` execution, the "Web findings" note appears in Context
       but is NOT shared with the agent (must be manually shared to become agent memory).
+- [ ] **Draft-with-Latch add-in (needs HTTPS + sideload into Outlook)**: edit `outlook-addin/manifest.xml`
+      host URLs → sideload → open a message → "Draft with Latch" → paste the `draftToken` in Settings →
+      Draft a reply → "Open reply with this draft" → send from Outlook. The `/api/draft` endpoint +
+      scoped-token behaviour are covered by smoke; the Office.js taskpane is NOT yet tested in a live
+      Outlook client.
 - [ ] **Draft-a-reply (needs `data/operator-email.json` + worker redeploy)**: Tasks → "Draft a reply
       to a message" → paste a message + reply-to → a draft appears in Review → edit it → approve →
       it sends from your address (check the recipient's inbox); deny → nothing sends. Confirm it
