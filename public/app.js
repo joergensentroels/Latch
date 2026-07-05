@@ -2,6 +2,13 @@ const tabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings"];
 const simpleTabs = ["inbox", "tasks", "approvals", "context", "credits", "settings"];
 const proTabs = ["inbox", "tasks", "approvals", "context", "timeline", "settings", "credits"];
 const initialParams = new URLSearchParams(location.search);
+// Android/desktop "Share -> Compass" (Web Share Target): shared text arrives here.
+const initialShareText = [initialParams.get("share_text"), initialParams.get("share_title"), initialParams.get("share_url")]
+  .map((part) => (part || "").trim())
+  .filter(Boolean)
+  .join("\n\n")
+  .slice(0, 12000);
+let sharedTextHandled = false;
 const initialTab = normalizeTab(initialParams.get("tab"));
 const initialApprovalId = cleanRouteId(initialParams.get("approval") || initialParams.get("approvalId") || "");
 const savedTaskFilter = normalizeListFilter(localStorage.getItem("latchTaskFilter"), ["open", "all"], "open");
@@ -749,11 +756,29 @@ async function boot() {
     await refresh();
     loginView.classList.add("hidden");
     mainView.classList.remove("hidden");
+    handleSharedTextOnce();
   } catch (error) {
     markConnection(false);
     showLogin();
     throw error;
   }
+}
+
+// If the app was opened via "Share -> Compass", drop the shared text into the "Draft a reply"
+// composer so you can add a recipient and get a draft. One-shot; also cleans the URL.
+function handleSharedTextOnce() {
+  if (sharedTextHandled || !initialShareText) return;
+  const composer = document.querySelector("#replyDraftMessage");
+  const details = document.querySelector("#replyDraftDetails");
+  if (!composer) return; // composer only exists in operator/pro mode
+  sharedTextHandled = true;
+  state.tab = "tasks";
+  updateRoute();
+  if (details) details.open = true;
+  composer.value = initialShareText;
+  const focusTarget = document.querySelector("#replyDraftTo") || composer;
+  focusTarget.focus();
+  try { history.replaceState({}, "", "/?tab=tasks"); } catch {}
 }
 
 function showLogin() {

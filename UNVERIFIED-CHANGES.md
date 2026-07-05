@@ -56,6 +56,11 @@ is *also* not yet live-verified; see [DEPLOY.md](./DEPLOY.md)'s pending-batch se
       details / obey instructions embedded in a (test) email.
 - [ ] **Hardening #4**: after a `search_web` execution, the "Web findings" note appears in Context
       but is NOT shared with the agent (must be manually shared to become agent memory).
+- [ ] **Android "Share -> Compass"**: reinstall/refresh the PWA (share_target needs a manifest
+      re-read), then in another app select text -> Share -> Compass -> it opens the "Draft a reply"
+      composer prefilled with the shared text.
+- [ ] **Android HTTP Shortcuts** (optional, instant path): a POST to /api/draft with the draft key
+      returns a draft (see DRAFT-REPLIES.md).
 - [ ] **Draft-with-Latch add-in (needs HTTPS + sideload into Outlook)**: edit `outlook-addin/manifest.xml`
       host URLs → sideload → open a message → "Draft with Latch" → paste the `draftToken` in Settings →
       Draft a reply → "Open reply with this draft" → send from Outlook. The `/api/draft` endpoint +
