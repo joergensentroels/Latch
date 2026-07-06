@@ -91,5 +91,5 @@ redeploy ships all of it. Verify each after deploying.
 3. Settings → Automation → add a daily schedule → **Run now** → a task appears and runs.
 
 ## Follow-ons (not deploy steps)
-- **Send the Emil onboarding email** (Danish) via the `email_campaign` approval once the bridge is live.
+- **Send any onboarding/outreach emails** via the `email_campaign` approval once the bridge is live.
 - **Reclaim VM disk** if tight: `docker builder prune -af && docker image rm openclaw:local`.
