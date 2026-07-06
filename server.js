@@ -3955,8 +3955,8 @@ function applyAutonomyDecision(approval, policy = {}, db = null) {
 }
 
 // Free-form shell/browser plans cannot be validated host-side, so they ALWAYS require a human — even
-// under full access, even with a grant. (Pre-public review, Emil: don't auto-run arbitrary operations;
-// auto-approval must rest on host-verifiable typed operations, not on worker-asserted risk.)
+// under full access, even with a grant. (Rationale: never auto-run arbitrary operations; auto-approval
+// must rest on host-verifiable typed operations, not on worker-asserted risk.)
 // read_only_status is a fixed host-defined template, so it is NOT arbitrary.
 function isArbitraryExecution(approval) {
   return approval.type === "command" && ["shell", "browser"].includes(approval.executionMode);
