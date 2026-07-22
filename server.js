@@ -37,8 +37,9 @@ const defaultNetworkCredits = Number(process.env.LATCH_DEFAULT_NETWORK_CREDITS |
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
 // local = your primary (local) model only; backup = primary then your own external provider on
 // failure; network = the (not-yet-implemented) shared Latch Network. "auto" is accepted as a legacy
-// alias for "backup".
-const routingPreferences = ["local", "backup", "network", "auto"];
+// alias for "backup". external = "prefer paid" — call your own external (fallback) provider DIRECTLY,
+// not just on local failure (falls back to local when no external provider is configured).
+const routingPreferences = ["local", "backup", "network", "auto", "external"];
 const autonomyModes = ["default_permissions", "auto_review", "auto_browse", "full_access"];
 const workerBackendTypes = ["ollama", "openai-compatible"];
 const networkWorkerStatuses = ["active", "paused"];
@@ -2978,6 +2979,18 @@ async function callLlmRouter(config, body, role, user = null) {
   const fallback = config.fallback && config.fallback.enabled ? config.fallback : null;
   const decision = networkRoutingDecision({ body, messages, config, routingPreference, allowNetwork });
 
+  // "External / prefer paid" path: call the operator's OWN external (fallback) provider DIRECTLY,
+  // rather than only as a failover after the local model errors. Used by callers (e.g. Foreman) that
+  // want a funded agent to spend on the paid API. If no external provider is configured we fall
+  // through to the local primary below, so the caller degrades gracefully to local.
+  if (routingPreference === "external" && fallback) {
+    const externalResult = await callExternalLlm(fallback, { ...body, model: fallback.model });
+    return {
+      ...externalResult,
+      routing: { mode: "external", preference: routingPreference, allowNetwork, reason: "external_requested", usedFallback: true, fallbackFromNetwork: false }
+    };
+  }
+
   // Shared Latch Network path (not implemented yet -> returns no worker; we then fall through to the
   // operator's own primary/fallback providers).
   if (decision.useNetwork) {
@@ -3140,6 +3153,11 @@ async function tryNetworkLlm({ body, messages, requestedModel, routingPreference
 function networkRoutingDecision({ body, messages, config, routingPreference, allowNetwork }) {
   if (routingPreference === "local" || !allowNetwork) {
     return { useNetwork: false, reason: "local_requested" };
+  }
+  // "external" targets the operator's own paid provider directly (handled in callLlmRouter before
+  // this decision is used); it never routes to the shared network.
+  if (routingPreference === "external") {
+    return { useNetwork: false, reason: "external_requested" };
   }
   const text = messages.map((message) => message.content).join("\n\n");
   const sensitive = isSensitiveForNetwork(text);
