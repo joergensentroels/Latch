@@ -2407,6 +2407,7 @@ async function loadLlmConfig() {
     model: process.env.LLM_MODEL || fileConfig.model || "",
     apiKey: String(process.env.LLM_API_KEY || fileConfig.apiKey || "").trim(),
     timeoutMs: Number(process.env.LLM_TIMEOUT_MS || fileConfig.timeoutMs || 60000),
+    temperature: Number.isFinite(Number(fileConfig.temperature)) ? Number(fileConfig.temperature) : undefined,   // optional forced temperature (provider quirk)
     configPath: llmConfigPath,
     fileLoaded: Object.keys(fileConfig).length > 0
   };
@@ -2421,7 +2422,8 @@ async function loadLlmConfig() {
     baseUrl: process.env.LLM_FALLBACK_BASE_URL || fb.baseUrl || "",
     model: process.env.LLM_FALLBACK_MODEL || fb.model || "",
     apiKey: String(process.env.LLM_FALLBACK_API_KEY || fb.apiKey || "").trim(),
-    timeoutMs: Number(process.env.LLM_FALLBACK_TIMEOUT_MS || fb.timeoutMs || config.timeoutMs)
+    timeoutMs: Number(process.env.LLM_FALLBACK_TIMEOUT_MS || fb.timeoutMs || config.timeoutMs),
+    temperature: Number.isFinite(Number(fb.temperature)) ? Number(fb.temperature) : undefined   // optional forced temperature (e.g. Kimi K2.5+ requires 1)
   };
   fallback.enabled = Boolean(fallback.baseUrl && fallback.model && fallback.apiKey);
   config.fallback = fallback.enabled ? fallback : null;
@@ -2852,7 +2854,9 @@ async function callExternalLlm(config, body) {
   const payload = {
     model: cleanText(body.model || config.model, 160),
     messages,
-    temperature: numberOrDefault(body.temperature, 0.2)
+    // A provider block may FORCE its temperature via a "temperature" field in llm-provider.json —
+    // some providers only accept a fixed value (e.g. Moonshot/Kimi K2.5+ require temperature: 1).
+    temperature: numberOrDefault(config.temperature !== undefined ? config.temperature : body.temperature, 0.2)
   };
   if (body.maxTokens || body.max_tokens) {
     payload.max_tokens = numberOrDefault(body.maxTokens || body.max_tokens, 1024);
@@ -2984,7 +2988,9 @@ async function callLlmRouter(config, body, role, user = null) {
   // want a funded agent to spend on the paid API. If no external provider is configured we fall
   // through to the local primary below, so the caller degrades gracefully to local.
   if (routingPreference === "external" && fallback) {
-    const externalResult = await callExternalLlm(fallback, { ...body, model: fallback.model });
+    // Honor a caller-requested model (the external provider may serve several — e.g. Kimi K2.5/K2.6
+    // behind one Moonshot key); fall back to the configured default when none is requested.
+    const externalResult = await callExternalLlm(fallback, { ...body, model: body.model || fallback.model });
     return {
       ...externalResult,
       routing: { mode: "external", preference: routingPreference, allowNetwork, reason: "external_requested", usedFallback: true, fallbackFromNetwork: false }
