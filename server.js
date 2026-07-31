@@ -881,6 +881,48 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // What can this token ACTUALLY do? /api/github/config reports `ready: true` when a URL and a token are
+  // merely present, which is not the same claim and reads as healthy while every write 403s. This probes
+  // each capability the connector uses and reports them separately, so "GitHub is broken" becomes
+  // "Contents: ok, Issues: forbidden — add Issues: Read and write to the token". Reads only; never echoes
+  // the token, and reports the numeric status GitHub returned rather than a guess about the cause.
+  if (url.pathname === "/api/github/doctor" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const config = await loadGithubConfig();
+    if (!config.ready) { sendJson(res, 503, { error: "GitHub connector is not configured.", ready: false }); return; }
+    const repo = cleanGithubRepoName(url.searchParams.get("repo") || config.defaultRepo || "");
+    const owner = cleanGithubOwner(url.searchParams.get("owner") || config.owner || "");
+    const probe = async (label, endpoint, needs) => {
+      try {
+        const r = await githubJson(config, "GET", endpoint, null, { allow404: true });
+        return { capability: label, needs, ok: true, note: r === null ? "reachable, but nothing found there (404)" : "ok" };
+      } catch (error) {
+        const m = /returned (\d{3})/.exec(String(error.message || ""));
+        return { capability: label, needs, ok: false, status: m ? Number(m[1]) : 0, note: cleanText(error.message, 300) };
+      }
+    };
+    const checks = [await probe("identity", "/user", "any valid token")];
+    if (owner && repo) {
+      const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+      checks.push(await probe("repo metadata", base, "Metadata: Read"));
+      checks.push(await probe("file read/commit", `${base}/contents/README.md`, "Contents: Read and write"));
+      checks.push(await probe("issues read/post", `${base}/issues?per_page=1`, "Issues: Read and write"));
+    }
+    const missing = checks.filter((c) => !c.ok);
+    sendJson(res, 200, {
+      owner, repo, ownerType: config.ownerType, allOk: missing.length === 0, checks,
+      // A fine-grained PAT against an ORG-owned repo also needs the organisation to approve it, and adding
+      // a permission can put it back into pending approval — which presents as 403 on the new capability
+      // while the old ones keep working. Worth saying, because editing the token looks like enough.
+      hint: missing.length === 0 ? "" :
+        `${missing.map((c) => c.capability).join(", ")} unavailable. Grant: ${[...new Set(missing.map((c) => c.needs))].join("; ")}.`
+        + (config.ownerType === "org" ? ` ${owner} is an ORGANISATION: a fine-grained token also needs the org to approve it, and adding a permission can re-open that approval — check Settings → Third-party Access → Personal access tokens on the org.` : "")
+    });
+    return;
+  }
+
   // Read the repo's open issues. A READ, so it files no approval — but it is operator-gated like every
   // other route here, and the caller (Bureau) runs server-side, so an agent never reaches this directly.
   //
