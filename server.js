@@ -57,7 +57,7 @@ const defaultMessageChannels = [
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
-const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "github_issue", "github_issue_comment", "email_campaign", "email_thread_continue", "mcp_tool_call", "task_continue", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "github_issue", "github_issue_comment", "github_pull_request", "email_campaign", "email_thread_continue", "mcp_tool_call", "task_continue", "other"];
 const executionModes = ["none", "read_only_status", "shell", "browser"];
 const riskLevels = ["low", "medium", "high"];
 const contactSendModes = ["manual", "approved_connector"];
@@ -1357,7 +1357,7 @@ async function handleApi(req, res, url) {
       ? normalizedExecutionPlan.commands.slice(0, 20)
       : cleanTextArray(body.renderedCommands, 8, 500);
     const suppliedGithubRepoName = cleanText(body.githubRepoName || body.repoName || "", 120);
-    const githubConfigForApproval = ["github_file", "github_issue", "github_issue_comment"].includes(approvalType) && !suppliedGithubRepoName
+    const githubConfigForApproval = ["github_file", "github_issue", "github_issue_comment", "github_pull_request"].includes(approvalType) && !suppliedGithubRepoName
       ? await loadGithubConfig()
       : null;
     const mcpAutoApprovable = approvalType === "mcp_tool_call"
@@ -1421,10 +1421,11 @@ async function handleApi(req, res, url) {
       githubRepoName: githubApprovalRepoName(approvalType, suppliedGithubRepoName, body.title, body.details, githubConfigForApproval?.defaultRepo || ""),
       githubDescription: approvalType === "github_repo" ? cleanText(body.githubDescription || body.description || "", 500) : "",
       githubVisibility: approvalType === "github_repo" ? cleanChoice(body.githubVisibility || body.visibility, ["private", "public"], "private") : "private",
-      githubOwner: ["github_repo", "github_file", "github_issue", "github_issue_comment"].includes(approvalType) ? cleanGithubOwner(body.githubOwner || body.owner || "") : "",
+      githubOwner: ["github_repo", "github_file", "github_issue", "github_issue_comment", "github_pull_request"].includes(approvalType) ? cleanGithubOwner(body.githubOwner || body.owner || "") : "",
       githubFilePath: approvalType === "github_file" ? cleanGithubFilePath(body.githubFilePath || body.path || "README.md") : "",
       githubFileContent: approvalType === "github_file" ? cleanText(body.githubFileContent || body.content || "", 12000) : "",
-      githubCommitMessage: approvalType === "github_file" ? cleanText(body.githubCommitMessage || body.commitMessage || `Update ${body.githubFilePath || body.path || "README.md"}`, 240) : "",
+      githubCommitMessage: approvalType === "github_file" ? cleanText(body.githubCommitMessage || body.commitMessage || `Update ${body.githubFilePath || body.path || "README.md"}`, 240)
+        : approvalType === "github_pull_request" ? cleanText(body.githubCommitMessage || body.commitMessage || "", 240) : "",
       githubFileSha: "",
       githubFileUrl: "",
       githubUpdatedAt: "",
@@ -1437,6 +1438,19 @@ async function handleApi(req, res, url) {
         : [],
       githubIssueNumber: approvalType === "github_issue_comment" ? cleanInteger(body.githubIssueNumber ?? body.issueNumber, 1, 10_000_000, 0) : 0,
       githubIssueUrl: "",
+      // Pull request. The FILES are part of the approval on purpose: what the operator reads is exactly
+      // what gets committed, with no second fetch between the decision and the write.
+      githubPrTitle: approvalType === "github_pull_request" ? cleanText(body.githubPrTitle || body.prTitle || body.title || "", 300) : "",
+      githubPrBody: approvalType === "github_pull_request" ? cleanText(body.githubPrBody || body.prBody || "", 12000) : "",
+      githubPrBase: approvalType === "github_pull_request" ? cleanText(body.githubPrBase || body.base || "", 200) : "",
+      githubPrBranch: approvalType === "github_pull_request" ? cleanGithubBranchName(body.githubPrBranch || body.branch || "") : "",
+      githubPrFiles: approvalType === "github_pull_request"
+        ? (Array.isArray(body.githubPrFiles) ? body.githubPrFiles : []).slice(0, 20)
+          .map((f) => ({ path: cleanGithubFilePath(f?.path || ""), content: cleanText(f?.content || "", 100000) }))
+          .filter((f) => f.path && f.content)
+        : [],
+      githubPrNumber: 0,
+      githubPrUrl: "",
       githubAutoInit: approvalType === "github_repo" ? cleanBoolean(body.githubAutoInit ?? body.autoInit, true) : true,
       githubRepoUrl: "",
       githubFullName: "",
@@ -2657,6 +2671,23 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
       db.events.unshift(event("github.issue.failed", actor, approval.id, approval.githubRepoName || approval.title));
     }
   }
+  if (approval.type === "github_pull_request") {
+    try {
+      const { pr, head, base, committed } = await openGithubPullRequestFromApproval(approval);
+      approval.githubPrNumber = cleanInteger(pr?.number, 1, 10_000_000, 0);
+      approval.githubPrUrl = cleanText(pr?.html_url || "", 500);
+      approval.githubPrBranch = head;
+      approval.githubPrBase = base;
+      approval.githubUpdatedAt = new Date().toISOString();
+      approval.responseNote = approval.responseNote || `Pull request #${approval.githubPrNumber} opened (${head} → ${base}, ${committed.length} file(s)): ${approval.githubPrUrl}`;
+      db.events.unshift(event("github.pr.opened", actor, approval.id, `${approval.githubRepoName}#${approval.githubPrNumber} ${head}→${base}`));
+    } catch (error) {
+      approval.status = "pending";
+      approval.decisionReason = "GitHub pull request failed; operator review required.";
+      approval.responseNote = `GitHub pull request failed: ${cleanText(error.message, 1500)}`;
+      db.events.unshift(event("github.pr.failed", actor, approval.id, approval.githubRepoName || approval.title));
+    }
+  }
   if (approval.type === "github_issue_comment") {
     try {
       const comment = await commentGithubIssueFromApproval(approval);
@@ -2875,6 +2906,67 @@ async function githubIssueTarget(approval) {
   const owner = cleanGithubOwner(approval.githubOwner || config.owner || await fetchGithubLogin(config));
   if (!owner) throw new Error("A GitHub owner is required. Re-run Configure-GitHub.ps1 with -Owner <your-github-username>.");
   return { config, owner, repo };
+}
+
+// Open a pull request. ONE approval does the whole thing — create a branch, commit the files onto it,
+// open the PR — because a PR split across three approvals is three human decisions for one reviewable
+// unit, and leaves half-built branches behind whenever someone declines the second one. Atomic here means
+// the operator sees the complete change and the PR text together, and declining leaves the repo untouched.
+//
+// Branching model: a fresh branch per PR, named `bureau/<slug>-<n>` unless one is supplied. Nothing
+// deletes these branches — that is GitHub's "Automatically delete head branches" repo setting, which does
+// it on merge and is the right owner for the decision. We do not silently prune refs we did not create.
+async function openGithubPullRequestFromApproval(approval) {
+  const { config, owner, repo } = await githubIssueTarget(approval);
+  const title = cleanText(approval.githubPrTitle || approval.title || "", 300);
+  if (!title.trim()) throw new Error("A pull request title is required.");
+  const files = Array.isArray(approval.githubPrFiles) ? approval.githubPrFiles : [];
+  if (!files.length) throw new Error("A pull request needs at least one file to change.");
+
+  const R = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const meta = await githubJson(config, "GET", R, null, { allow404: true });
+  if (!meta) throw new Error(`No such repository: ${owner}/${repo}`);
+  const base = cleanText(approval.githubPrBase || meta.default_branch || "main", 200);
+
+  // Base tip. A repository with no commits has no ref to branch from — say that plainly rather than
+  // failing later with a confusing 404 from the ref-create call.
+  const baseRef = await githubJson(config, "GET", `${R}/git/ref/heads/${encodeURIComponent(base)}`, null, { allow404: true });
+  if (!baseRef?.object?.sha) throw new Error(`Branch "${base}" has no commits to branch from (an empty repository cannot take a pull request).`);
+
+  const head = cleanGithubBranchName(approval.githubPrBranch || `bureau/${title}`);
+  if (!head) throw new Error("Could not derive a usable branch name.");
+  if (head === base) throw new Error(`The branch and the base are both "${base}" — a pull request needs them to differ.`);
+
+  // Create the branch, or reuse it if a previous attempt already made it. A retry after a failed commit
+  // must not dead-end on "Reference already exists".
+  const existing = await githubJson(config, "GET", `${R}/git/ref/heads/${encodeURIComponent(head)}`, null, { allow404: true });
+  if (!existing) {
+    await githubJson(config, "POST", `${R}/git/refs`, { ref: `refs/heads/${head}`, sha: baseRef.object.sha });
+  }
+
+  // One commit per file, onto the branch. Each needs that branch's blob sha if the path already exists.
+  const committed = [];
+  for (const f of files.slice(0, 20)) {
+    const filePath = cleanGithubFilePath(f?.path || "");
+    const content = String(f?.content || "");
+    if (!filePath || !content.trim()) continue;
+    const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+    const prev = await githubJson(config, "GET", `${R}/contents/${encoded}?ref=${encodeURIComponent(head)}`, null, { allow404: true });
+    const body = {
+      message: cleanText(approval.githubCommitMessage || `Add ${filePath} (via Bureau)`, 240),
+      content: Buffer.from(content, "utf8").toString("base64"),
+      branch: head
+    };
+    if (prev?.sha) body.sha = prev.sha;
+    await githubJson(config, "PUT", `${R}/contents/${encoded}`, body);
+    committed.push(filePath);
+  }
+  if (!committed.length) throw new Error("None of the supplied files had both a path and content.");
+
+  const pr = await githubJson(config, "POST", `${R}/pulls`, {
+    title, head, base, body: cleanText(approval.githubPrBody || "", 12000)
+  });
+  return { pr, head, base, committed };
 }
 
 async function createGithubIssueFromApproval(approval) {
@@ -4316,8 +4408,8 @@ function humanBoundaryReason(approval) {
   // is content: silent, and reversible through git history. Opening an issue or commenting on one is
   // COMMUNICATION — it emails every watcher and cannot be recalled, which puts it with external_contact
   // rather than with file writes. Same reasoning as Bureau's hard floor for these two action types.
-  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "github_issue", "github_issue_comment", "email_campaign", "email_thread_continue", "task_continue"].includes(approval.type)) {
-    return "Human boundary: credentials, purchases, external contact, GitHub repo creation or issue/comment posting, account setup, verification, continue-checkpoints, or context answers require the operator.";
+  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "github_issue", "github_issue_comment", "github_pull_request", "email_campaign", "email_thread_continue", "task_continue"].includes(approval.type)) {
+    return "Human boundary: credentials, purchases, external contact, GitHub repo creation or issue/comment/PR posting, account setup, verification, continue-checkpoints, or context answers require the operator.";
   }
   return "";
 }
@@ -5686,6 +5778,29 @@ function cleanGithubRepoName(value) {
   return name;
 }
 
+// git refs reject a specific set of shapes, and a branch name assembled from a model-written PR title will
+// hit several of them: spaces, "..", a leading or trailing "/", a trailing ".lock", control characters,
+// and ~^:?*[\ anywhere. Normalise rather than reject, so a reasonable title always yields a usable branch,
+// but keep the `bureau/` prefix intact so these are identifiable as machine-made at a glance.
+function cleanGithubBranchName(value) {
+  let name = String(value || "").trim().toLowerCase()
+    .replace(/[\s~^:?*[\]\\]+/g, "-")
+    .replace(/[^a-z0-9._\/-]/g, "-")
+    .replace(/\.{2,}/g, ".")
+    .replace(/-{2,}/g, "-")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^[-./]+|[-./]+$/g, "")
+    .slice(0, 200)
+    .replace(/[-./]+$/g, "");                 // slice() can re-expose a trailing separator
+  if (name.endsWith(".lock")) name = name.slice(0, -5).replace(/[-./]+$/g, "");
+  // Per SEGMENT, not just per string: a title like "[verification] Fix X" yielded
+  // `bureau/-verification-fix-x`, where the leading dash is valid in a git ref but makes the branch
+  // shell-hostile — `git checkout -verification...` parses as a flag. Observed in a real run rather than
+  // predicted, which is why it is worth a comment: the whole-string trim looked sufficient.
+  name = name.split("/").map((seg) => seg.replace(/^[-.]+|[-.]+$/g, "")).filter(Boolean).join("/");
+  return name;
+}
+
 function cleanGithubOwner(value) {
   const owner = cleanText(value || "", 120)
     .replace(/^@+/, "")
@@ -5717,7 +5832,7 @@ function inferGithubRepoName(title, details) {
 }
 
 function githubApprovalRepoName(type, suppliedName, title, details, defaultRepo = "") {
-  if (!["github_repo", "github_file", "github_issue", "github_issue_comment"].includes(type)) return "";
+  if (!["github_repo", "github_file", "github_issue", "github_issue_comment", "github_pull_request"].includes(type)) return "";
   if (suppliedName) return cleanGithubRepoName(suppliedName);
   // A caller-supplied repo is honoured above; otherwise fall back to the configured default. Only
   // github_repo INFERS a name from prose, because it is naming something new — for the others, guessing a
