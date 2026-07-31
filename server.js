@@ -1,6 +1,6 @@
 import http from "node:http";
 import { readFile, writeFile, mkdir, stat, unlink, rename, copyFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, openSync, closeSync, writeSync, existsSync, statSync, renameSync } from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -11,6 +11,73 @@ import { normalizeCadence, describeCadence, computeNextRun, dueSchedules } from 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
+
+// ---------- log file (rotating tee) ----------
+// Latch now starts from an At-Startup scheduled task as SYSTEM, and a scheduled task captures no
+// stdout — so every "Scheduler failed" and every unhandled rejection went nowhere. This is the process
+// holding the credentials and the approval queue; it is the last one that should fail silently.
+//
+// Started here, above every other top-level statement, so a throw during boot is still recorded.
+// Deliberately NOT an uncaughtException handler (that would suppress the default crash-and-exit and
+// change behaviour); node writes fatal traces through process.stderr.write, which this captures.
+// Writes are synchronous because an async append is lost when the process exits right after it.
+//
+// Yes, this is duplicated in bureau/server.mjs. Both repos are deliberately dependency-free and
+// self-contained; a shared module would invent a cross-repo dependency that does not otherwise exist.
+const logFile = process.env.LATCH_LOG || path.join(__dirname, "latch.log");
+const logMax = Math.max(64 * 1024, Number(process.env.LATCH_LOG_MAX) || 5 * 1024 * 1024);
+const logKeep = Math.max(1, Number(process.env.LATCH_LOG_KEEP) || 3);
+function startLogTee(file, max, keep) {
+  if (String(process.env.LATCH_LOG || "").toLowerCase() === "off") return null;
+  let fd = null, bytes = 0, dead = false, atLineStart = true;
+  const open = () => {
+    bytes = existsSync(file) ? statSync(file).size : 0;   // size BEFORE opening: "a" doesn't report it
+    fd = openSync(file, "a");
+  };
+  const rotate = () => {
+    if (fd !== null) { closeSync(fd); fd = null; }
+    for (let i = keep - 1; i >= 1; i--) {
+      if (existsSync(`${file}.${i}`)) renameSync(`${file}.${i}`, `${file}.${i + 1}`);
+    }
+    if (existsSync(file)) renameSync(file, `${file}.1`);
+    open();
+  };
+  try { open(); } catch { return null; }   // no log is survivable; a Latch that won't boot is not
+  const append = (chunk) => {
+    if (dead) return;
+    try {
+      const s = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      let out = "";                                   // stamp at line STARTS only, so stack traces stay readable
+      for (const part of s.split(/(\n)/)) {
+        if (part === "") continue;
+        if (part === "\n") { out += part; atLineStart = true; continue; }
+        if (atLineStart) { out += `${new Date().toISOString()} `; atLineStart = false; }
+        out += part;
+      }
+      const buf = Buffer.from(out, "utf8");
+      if (bytes + buf.length > max) rotate();
+      writeSync(fd, buf);
+      bytes += buf.length;
+    } catch {
+      dead = true;                                    // never console.* in here — it re-enters and recurses
+      try { if (fd !== null) closeSync(fd); } catch { /* already gone */ }
+      fd = null;
+    }
+  };
+  for (const stream of [process.stdout, process.stderr]) {
+    const orig = stream.write.bind(stream);
+    stream.write = (chunk, enc, cb) => { append(chunk); return orig(chunk, enc, cb); };
+  }
+  return file;
+}
+const activeLog = startLogTee(logFile, logMax, logKeep);
+console.log(`\n=== Latch starting — pid ${process.pid}, node ${process.version}${activeLog ? `, log ${activeLog}` : ", log OFF"}`);
+process.on("exit", (code) => console.log(`=== Latch exiting — pid ${process.pid}, code ${code}`));
+// No unhandledRejection handler on purpose. Node's default for an unhandled rejection is to CRASH, and
+// registering a listener silently downgrades that to a warning — the process would keep serving in an
+// unknown state instead of dying and being restarted clean by the boot task. Node already writes those
+// traces to stderr, which the tee above captures, so a handler would buy nothing and cost the crash.
+
 const publicDir = path.join(__dirname, "public");
 const dbPath = path.join(dataDir, "db.json");
 const authPath = path.join(dataDir, "auth.json");
@@ -204,7 +271,7 @@ async function loadAuth() {
 
   let stored = null;
   try {
-    stored = JSON.parse(await readFile(authPath, "utf8"));
+    stored = JSON.parse(stripJsonBom(await readFile(authPath, "utf8")));
   } catch {
     stored = null;
   }
@@ -259,7 +326,7 @@ function extractSection(text, heading) {
 
 async function readDb() {
   try {
-    return normalizeReadDb(JSON.parse(await readFile(dbPath, "utf8")));
+    return normalizeReadDb(JSON.parse(stripJsonBom(await readFile(dbPath, "utf8"))));
   } catch (error) {
     if (error?.code === "ENOENT") {
       const db = structuredClone(emptyDb);
@@ -289,7 +356,7 @@ async function writeDbNow(db) {
 
 async function readDbForMerge() {
   try {
-    return normalizeReadDb(JSON.parse(await readFile(dbPath, "utf8")));
+    return normalizeReadDb(JSON.parse(stripJsonBom(await readFile(dbPath, "utf8"))));
   } catch (error) {
     if (error?.code !== "ENOENT") {
       await preserveUnreadableDb(error);
@@ -2686,7 +2753,7 @@ async function serveStatic(req, res, url) {
 async function loadLlmConfig() {
   let fileConfig = {};
   try {
-    fileConfig = JSON.parse(await readFile(llmConfigPath, "utf8"));
+    fileConfig = JSON.parse(stripJsonBom(await readFile(llmConfigPath, "utf8")));
   } catch {
     fileConfig = {};
   }
@@ -2723,7 +2790,11 @@ async function loadLlmConfig() {
 async function loadNotificationConfig() {
   let fileConfig = {};
   try {
-    fileConfig = JSON.parse(await readFile(notificationConfigPath, "utf8"));
+    // stripJsonBom, like every other config read here. Found by the backup verifier: this file HAS a
+    // BOM (PowerShell's Set-Content/Out-File adds one), so the parse threw, the catch below swallowed
+    // it, and Latch has been running with notifications silently disabled while the file said
+    // enabled:true with a webhook URL. loadLocalSettings stripped the BOM; this sibling never did.
+    fileConfig = JSON.parse(stripJsonBom(await readFile(notificationConfigPath, "utf8")));
   } catch {
     fileConfig = {};
   }

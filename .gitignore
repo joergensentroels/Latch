@@ -4,6 +4,7 @@ data-dev/
 .env.*
 !.env.example
 *.log
+*.log.[0-9]
 *.tmp
 *.pid
 .DS_Store
