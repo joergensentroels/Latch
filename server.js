@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { loadEmailConfig, sendEmail, pollInbox, classifySend, publicEmailConfig } from "./email.mjs";
 import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed, toolFingerprint } from "./mcp.mjs";
 import { normalizeCadence, describeCadence, computeNextRun, dueSchedules } from "./schedule.mjs";
+import { newestClosedByRef, classifyBranch } from "./github.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
@@ -1026,17 +1027,42 @@ async function handleApi(req, res, url) {
       const list = await githubJson(config, "GET", `${R}/branches?per_page=100`, null, { allow404: true }) || [];
       const openPrs = await githubJson(config, "GET", `${R}/pulls?state=open&per_page=100`, null, { allow404: true }) || [];
       const heads = new Map((Array.isArray(openPrs) ? openPrs : []).map((p) => [String(p?.head?.ref || ""), cleanInteger(p?.number, 1, 10_000_000, 0)]));
+      // CLOSED pull requests, so a branch can be reported as prunable. delete_branch_on_merge only fires on
+      // a MERGE — a pull request closed without merging leaves its head branch behind forever, and this
+      // connector creates one branch per PR. Nothing was cleaning those up, and nothing could, because
+      // "which branches are abandoned" was not knowable from any endpoint here.
+      const closedPrs = await githubJson(config, "GET", `${R}/pulls?state=closed&per_page=100`, null, { allow404: true }) || [];
+      const closed = newestClosedByRef(closedPrs);
+      const defaultBranch = cleanText(meta.default_branch || "", 250);
       const branches = (Array.isArray(list) ? list : []).map((b) => {
         const name = cleanText(b?.name || "", 250);
+        const isDefault = name === meta.default_branch;
+        const protectedBranch = Boolean(b?.protected);
+        const openPr = heads.get(name) || 0;
+        const wasClosed = closed.get(name) || null;
+        // The decision itself lives in github.mjs so it can be tested against every combination — including
+        // the ones that need a real closed pull request to observe from out here.
+        const verdict = classifyBranch({ name, isDefault, protectedBranch, openPr, closedPr: wasClosed, defaultBranch: defaultBranch || "the default branch" });
         return {
           name,
-          isDefault: name === meta.default_branch,
-          protectedBranch: Boolean(b?.protected),
-          openPr: heads.get(name) || 0,
+          isDefault,
+          protectedBranch,
+          openPr,
+          closedPr: wasClosed?.number || 0,
+          prunable: verdict.prunable,
+          reason: verdict.reason,
           sha: cleanText(b?.commit?.sha || "", 40)
         };
       }).filter((b) => b.name);
-      sendJson(res, 200, { owner, repo, defaultBranch: cleanText(meta.default_branch || "", 250), deleteBranchOnMerge: Boolean(meta.delete_branch_on_merge), branches, count: branches.length });
+      // Reported, never swept automatically. Deleting a ref is outward-facing and awkward to undo, so this
+      // endpoint stays a READ and the operator sweeps with POST /api/github/delete-branch, which keeps its
+      // own two refusals. A scheduled job quietly deleting branches is not a thing anyone asked for.
+      sendJson(res, 200, {
+        owner, repo, defaultBranch,
+        deleteBranchOnMerge: Boolean(meta.delete_branch_on_merge),
+        branches, count: branches.length,
+        prunableCount: branches.filter((b) => b.prunable).length
+      });
     } catch (error) { sendJson(res, 502, { error: cleanText(error.message, 500) }); }
     return;
   }
