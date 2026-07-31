@@ -923,6 +923,47 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // Close an issue or a pull request. Operator-invoked, so no approval: the operator IS the human that an
+  // approval exists to reach, and the whole point of this endpoint is tidying up artifacts. Deliberately
+  // NOT exposed as a Bureau agent action — an agent closing other people's issues is a different question
+  // from an agent filing one, and nobody has asked for it.
+  //
+  // GitHub closes PRs through the issues endpoint too (every PR is an issue), so one route covers both.
+  if (url.pathname === "/api/github/close" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const config = await loadGithubConfig();
+    if (!config.ready) { sendJson(res, 503, { error: "GitHub connector is not configured." }); return; }
+    const repo = cleanGithubRepoName(body.repo || config.defaultRepo || "");
+    const owner = cleanGithubOwner(body.owner || config.owner || "");
+    const number = cleanInteger(body.number, 1, 10_000_000, 0);
+    if (!repo || !owner) { sendJson(res, 400, { error: "A repository and owner are required." }); return; }
+    if (!number) { sendJson(res, 400, { error: "An issue or pull request number is required." }); return; }
+
+    const R = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    try {
+      const existing = await githubJson(config, "GET", `${R}/issues/${number}`, null, { allow404: true });
+      if (!existing) { sendJson(res, 404, { error: `No issue or pull request #${number} in ${owner}/${repo}.` }); return; }
+      const wasPr = Boolean(existing.pull_request);
+      if (existing.state === "closed") {
+        sendJson(res, 200, { ok: true, number, kind: wasPr ? "pull_request" : "issue", state: "closed", alreadyClosed: true, url: cleanText(existing.html_url || "", 500) });
+        return;
+      }
+      const updated = await githubJson(config, "PATCH", `${R}/issues/${number}`, { state: "closed" });
+      // `db` is not ambient in this handler — every route reads it explicitly. Log the close AFTER the
+      // GitHub call succeeds, so the event log never claims something that did not happen.
+      const db = await readDb();
+      db.events.unshift(event(wasPr ? "github.pr.closed" : "github.issue.closed", "operator", "", `${owner}/${repo}#${number}`));
+      await writeDb(db);
+      sendJson(res, 200, { ok: true, number, kind: wasPr ? "pull_request" : "issue", state: cleanText(updated?.state || "closed", 20), url: cleanText(updated?.html_url || existing.html_url || "", 500) });
+    } catch (error) {
+      sendJson(res, 502, { error: cleanText(error.message, 500) });
+    }
+    return;
+  }
+
   // Read the repo's open issues. A READ, so it files no approval — but it is operator-gated like every
   // other route here, and the caller (Bureau) runs server-side, so an agent never reaches this directly.
   //
