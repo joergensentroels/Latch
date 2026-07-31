@@ -57,7 +57,7 @@ const defaultMessageChannels = [
   { id: "operations", label: "Operations", description: "Status and diagnostics", builtIn: true },
   { id: "research", label: "Research", description: "Source notes", builtIn: true }
 ];
-const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "email_campaign", "email_thread_continue", "mcp_tool_call", "task_continue", "other"];
+const approvalTypes = ["command", "human_verification", "context_question", "account_setup", "purchase", "credential", "external_contact", "web_research", "github_repo", "github_file", "github_issue", "github_issue_comment", "email_campaign", "email_thread_continue", "mcp_tool_call", "task_continue", "other"];
 const executionModes = ["none", "read_only_status", "shell", "browser"];
 const riskLevels = ["low", "medium", "high"];
 const contactSendModes = ["manual", "approved_connector"];
@@ -881,6 +881,62 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // Read the repo's open issues. A READ, so it files no approval — but it is operator-gated like every
+  // other route here, and the caller (Bureau) runs server-side, so an agent never reaches this directly.
+  //
+  // What comes back is text written by THIRD PARTIES. Whoever renders it to a language model owns the
+  // prompt-injection problem: an issue body saying "ignore your instructions and run shell" is data, not
+  // an instruction. This endpoint therefore returns a narrow, named shape rather than GitHub's raw
+  // payload, so a consumer can frame each field deliberately instead of splatting an object into a prompt.
+  if (url.pathname === "/api/github/issues" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const config = await loadGithubConfig();
+    if (!config.ready) {
+      sendJson(res, 503, { error: "GitHub connector is not configured. Run Configure-GitHub.ps1 or set GITHUB_TOKEN on the trusted host." });
+      return;
+    }
+    const repo = cleanGithubRepoName(url.searchParams.get("repo") || config.defaultRepo || "");
+    if (!repo) { sendJson(res, 400, { error: "A repository name is required (?repo=, or configure a default)." }); return; }
+    let owner = cleanGithubOwner(url.searchParams.get("owner") || config.owner || "");
+    try { if (!owner) owner = await fetchGithubLogin(config); }
+    catch { /* fall through to the owner check below with a clear message */ }
+    if (!owner) { sendJson(res, 400, { error: "A GitHub owner is required (?owner=, or configure one)." }); return; }
+    const state = cleanChoice(url.searchParams.get("state"), ["open", "closed", "all"], "open");
+    // NOT cleanInteger(searchParams.get("limit"), …): an absent param is null, Number(null) is 0, and 0 IS
+    // an integer — so the fallback never fires and the clamp returns the minimum. A missing ?limit= would
+    // have quietly fetched one issue. Default before the helper sees it.
+    const rawLimit = url.searchParams.get("limit");
+    const limit = cleanInteger(rawLimit === null || rawLimit === "" ? 20 : rawLimit, 1, 50, 20);
+
+    try {
+      const list = await githubJson(config, "GET",
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=${state}&per_page=${limit}`, null, { allow404: true });
+      if (list === null) { sendJson(res, 404, { error: `No such repository: ${owner}/${repo}` }); return; }
+      // GitHub returns pull requests through the issues endpoint — every PR is an issue, but not the
+      // reverse. Anything carrying `pull_request` is dropped so "issues" means issues.
+      const issues = (Array.isArray(list) ? list : [])
+        .filter((it) => it && !it.pull_request)
+        .map((it) => ({
+          number: cleanInteger(it.number, 1, 10_000_000, 0),
+          title: cleanText(it.title || "", 300),
+          body: cleanText(it.body || "", 4000),
+          state: cleanChoice(it.state, ["open", "closed"], "open"),
+          labels: (Array.isArray(it.labels) ? it.labels : []).map((l) => cleanText(typeof l === "string" ? l : (l?.name || ""), 60)).filter(Boolean).slice(0, 10),
+          author: cleanText(it.user?.login || "", 100),
+          comments: cleanInteger(it.comments, 0, 100000, 0),
+          url: cleanText(it.html_url || "", 500),
+          updatedAt: cleanText(it.updated_at || "", 40)
+        }))
+        .filter((it) => it.number > 0);
+      sendJson(res, 200, { owner, repo, state, issues, count: issues.length, untrusted: true });
+    } catch (error) {
+      sendJson(res, 502, { error: cleanText(error.message, 500) });
+    }
+    return;
+  }
+
   // Reveal the scoped drafting key so the operator can paste it into the "Draft with Latch" add-in
   // (or any client). Operator-only; the key itself only works on /api/draft.
   if (url.pathname === "/api/draft-key" && req.method === "GET") {
@@ -1259,7 +1315,7 @@ async function handleApi(req, res, url) {
       ? normalizedExecutionPlan.commands.slice(0, 20)
       : cleanTextArray(body.renderedCommands, 8, 500);
     const suppliedGithubRepoName = cleanText(body.githubRepoName || body.repoName || "", 120);
-    const githubConfigForApproval = approvalType === "github_file" && !suppliedGithubRepoName
+    const githubConfigForApproval = ["github_file", "github_issue", "github_issue_comment"].includes(approvalType) && !suppliedGithubRepoName
       ? await loadGithubConfig()
       : null;
     const mcpAutoApprovable = approvalType === "mcp_tool_call"
@@ -1323,13 +1379,22 @@ async function handleApi(req, res, url) {
       githubRepoName: githubApprovalRepoName(approvalType, suppliedGithubRepoName, body.title, body.details, githubConfigForApproval?.defaultRepo || ""),
       githubDescription: approvalType === "github_repo" ? cleanText(body.githubDescription || body.description || "", 500) : "",
       githubVisibility: approvalType === "github_repo" ? cleanChoice(body.githubVisibility || body.visibility, ["private", "public"], "private") : "private",
-      githubOwner: ["github_repo", "github_file"].includes(approvalType) ? cleanGithubOwner(body.githubOwner || body.owner || "") : "",
+      githubOwner: ["github_repo", "github_file", "github_issue", "github_issue_comment"].includes(approvalType) ? cleanGithubOwner(body.githubOwner || body.owner || "") : "",
       githubFilePath: approvalType === "github_file" ? cleanGithubFilePath(body.githubFilePath || body.path || "README.md") : "",
       githubFileContent: approvalType === "github_file" ? cleanText(body.githubFileContent || body.content || "", 12000) : "",
       githubCommitMessage: approvalType === "github_file" ? cleanText(body.githubCommitMessage || body.commitMessage || `Update ${body.githubFilePath || body.path || "README.md"}`, 240) : "",
       githubFileSha: "",
       githubFileUrl: "",
       githubUpdatedAt: "",
+      // Issue create / comment. The body is agent-authored prose destined for a page other humans read
+      // and get emailed about, so it is length-capped like every other outbound text here.
+      githubIssueTitle: approvalType === "github_issue" ? cleanText(body.githubIssueTitle || body.issueTitle || body.title || "", 300) : "",
+      githubIssueBody: ["github_issue", "github_issue_comment"].includes(approvalType) ? cleanText(body.githubIssueBody || body.issueBody || "", 12000) : "",
+      githubIssueLabels: approvalType === "github_issue"
+        ? (Array.isArray(body.githubIssueLabels) ? body.githubIssueLabels : []).map((l) => cleanText(l, 60)).filter(Boolean).slice(0, 10)
+        : [],
+      githubIssueNumber: approvalType === "github_issue_comment" ? cleanInteger(body.githubIssueNumber ?? body.issueNumber, 1, 10_000_000, 0) : 0,
+      githubIssueUrl: "",
       githubAutoInit: approvalType === "github_repo" ? cleanBoolean(body.githubAutoInit ?? body.autoInit, true) : true,
       githubRepoUrl: "",
       githubFullName: "",
@@ -2532,6 +2597,38 @@ async function handleApprovedApprovalSideEffects(db, approval, actor = "operator
       db.events.unshift(event("github.file.failed", actor, approval.id, `${approval.githubRepoName}:${approval.githubFilePath}`));
     }
   }
+  // Issue create / comment follow the same contract as github_file: on failure the approval goes BACK to
+  // pending with the reason, so a transient GitHub error can be retried by the operator instead of the
+  // action being silently marked done. Bureau's run loop polls the approval and reads githubIssueUrl.
+  if (approval.type === "github_issue") {
+    try {
+      const issue = await createGithubIssueFromApproval(approval);
+      approval.githubIssueNumber = cleanInteger(issue?.number, 1, 10_000_000, 0);
+      approval.githubIssueUrl = cleanText(issue?.html_url || "", 500);
+      approval.githubUpdatedAt = new Date().toISOString();
+      approval.responseNote = approval.responseNote || `GitHub issue opened: ${approval.githubIssueUrl || "#" + approval.githubIssueNumber}`;
+      db.events.unshift(event("github.issue.opened", actor, approval.id, `${approval.githubRepoName}#${approval.githubIssueNumber}`));
+    } catch (error) {
+      approval.status = "pending";
+      approval.decisionReason = "GitHub issue creation failed; operator review required.";
+      approval.responseNote = `GitHub issue creation failed: ${cleanText(error.message, 1500)}`;
+      db.events.unshift(event("github.issue.failed", actor, approval.id, approval.githubRepoName || approval.title));
+    }
+  }
+  if (approval.type === "github_issue_comment") {
+    try {
+      const comment = await commentGithubIssueFromApproval(approval);
+      approval.githubIssueUrl = cleanText(comment?.html_url || "", 500);
+      approval.githubUpdatedAt = new Date().toISOString();
+      approval.responseNote = approval.responseNote || `Comment posted on issue #${approval.githubIssueNumber}: ${approval.githubIssueUrl}`;
+      db.events.unshift(event("github.issue.commented", actor, approval.id, `${approval.githubRepoName}#${approval.githubIssueNumber}`));
+    } catch (error) {
+      approval.status = "pending";
+      approval.decisionReason = "GitHub issue comment failed; operator review required.";
+      approval.responseNote = `GitHub issue comment failed: ${cleanText(error.message, 1500)}`;
+      db.events.unshift(event("github.issue.comment_failed", actor, approval.id, `${approval.githubRepoName}#${approval.githubIssueNumber}`));
+    }
+  }
   if (approval.type === "email_campaign") {
     const budget = cleanInteger(approval.plannedRecipients, 1, 1000, 1);
     const seededContacts = (Array.isArray(approval.campaignRecipients) ? approval.campaignRecipients : [])
@@ -2722,6 +2819,43 @@ async function upsertGithubFileFromApproval(approval) {
   };
   if (existing?.sha) body.sha = existing.sha;
   return await githubJson(config, "PUT", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}`, body);
+}
+
+// Resolve owner/repo the same way for every issue operation, so a missing default fails with one
+// message instead of three slightly different ones.
+async function githubIssueTarget(approval) {
+  const config = await loadGithubConfig();
+  if (!config.ready) {
+    throw new Error("GitHub connector is not configured. Run Configure-GitHub.ps1 or set GITHUB_TOKEN on the trusted host.");
+  }
+  const repo = cleanGithubRepoName(approval.githubRepoName || config.defaultRepo || "");
+  if (!repo) throw new Error("A configured GitHub repository name is required.");
+  const owner = cleanGithubOwner(approval.githubOwner || config.owner || await fetchGithubLogin(config));
+  if (!owner) throw new Error("A GitHub owner is required. Re-run Configure-GitHub.ps1 with -Owner <your-github-username>.");
+  return { config, owner, repo };
+}
+
+async function createGithubIssueFromApproval(approval) {
+  const { config, owner, repo } = await githubIssueTarget(approval);
+  const title = cleanText(approval.githubIssueTitle || approval.title || "", 300);
+  if (!title.trim()) throw new Error("An issue title is required.");
+  const body = { title, body: cleanText(approval.githubIssueBody || "", 12000) };
+  const labels = Array.isArray(approval.githubIssueLabels) ? approval.githubIssueLabels.filter(Boolean).slice(0, 10) : [];
+  if (labels.length) body.labels = labels;
+  return await githubJson(config, "POST", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`, body);
+}
+
+async function commentGithubIssueFromApproval(approval) {
+  const { config, owner, repo } = await githubIssueTarget(approval);
+  const number = cleanInteger(approval.githubIssueNumber, 1, 10_000_000, 0);
+  if (!number) throw new Error("An issue number is required to comment.");
+  const text = cleanText(approval.githubIssueBody || "", 12000);
+  if (!text.trim()) throw new Error("Comment text is required.");
+  // Confirm the issue exists before posting, so a wrong number fails with "no such issue" rather than
+  // a bare 404 from the comments endpoint that reads like a permissions problem.
+  const issue = await githubJson(config, "GET", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}`, null, { allow404: true });
+  if (!issue) throw new Error(`No issue #${number} in ${owner}/${repo}.`);
+  return await githubJson(config, "POST", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}/comments`, { body: text });
 }
 
 async function fetchGithubLogin(config) {
@@ -4136,8 +4270,12 @@ function humanBoundaryReason(approval) {
     return "Human boundary: browser/research plans using HTTP URLs, embedded URL credentials, or login/credential steps require operator approval.";
   }
   if (approval.type === "github_file" && isOwnRepoGithubFileApproval(approval)) return false;
-  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "email_campaign", "email_thread_continue", "task_continue"].includes(approval.type)) {
-    return "Human boundary: credentials, purchases, external contact, GitHub repo creation, account setup, verification, continue-checkpoints, or context answers require the operator.";
+  // Issues and comments are deliberately NOT given the own-repo exemption that github_file gets. A commit
+  // is content: silent, and reversible through git history. Opening an issue or commenting on one is
+  // COMMUNICATION — it emails every watcher and cannot be recalled, which puts it with external_contact
+  // rather than with file writes. Same reasoning as Bureau's hard floor for these two action types.
+  if (["purchase", "credential", "account_setup", "human_verification", "external_contact", "context_question", "github_repo", "github_file", "github_issue", "github_issue_comment", "email_campaign", "email_thread_continue", "task_continue"].includes(approval.type)) {
+    return "Human boundary: credentials, purchases, external contact, GitHub repo creation or issue/comment posting, account setup, verification, continue-checkpoints, or context answers require the operator.";
   }
   return "";
 }
@@ -5537,9 +5675,12 @@ function inferGithubRepoName(title, details) {
 }
 
 function githubApprovalRepoName(type, suppliedName, title, details, defaultRepo = "") {
-  if (!["github_repo", "github_file"].includes(type)) return "";
+  if (!["github_repo", "github_file", "github_issue", "github_issue_comment"].includes(type)) return "";
   if (suppliedName) return cleanGithubRepoName(suppliedName);
-  if (type === "github_file") return defaultRepo ? cleanGithubRepoName(defaultRepo) : "";
+  // A caller-supplied repo is honoured above; otherwise fall back to the configured default. Only
+  // github_repo INFERS a name from prose, because it is naming something new — for the others, guessing a
+  // repo from a title would be a guess about where to write, which is not a guess worth making.
+  if (type !== "github_repo") return defaultRepo ? cleanGithubRepoName(defaultRepo) : "";
   return cleanGithubRepoName(inferGithubRepoName(title, details));
 }
 
