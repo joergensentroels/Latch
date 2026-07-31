@@ -903,16 +903,34 @@ async function handleApi(req, res, url) {
         return { capability: label, needs, ok: false, status: m ? Number(m[1]) : 0, note: cleanText(error.message, 300) };
       }
     };
+    const unprovable = [];
     const checks = [await probe("identity", "/user", "any valid token")];
     if (owner && repo) {
       const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
       checks.push(await probe("repo metadata", base, "Metadata: Read"));
       checks.push(await probe("file read/commit", `${base}/contents/README.md`, "Contents: Read and write"));
       checks.push(await probe("issues read/post", `${base}/issues?per_page=1`, "Issues: Read and write"));
+      // Repo SETTINGS (delete_branch_on_merge, etc.) need Administration — and it CANNOT be probed. The
+      // obvious idea is `permissions.admin` on the repo object, and it is wrong: that field is the
+      // authenticated ACCOUNT's role on the repo, not the token's granted scopes. Measured here — it read
+      // `admin: true` while a settings PATCH returned 403, because the fine-grained token had no
+      // Administration permission. Reporting that as a passing check would be the exact "looks healthy
+      // while broken" failure this endpoint exists to eliminate, so it is NOT a check: it goes below as an
+      // explicitly-unprovable note. Only attempting the write settles it.
+      try {
+        const meta = await githubJson(config, "GET", base, null, { allow404: true });
+        const perms = meta?.permissions || {};
+        unprovable.push(`repo settings (Administration: Read and write) cannot be verified by any read. `
+          + `Your ACCOUNT's role on ${owner}/${repo} is admin=${Boolean(perms.admin)}, push=${Boolean(perms.push)} — `
+          + `but a fine-grained token needs Administration granted separately, and a settings change 403s without it. `
+          + `deleteBranchOnMerge is currently ${Boolean(meta?.delete_branch_on_merge)}.`);
+      } catch { /* metadata already reported above */ }
     }
     const missing = checks.filter((c) => !c.ok);
     sendJson(res, 200, {
-      owner, repo, ownerType: config.ownerType, allOk: missing.length === 0, checks,
+      // `allOk` covers the PROBED capabilities only. `unprovable` is listed separately rather than folded
+      // in, so a green allOk never implies something that was never actually tested.
+      owner, repo, ownerType: config.ownerType, allOk: missing.length === 0, checks, unprovable,
       // A fine-grained PAT against an ORG-owned repo also needs the organisation to approve it, and adding
       // a permission can put it back into pending approval — which presents as 403 on the new capability
       // while the old ones keep working. Worth saying, because editing the token looks like enough.
@@ -920,6 +938,116 @@ async function handleApi(req, res, url) {
         `${missing.map((c) => c.capability).join(", ")} unavailable. Grant: ${[...new Set(missing.map((c) => c.needs))].join("; ")}.`
         + (config.ownerType === "org" ? ` ${owner} is an ORGANISATION: a fine-grained token also needs the org to approve it, and adding a permission can re-open that approval — check Settings → Third-party Access → Personal access tokens on the org.` : "")
     });
+    return;
+  }
+
+  // List branches, flagging the two things you must know before deleting one: whether it is the default
+  // branch, and whether an OPEN pull request still points at it. A read.
+  if (url.pathname === "/api/github/branches" && req.method === "GET") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const config = await loadGithubConfig();
+    if (!config.ready) { sendJson(res, 503, { error: "GitHub connector is not configured." }); return; }
+    const repo = cleanGithubRepoName(url.searchParams.get("repo") || config.defaultRepo || "");
+    const owner = cleanGithubOwner(url.searchParams.get("owner") || config.owner || "");
+    if (!repo || !owner) { sendJson(res, 400, { error: "A repository and owner are required." }); return; }
+    const R = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    try {
+      const meta = await githubJson(config, "GET", R, null, { allow404: true });
+      if (!meta) { sendJson(res, 404, { error: `No such repository: ${owner}/${repo}` }); return; }
+      const list = await githubJson(config, "GET", `${R}/branches?per_page=100`, null, { allow404: true }) || [];
+      const openPrs = await githubJson(config, "GET", `${R}/pulls?state=open&per_page=100`, null, { allow404: true }) || [];
+      const heads = new Map((Array.isArray(openPrs) ? openPrs : []).map((p) => [String(p?.head?.ref || ""), cleanInteger(p?.number, 1, 10_000_000, 0)]));
+      const branches = (Array.isArray(list) ? list : []).map((b) => {
+        const name = cleanText(b?.name || "", 250);
+        return {
+          name,
+          isDefault: name === meta.default_branch,
+          protectedBranch: Boolean(b?.protected),
+          openPr: heads.get(name) || 0,
+          sha: cleanText(b?.commit?.sha || "", 40)
+        };
+      }).filter((b) => b.name);
+      sendJson(res, 200, { owner, repo, defaultBranch: cleanText(meta.default_branch || "", 250), deleteBranchOnMerge: Boolean(meta.delete_branch_on_merge), branches, count: branches.length });
+    } catch (error) { sendJson(res, 502, { error: cleanText(error.message, 500) }); }
+    return;
+  }
+
+  // Delete one branch by name. Operator-invoked, and deliberately NOT an agent action: an agent deleting
+  // refs is a different question from an agent creating them, and nothing has asked for it.
+  //
+  // Two refusals rather than one, because both mistakes are easy and neither is recoverable by re-running:
+  // the DEFAULT branch, and any branch an OPEN pull request still points at (deleting that closes the PR
+  // and discards the review). Named explicitly so the caller learns which guard fired.
+  if (url.pathname === "/api/github/delete-branch" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const config = await loadGithubConfig();
+    if (!config.ready) { sendJson(res, 503, { error: "GitHub connector is not configured." }); return; }
+    const repo = cleanGithubRepoName(body.repo || config.defaultRepo || "");
+    const owner = cleanGithubOwner(body.owner || config.owner || "");
+    // NOT cleanGithubBranchName: that NORMALISES a name for creation, and normalising a name you are
+    // addressing can point you at a different ref than the one asked for. A branch this connector itself
+    // created before the per-segment trim is literally `bureau/-verification-...`; sanitising it would
+    // silently retarget a live delete. Validate instead — reject what could break the path or escape the
+    // refs namespace, and otherwise pass the name through byte for byte.
+    const branch = String(body.branch || "").trim();
+    if (!repo || !owner) { sendJson(res, 400, { error: "A repository and owner are required." }); return; }
+    if (!branch) { sendJson(res, 400, { error: "A branch name is required." }); return; }
+    if (branch.length > 250 || /[\s~^:?*[\]\\]/.test(branch) || branch.includes("..") || /^\//.test(branch) || /\/$/.test(branch) || /[\x00-\x1f\x7f]/.test(branch)) {
+      sendJson(res, 400, { error: `"${cleanText(branch, 120)}" is not a valid branch name to address.` });
+      return;
+    }
+    const R = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    try {
+      const meta = await githubJson(config, "GET", R, null, { allow404: true });
+      if (!meta) { sendJson(res, 404, { error: `No such repository: ${owner}/${repo}` }); return; }
+      if (branch === meta.default_branch) { sendJson(res, 400, { error: `Refusing to delete "${branch}": it is the repository's default branch.` }); return; }
+      const ref = await githubJson(config, "GET", `${R}/git/ref/heads/${encodeURIComponent(branch)}`, null, { allow404: true });
+      if (!ref) { sendJson(res, 404, { error: `No branch "${branch}" in ${owner}/${repo}.` }); return; }
+      const openPrs = await githubJson(config, "GET", `${R}/pulls?state=open&head=${encodeURIComponent(owner)}:${encodeURIComponent(branch)}`, null, { allow404: true }) || [];
+      if (Array.isArray(openPrs) && openPrs.length) {
+        sendJson(res, 409, { error: `Refusing to delete "${branch}": pull request #${openPrs[0]?.number} is still open against it. Close or merge it first.` });
+        return;
+      }
+      await githubJson(config, "DELETE", `${R}/git/refs/heads/${encodeURIComponent(branch)}`, null, { allow404: true });
+      const db = await readDb();
+      db.events.unshift(event("github.branch.deleted", "operator", "", `${owner}/${repo}:${branch}`));
+      await writeDb(db);
+      sendJson(res, 200, { ok: true, owner, repo, branch, deletedSha: cleanText(ref?.object?.sha || "", 40) });
+    } catch (error) { sendJson(res, 502, { error: cleanText(error.message, 500) }); }
+    return;
+  }
+
+  // Repo settings — allowlisted to ONE field on purpose. A general repo-settings writer would be able to
+  // reach branch protection and visibility through the same door, so it accepts `deleteBranchOnMerge` and
+  // nothing else, and says so when handed anything unknown rather than silently ignoring it.
+  if (url.pathname === "/api/github/repo-settings" && req.method === "POST") {
+    requireOperator(role, res);
+    if (res.writableEnded) return;
+
+    const body = await readJsonBody(req);
+    const ALLOWED = ["deleteBranchOnMerge"];
+    const unknown = Object.keys(body || {}).filter((k) => !["repo", "owner", ...ALLOWED].includes(k));
+    if (unknown.length) { sendJson(res, 400, { error: `This endpoint only sets ${ALLOWED.join(", ")}. Refusing unknown field(s): ${unknown.join(", ")}.` }); return; }
+    if (body.deleteBranchOnMerge === undefined) { sendJson(res, 400, { error: "Nothing to set. Pass deleteBranchOnMerge: true|false." }); return; }
+
+    const config = await loadGithubConfig();
+    if (!config.ready) { sendJson(res, 503, { error: "GitHub connector is not configured." }); return; }
+    const repo = cleanGithubRepoName(body.repo || config.defaultRepo || "");
+    const owner = cleanGithubOwner(body.owner || config.owner || "");
+    if (!repo || !owner) { sendJson(res, 400, { error: "A repository and owner are required." }); return; }
+    const want = cleanBoolean(body.deleteBranchOnMerge, false);
+    try {
+      const updated = await githubJson(config, "PATCH", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { delete_branch_on_merge: want });
+      const db = await readDb();
+      db.events.unshift(event("github.repo.settings", "operator", "", `${owner}/${repo} deleteBranchOnMerge=${want}`));
+      await writeDb(db);
+      sendJson(res, 200, { ok: true, owner, repo, deleteBranchOnMerge: Boolean(updated?.delete_branch_on_merge) });
+    } catch (error) { sendJson(res, 502, { error: cleanText(error.message, 500) }); }
     return;
   }
 
