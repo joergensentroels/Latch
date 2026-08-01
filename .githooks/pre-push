@@ -1,0 +1,20 @@
+#!/bin/sh
+# Latch pre-push gate — runs the full offline suite before every push and blocks it on any failure.
+#
+# CI (.github/workflows/ci.yml) already runs `npm test` on push to main, so this is not the only gate.
+# It is the FAST one: CI tells you a push was broken minutes later, in a place nobody is watching on a
+# private repo, and by then it is on main. Bureau has had this since the auth gate landed 401-ing its
+# whole server suite; Latch never got it, so the two commits pushed on 2026-08-01 were gated by nothing
+# but the author remembering to type `npm test`.
+#
+# 13 seconds on this machine (8 suites: secret scan, python worker tests, agent-email, MCP, MCP
+# fingerprint, LLM fallback routing, schedule, github-prune, smoke). Cheap enough to never skip.
+#
+# Enabled via:  git config core.hooksPath .githooks   (run once per clone; already set in this one)
+# Emergency bypass (use sparingly):  git push --no-verify
+echo "pre-push: npm test"
+npm test || {
+  echo ""
+  echo "✗ pre-push blocked: tests failed. Fix them, or bypass with 'git push --no-verify' (not recommended)."
+  exit 1
+}
