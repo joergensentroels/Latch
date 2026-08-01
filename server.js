@@ -2045,7 +2045,10 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const db = await readDb();
     const worker = upsertAgencyWorker(db, body);
-    db.events.unshift(event("agency.worker.heartbeat", "agent", worker.id, `${worker.name}: ${worker.status}`));
+    // No event for a heartbeat. upsertAgencyWorker already records the timestamp that decides staleness,
+    // so the event was write-only data: 221,949 of them accumulated into 40 MB, made every mutation in
+    // the system ~30x more expensive, and pushed all real activity out of the 100-entry feed. pruneEvents
+    // drops the type as a backstop; not writing it is the actual fix.
     await writeDb(db);
     sendJson(res, 200, { ok: true, worker: publicAgencyWorker(worker) });
     return;
@@ -2872,6 +2875,31 @@ async function loadGithubConfig() {
 
 function stripJsonBom(text) {
   return String(text || "").replace(/^\uFEFF/, "");
+}
+
+// Heartbeats are LIVENESS, not history, and they were 99.2% of the database.
+//
+// Measured 2026-08-01 on the live db.json: 53.7 MB, of which `events` was 40.1 MB (97.7%) and
+// 221,949 of its 223,627 entries were `agency.worker.heartbeat` \u2014 one per worker ping since 24 May,
+// 188 bytes each, appended forever and never capped. Nothing reads them: worker staleness is decided
+// from timestamps against LATCH_AGENCY_WORKER_STALE_MS, and the only read of the array anywhere is
+// `db.events.slice(0, 100)` for the activity feed, which they had entirely crowded out.
+//
+// The cost was paid on EVERY mutation, because writeDb re-reads and re-parses the whole file to merge
+// before writing it back: read 72ms + parse 87ms + stringify 104ms + write 74ms = 337 ms of pure
+// I/O and JSON per approval you decide. Dropping heartbeats takes the file to ~2 MB and that to ~10 ms.
+//
+// Two rules, because either alone is insufficient: DROP heartbeat types outright (the source, fixed
+// separately by not writing them at all), and CAP what remains (a backstop against the next unbounded
+// event type nobody notices for two months). The cap is generous \u2014 the 1,678 meaningful events
+// accumulated over ten weeks fit inside it with room to spare, so real audit history is not at risk.
+const EVENT_KEEP = Math.max(100, Number(process.env.LATCH_EVENT_KEEP) || 2000);
+const EPHEMERAL_EVENT_TYPES = new Set(["agency.worker.heartbeat", "network.worker.heartbeat"]);
+function pruneEvents(events) {
+  if (!Array.isArray(events)) return [];
+  const keep = events.filter((e) => !EPHEMERAL_EVENT_TYPES.has(e?.type));
+  // Newest-first array (everything unshifts), so the newest survive a trim.
+  return keep.length > EVENT_KEEP ? keep.slice(0, EVENT_KEEP) : keep;
 }
 
 function publicGithubConfig(config) {
@@ -4063,7 +4091,7 @@ function normalizeDb(db) {
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.approvals = Array.isArray(db.approvals) ? db.approvals : [];
-  db.events = Array.isArray(db.events) ? db.events : [];
+  db.events = pruneEvents(db.events);
   db.attachments = Array.isArray(db.attachments) ? db.attachments : [];
   db.contextItems = Array.isArray(db.contextItems) ? db.contextItems : [];
   db.executions = Array.isArray(db.executions) ? db.executions : [];
