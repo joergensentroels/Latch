@@ -1808,7 +1808,7 @@ function renderApprovals() {
     return;
   }
   renderList(lists.approvals, approvals, (approval) => `
-    <article class="item ${approvalHighlightClass(approval.id)} ${["human_verification", "context_question", "external_contact", "web_research", "github_repo", "github_file"].includes(approval.type) ? "human-request" : ""}" data-approval-card="${escapeHtml(approval.id)}">
+    <article class="item ${approvalHighlightClass(approval.id)} ${["human_verification", "context_question", "external_contact", "web_research", "github_repo", "github_file", "github_issue", "github_issue_comment", "github_pull_request", "email_campaign", "email_thread_continue", "task_continue"].includes(approval.type) ? "human-request" : ""}" data-approval-card="${escapeHtml(approval.id)}">
       <div class="item-header">
         <h2 class="item-title">${escapeHtml(approval.title)}</h2>
         <span class="badge ${escapeHtml(approval.status)}">${escapeHtml(approval.status)}</span>
@@ -1829,10 +1829,7 @@ function renderApprovals() {
           <p>${escapeHtml(approvalActionOutcome(approval))}</p>
         </div>
       ` : ""}
-      ${approval.type === "external_contact" ? contactApprovalSummary(approval) : ""}
-      ${approval.type === "web_research" ? researchApprovalSummary(approval) : ""}
-      ${approval.type === "github_repo" ? githubRepoApprovalSummary(approval) : ""}
-      ${approval.type === "github_file" ? githubFileApprovalSummary(approval) : ""}
+      ${approvalExecutionSummary(approval)}
       <p class="item-body">${escapeHtml(approval.details)}</p>
       ${approvalAdvice(approval) ? `<p class="approval-advice">${escapeHtml(approvalAdvice(approval))}</p>` : ""}
       ${approval.expectedResponse ? `<p class="help-note"><strong>Return to agent:</strong> ${escapeHtml(approval.expectedResponse)}</p>` : ""}
@@ -2208,6 +2205,9 @@ function commandTemplateLabel(value) {
   return labels[value] || value || "Diagnostic";
 }
 
+// Every type in server.js `approvalTypes` must appear here. A missing entry degrades silently to
+// "Other", which hides what the host is about to do behind a word that describes nothing.
+// test/approval-render-coverage.mjs fails if this map falls behind the server's list.
 function formatApprovalType(value) {
   const labels = {
     command: "Command",
@@ -2220,6 +2220,13 @@ function formatApprovalType(value) {
     web_research: "Web research",
     github_repo: "GitHub repo",
     github_file: "GitHub file",
+    github_issue: "GitHub issue",
+    github_issue_comment: "GitHub comment",
+    github_pull_request: "GitHub pull request",
+    email_campaign: "Email outreach",
+    email_thread_continue: "Email thread",
+    mcp_tool_call: "MCP tool call",
+    task_continue: "Task checkpoint",
     other: "Other"
   };
   return labels[value] || "Other";
@@ -2232,6 +2239,14 @@ function approvalActionLabel(approval, status) {
   if (approval.type === "web_research") return status === "approved" ? "Approve scope" : "Deny scope";
   if (approval.type === "github_repo") return status === "approved" ? "Create repo" : "Hold";
   if (approval.type === "github_file") return status === "approved" ? "Commit file" : "Hold";
+  // Name the irreversible act on the button, not "Approve". Opening an issue emails every watcher.
+  if (approval.type === "github_issue") return status === "approved" ? "Open issue" : "Hold";
+  if (approval.type === "github_issue_comment") return status === "approved" ? "Post comment" : "Hold";
+  if (approval.type === "github_pull_request") return status === "approved" ? "Commit and open PR" : "Hold";
+  if (approval.type === "email_campaign") return status === "approved" ? "Approve and send" : "Hold";
+  if (approval.type === "email_thread_continue") return status === "approved" ? "Resume replies" : "Keep paused";
+  if (approval.type === "mcp_tool_call") return status === "approved" ? "Run tool" : "Hold";
+  if (approval.type === "task_continue") return status === "approved" ? "Continue task" : "Stop here";
   return status === "approved" ? "Approve" : "Deny";
 }
 
@@ -2261,6 +2276,13 @@ function simpleApprovalType(value) {
     web_research: "Research",
     github_repo: "GitHub repo",
     github_file: "GitHub file",
+    github_issue: "Public post",
+    github_issue_comment: "Public reply",
+    github_pull_request: "Code change",
+    email_campaign: "Outgoing email",
+    email_thread_continue: "Email replies",
+    mcp_tool_call: "Connected tool",
+    task_continue: "Keep going?",
     other: "Review"
   };
   return labels[value] || "Review";
@@ -2276,6 +2298,13 @@ function simpleApprovalActionLabel(approval, status) {
   if (approval.type === "web_research") return approved ? "Use these sources" : "Do not research";
   if (approval.type === "github_repo") return approved ? "Looks good" : "Hold this";
   if (approval.type === "github_file") return approved ? "Looks good" : "Hold this";
+  if (approval.type === "github_issue") return approved ? "Post it publicly" : "Do not post";
+  if (approval.type === "github_issue_comment") return approved ? "Post this reply" : "Do not post";
+  if (approval.type === "github_pull_request") return approved ? "Commit these files" : "Do not commit";
+  if (approval.type === "email_campaign") return approved ? "Send this email" : "Do not send";
+  if (approval.type === "email_thread_continue") return approved ? "Keep replying" : "Stop replying";
+  if (approval.type === "mcp_tool_call") return approved ? "Run this tool" : "Do not run";
+  if (approval.type === "task_continue") return approved ? "Keep going" : "Stop here";
   return approved ? "Approve" : "Deny";
 }
 
@@ -2286,14 +2315,13 @@ function simpleApprovalSummary(approval) {
   if (approval.type === "credential") {
     return `<div class="approval-summary"><strong>Private information</strong><p>Handle secrets, payment details, and login steps yourself. Do not paste them into Compass.</p></div>`;
   }
-  if (approval.type === "external_contact") return contactApprovalSummary(approval);
-  if (approval.type === "web_research") return researchApprovalSummary(approval);
-  if (approval.type === "github_repo") return githubRepoApprovalSummary(approval);
-  if (approval.type === "github_file") return githubFileApprovalSummary(approval);
   if (approval.type === "context_question") {
     return `<div class="approval-summary"><strong>Memory update</strong><p>Your answer can be saved to Context for future conversations.</p></div>`;
   }
-  return "";
+  // Simple mode gets the SAME execution fields as pro mode. A less technical operator needs to see
+  // the recipient and the body at least as much as an expert does -- hiding them here would just
+  // reproduce the gap behind a friendlier label.
+  return approvalExecutionSummary(approval);
 }
 
 function contactApprovalSummary(approval) {
@@ -2376,6 +2404,171 @@ function githubFileApprovalSummary(approval) {
       ` : ""}
     </div>
   `;
+}
+
+// --- Execution-field summaries -------------------------------------------------------------
+//
+// F1 (SECURITY-FINDINGS-2026-07.md) was fixed for shell plans only: the displayed commands are
+// derived from executionPlan.commands, so what the operator reads is what the executor runs. The
+// same split existed, unfixed, for every other executable type — the host stored emailBody,
+// mcpArgs, githubPrFiles, githubIssueBody and campaignRecipients, acted on exactly those fields,
+// and rendered NONE of them. The operator approved the worker's `title` and `details` prose while
+// the host sent the worker's structured payload. The worker wrote both halves.
+//
+// The rule these functions implement: every field the host gates on approval type at creation
+// (server.js, the `const approval = {...}` record) is worker-controlled input for that type and
+// must be on the card before the decision. test/approval-render-coverage.mjs derives both sides
+// from source and fails when a field is accepted but never shown.
+
+function githubIssueApprovalSummary(approval) {
+  const labels = approval.githubIssueLabels || [];
+  const issueUrl = approval.githubIssueUrl || "";
+  return `
+    <div class="approval-summary github-summary">
+      <strong>Open a public GitHub issue</strong>
+      <dl class="detail-grid">
+        <dt>Repository</dt><dd>${escapeHtml(approval.githubRepoName || "Configured repository")}</dd>
+        <dt>Owner</dt><dd>${escapeHtml(approval.githubOwner || "Configured account")}</dd>
+        <dt>Issue title</dt><dd>${escapeHtml(approval.githubIssueTitle || approval.title || "Not specified")}</dd>
+        <dt>Labels</dt><dd>${labels.length ? escapeHtml(labels.join(", ")) : "None"}</dd>
+        ${issueUrl ? `<dt>Opened</dt><dd><a href="${escapeHtml(issueUrl)}" rel="noreferrer">${escapeHtml(issueUrl)}</a></dd>` : ""}
+      </dl>
+      ${approval.githubIssueBody ? `
+        <details class="command-details" ${detailsAttributes("approval:github-issue", approval.id || approval.githubIssueTitle || approval.githubIssueBody)}>
+          <summary>Show exact issue body</summary>
+          <pre class="item-body">${escapeHtml(approval.githubIssueBody)}</pre>
+        </details>
+      ` : `<p class="help-note">No issue body supplied — the issue would be opened with a title only.</p>`}
+    </div>
+  `;
+}
+
+function githubIssueCommentApprovalSummary(approval) {
+  const issueUrl = approval.githubIssueUrl || "";
+  return `
+    <div class="approval-summary github-summary">
+      <strong>Comment on a public GitHub issue</strong>
+      <dl class="detail-grid">
+        <dt>Repository</dt><dd>${escapeHtml(approval.githubRepoName || "Configured repository")}</dd>
+        <dt>Owner</dt><dd>${escapeHtml(approval.githubOwner || "Configured account")}</dd>
+        <dt>Issue</dt><dd>${approval.githubIssueNumber ? `#${escapeHtml(String(approval.githubIssueNumber))}` : "Not specified"}</dd>
+        ${issueUrl ? `<dt>Posted</dt><dd><a href="${escapeHtml(issueUrl)}" rel="noreferrer">${escapeHtml(issueUrl)}</a></dd>` : ""}
+      </dl>
+      ${approval.githubIssueBody ? `
+        <details class="command-details" ${detailsAttributes("approval:github-comment", approval.id || approval.githubIssueBody)}>
+          <summary>Show exact comment</summary>
+          <pre class="item-body">${escapeHtml(approval.githubIssueBody)}</pre>
+        </details>
+      ` : `<p class="help-note">No comment body supplied — nothing would be posted.</p>`}
+    </div>
+  `;
+}
+
+function githubPullRequestApprovalSummary(approval) {
+  const files = Array.isArray(approval.githubPrFiles) ? approval.githubPrFiles : [];
+  const prUrl = approval.githubPrUrl || "";
+  return `
+    <div class="approval-summary github-summary">
+      <strong>Commit files and open a pull request</strong>
+      <dl class="detail-grid">
+        <dt>Repository</dt><dd>${escapeHtml(approval.githubRepoName || "Configured repository")}</dd>
+        <dt>Owner</dt><dd>${escapeHtml(approval.githubOwner || "Configured account")}</dd>
+        <dt>PR title</dt><dd>${escapeHtml(approval.githubPrTitle || approval.title || "Not specified")}</dd>
+        <dt>Branch</dt><dd>${escapeHtml(approval.githubPrBranch || "Derived from the title")} &rarr; ${escapeHtml(approval.githubPrBase || "Repository default branch")}</dd>
+        <dt>Commit message</dt><dd>${escapeHtml(approval.githubCommitMessage || "Derived per file")}</dd>
+        <dt>Files</dt><dd>${files.length ? escapeHtml(files.map((file) => file?.path || "(no path)").join(", ")) : "None — nothing would be committed"}</dd>
+      </dl>
+      ${approval.githubPrNumber ? `<p class="help-note">Opened as #${escapeHtml(String(approval.githubPrNumber))}${prUrl ? `: <a href="${escapeHtml(prUrl)}" rel="noreferrer">${escapeHtml(prUrl)}</a>` : ""}</p>` : ""}
+      ${files.length ? `
+        <details class="command-details" ${detailsAttributes("approval:github-pr-files", approval.id || files.map((file) => file?.path).join("\n"))}>
+          <summary>Show exact file content (${files.length} file${files.length === 1 ? "" : "s"})</summary>
+          <pre class="item-body">${escapeHtml(files.map((file) => `--- ${file?.path || "(no path)"} ---\n${file?.content || ""}`).join("\n\n"))}</pre>
+        </details>
+      ` : ""}
+      ${approval.githubPrBody ? `
+        <details class="command-details" ${detailsAttributes("approval:github-pr-body", approval.id || approval.githubPrBody)}>
+          <summary>Show pull request description</summary>
+          <pre class="item-body">${escapeHtml(approval.githubPrBody)}</pre>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+function emailCampaignApprovalSummary(approval) {
+  const recipients = approval.campaignRecipients || [];
+  // Approving does two things: it opens a send budget, AND -- if emailTo/emailBody are present --
+  // the host sends that concrete message immediately from the agent mailbox. Both must be visible.
+  const sendsNow = Boolean(String(approval.emailTo || "").includes("@") && approval.emailBody);
+  return `
+    <div class="approval-summary contact-summary">
+      <strong>${sendsNow ? "Send an email now, and open an outreach budget" : "Open an outreach budget"}</strong>
+      <dl class="detail-grid">
+        <dt>Purpose</dt><dd>${escapeHtml(approval.campaignPurpose || approval.title || "Not specified")}</dd>
+        <dt>Budget</dt><dd>${escapeHtml(String(approval.plannedRecipients || 1))} recipient(s)</dd>
+        <dt>Seeded list</dt><dd>${recipients.length ? escapeHtml(recipients.join(", ")) : "None"}</dd>
+        <dt>Sends on approval</dt><dd>${sendsNow ? escapeHtml(approval.emailTo) : "No immediate send"}</dd>
+        ${sendsNow ? `<dt>Subject</dt><dd>${escapeHtml(approval.emailSubject || "(no subject)")}</dd>` : ""}
+        ${approval.emailSentAt ? `<dt>Sent</dt><dd>${escapeHtml(formatTime(approval.emailSentAt))}</dd>` : ""}
+      </dl>
+      ${approval.emailBody ? `
+        <details class="command-details" ${detailsAttributes("approval:email-body", approval.id || approval.emailBody)}>
+          <summary>Show exact message body</summary>
+          <pre class="item-body">${escapeHtml(approval.emailBody)}</pre>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+function mcpToolCallApprovalSummary(approval) {
+  const args = approval.mcpArgs && typeof approval.mcpArgs === "object" ? approval.mcpArgs : {};
+  let argsText = "";
+  try {
+    argsText = Object.keys(args).length ? JSON.stringify(args, null, 2) : "";
+  } catch {
+    argsText = String(args);
+  }
+  return `
+    <div class="approval-summary mcp-summary">
+      <strong>Run a tool on a connected MCP server</strong>
+      <dl class="detail-grid">
+        <dt>Server</dt><dd>${escapeHtml(approval.mcpServer || "Not specified")}</dd>
+        <dt>Tool</dt><dd>${escapeHtml(approval.mcpTool || "Not specified")}</dd>
+        <dt>Arguments</dt><dd>${argsText ? `${escapeHtml(String(Object.keys(args).length))} field(s)` : "None"}</dd>
+        <dt>Credentials</dt><dd>Held by the host, never by the worker</dd>
+        ${approval.mcpAutoApprovable ? `<dt>Allowlist</dt><dd>This tool is on the server's auto-approve list</dd>` : ""}
+        ${approval.mcpRanAt ? `<dt>Ran</dt><dd>${escapeHtml(formatTime(approval.mcpRanAt))}${approval.mcpIsError ? " (returned an error)" : ""}</dd>` : ""}
+      </dl>
+      ${argsText ? `
+        <details class="command-details" ${detailsAttributes("approval:mcp-args", approval.id || `${approval.mcpServer}/${approval.mcpTool}`)}>
+          <summary>Show exact arguments</summary>
+          <pre class="item-body">${escapeHtml(argsText)}</pre>
+        </details>
+      ` : `<p class="help-note">No arguments supplied — the tool would run with an empty argument object.</p>`}
+      ${approval.mcpResult ? `
+        <details class="command-details" ${detailsAttributes("approval:mcp-result", approval.id || approval.mcpResult)}>
+          <summary>Show tool result</summary>
+          <pre class="item-body">${escapeHtml(approval.mcpResult)}</pre>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+// Dispatch for every type whose payload the host acts on. Kept as one function so the pro and
+// simple renderers cannot drift apart -- both call this.
+function approvalExecutionSummary(approval) {
+  if (approval.type === "external_contact") return contactApprovalSummary(approval);
+  if (approval.type === "web_research") return researchApprovalSummary(approval);
+  if (approval.type === "github_repo") return githubRepoApprovalSummary(approval);
+  if (approval.type === "github_file") return githubFileApprovalSummary(approval);
+  if (approval.type === "github_issue") return githubIssueApprovalSummary(approval);
+  if (approval.type === "github_issue_comment") return githubIssueCommentApprovalSummary(approval);
+  if (approval.type === "github_pull_request") return githubPullRequestApprovalSummary(approval);
+  if (approval.type === "email_campaign") return emailCampaignApprovalSummary(approval);
+  if (approval.type === "mcp_tool_call") return mcpToolCallApprovalSummary(approval);
+  return "";
 }
 
 function executionPlanMarkup(approval) {

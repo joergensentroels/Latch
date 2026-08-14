@@ -51,6 +51,27 @@ plan). Browser plans were already WYSIWYG (`executionPlanMarkup` renders `execut
 
 **Applies on:** host server restart (server-side only; no worker redeploy needed).
 
+**Generalised 2026-08-15 (F1b).** The July fix was correct but narrow: it made *shell plans* WYSIWYG and
+left the same split open everywhere else. By August the host accepted 18 approval types, and the
+connectors added since — GitHub issues, issue comments and pull requests, email outreach, MCP tool
+calls — each arrived with their own worker-supplied payload. `public/app.js` labelled 11 of the 18
+types and rendered the payload of only 4. `emailTo`, `emailBody`, `mcpArgs`, `githubPrFiles`,
+`githubIssueTitle`, `githubIssueBody` and `campaignRecipients` had **zero** occurrences in the entire
+client, while `handleApprovedApprovalSideEffects` sent, ran and committed exactly those fields. The
+operator was approving the worker's `title` and `details` prose while the host acted on the worker's
+structured data — F1 again, one connector at a time, with no root executor needed to do damage: an
+email leaves the operator's own mailbox and a GitHub issue emails every watcher and cannot be recalled.
+
+The renderers now show every type-gated field, and both label maps and the type-pill palette cover all
+18 types. The durable part is `test/approval-render-coverage.mjs`, which derives the accepted types and
+their worker-supplied fields from `server.js` and the operator's view from `public/app.js` — no list is
+kept by hand on either side. It *executes* the summary builders and renders each type twice, changing
+one field between runs: if the two outputs are identical, that field does not reach the operator and
+the suite fails. A new approval type or a new type-gated field therefore fails the build until it is
+labelled, styled and shown. Verified with 12 negative controls (each reintroduces one gap and is
+confirmed to turn the suite red for the stated reason), including one that leaves every summary
+function verbatim in the file and only unwires the two call sites — a grep-based check would stay green.
+
 ## F2 — `/api/state` exposes the full operator console to the agent key (Low–Medium)
 
 **Where:** `server.js` GET `/api/state` had only the global auth gate, no `requireOperator`.

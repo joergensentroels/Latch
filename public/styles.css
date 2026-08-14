@@ -1788,12 +1788,43 @@ body.simple-mode .chat-composer {
   color: var(--ok);
 }
 
+/* Irreversible and outbound: money, secrets, and anything that reaches another human. Opening a
+   GitHub issue or comment emails every watcher and cannot be recalled, so it sits here with email
+   and not with the file-writing types. */
 .type-pill.purchase,
 .type-pill.credential,
 .type-pill.external_contact,
+.type-pill.email_campaign,
+.type-pill.email_thread_continue,
+.type-pill.github_issue,
+.type-pill.github_issue_comment,
 .type-pill.sensitive {
   background: #fff1f3;
   color: #c01048;
+}
+
+/* Writes to a repository: consequential, but recorded in git history and reversible there. */
+.type-pill.github_repo,
+.type-pill.github_file,
+.type-pill.github_pull_request {
+  background: #eef2ff;
+  color: #3538cd;
+}
+
+/* A host-brokered call using host-held credentials the worker never sees. */
+.type-pill.mcp_tool_call {
+  background: #f4f3ff;
+  color: #5925dc;
+}
+
+/* Checkpoints and questions: the agent is waiting on a person, nothing executes on its own. */
+.type-pill.human_verification,
+.type-pill.context_question,
+.type-pill.account_setup,
+.type-pill.task_continue,
+.type-pill.other {
+  background: var(--surface-2);
+  color: var(--muted);
 }
 
 .type-pill.web_research {
