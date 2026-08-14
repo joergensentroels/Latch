@@ -3396,6 +3396,35 @@ function publicLlmConfig(config) {
   };
 }
 
+// Reasoning controls a caller may add to the outgoing request. A NARROW ALLOWLIST, not a passthrough.
+//
+// This function runs on the credential boundary: the provider API key lives here and nowhere else, which is the
+// entire point of Latch. What a caller may put into the request is therefore a security decision rather than a
+// convenience one. Arbitrary fields would let a caller enable streaming, attach tool definitions, or reach
+// provider features the operator never agreed to pay for. These two do exactly one thing — say how much the model
+// may think before it answers — and neither can change what the key is used for.
+//
+// Why it exists, measured: one agent round spent 29,125 of its 29,246 output tokens on reasoning and emitted 121
+// tokens of content across twelve calls, ten per call. Eleven turns in a row came back empty, the run finished
+// "clean" having found nothing, and the caller's own retry logic responded by RAISING the output budget — which
+// on a reasoning model buys more reasoning and never content. Without a way to say "think less", a caller cannot
+// fix that from its own side.
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "max"];
+function reasoningOptions(body) {
+  const out = {};
+  // Both spellings, because callers copy whichever their SDK uses and a silently ignored option is worse than a
+  // rejected one: it looks like the provider disobeyed.
+  const effort = cleanChoice(body.reasoningEffort || body.reasoning_effort, REASONING_EFFORTS, "");
+  if (effort) out.reasoning_effort = effort;
+  // DeepSeek V4 rejects reasoning_effort:"none" — disabling thinking is a separate field with its own shape, and
+  // only the two documented values are forwarded.
+  const thinking = body.thinking;
+  if (thinking && typeof thinking === "object" && (thinking.type === "enabled" || thinking.type === "disabled")) {
+    out.thinking = { type: thinking.type };
+  }
+  return out;
+}
+
 async function callExternalLlm(config, body) {
   if (!config.enabled) {
     const error = new Error("External LLM is not configured. Set LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY or create data/llm-provider.json.");
@@ -3423,6 +3452,7 @@ async function callExternalLlm(config, body) {
   if (body.maxTokens || body.max_tokens) {
     payload.max_tokens = numberOrDefault(body.maxTokens || body.max_tokens, 1024);
   }
+  Object.assign(payload, reasoningOptions(body));
 
   try {
     let response;
