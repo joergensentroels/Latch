@@ -944,6 +944,9 @@ async function fetchJson(path, options = {}) {
 function loginErrorMessage(error) {
   const message = String(error?.message || error || "");
   if (message.includes("401")) return "Operator key was rejected. Check the current key on the trusted host.";
+  // Without this line the throttle reads as a broken Latch at exactly the moment the operator is
+  // already rattled, and the instinctive response -- retry harder -- is the one that extends the backoff.
+  if (message.includes("429")) return "Too many rejected keys. Latch is throttling this address. Wait a few seconds, then try ONCE with the correct key -- it clears on the first success. A restart of the host clears it outright.";
   if (message.includes("Failed to fetch") || message.includes("NetworkError")) return "Compass could not reach Latch. Check that the server is running.";
   return `Unlock failed: ${message || "unknown error"}`;
 }

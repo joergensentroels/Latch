@@ -132,6 +132,7 @@ Before making the repo public, review:
 - Tailscale Serve is private; Tailscale Funnel is not used.
 - GitHub deploy keys on the VM are read-only.
 - Emergency key rotation and lockdown scripts work.
+- Every authentication gate limits repeated failed attempts, logs them, and alerts on a sustained burst — and there is a documented way back in when the operator throttles themselves (F7; `test/auth-throttle.mjs`).
 
 ## Questions For The Reviewer
 
@@ -140,9 +141,59 @@ Before making the repo public, review:
 - Are execution audit records useful without storing excessive logs?
 - Are the read-only diagnostic templates narrow enough?
 - Should operator auth move from bearer keys to signed sessions before public use?
+  **Answered 2026-08-15: no — see below.** (The repo went public with this open. Leaving a security
+  question marked "for the reviewer" on a shipped, public project is not a neutral state: it reads as
+  an admission that the maintainer does not know, which is a worse signal than a reasoned "no".)
 - Should the phone app require local PIN/passkey before showing private context?
 - Should external contact be manual-only until after a second review?
 - What minimum tests are needed before enabling any write-capable agent action?
+
+### Answer — bearer keys vs. signed sessions (2026-08-15)
+
+**No, and the reason is that the question names the wrong control.** Latch stays on bearer keys.
+
+A signed session (an HMAC/JWT cookie minted after a login) buys three things over a long-lived bearer
+token: **expiry**, **revocation without rotating the underlying secret**, and **no reusable secret
+sitting in client storage**. Weighed against what Latch actually is:
+
+- **Expiry.** The threat is a stolen operator key. On this deployment the key is only usable from
+  inside the tailnet, so stealing it means already being on the tailnet — at which point session
+  expiry buys hours, not safety. Latch already *has* expiring signed-ish sessions for the Compass
+  *user* role (`db.sessions`, 30-day TTL, 12h for grants); that is the right shape for multi-user,
+  and it is available. The operator role is deliberately different: it is one person on their own
+  hardware, and the failure mode that has actually bitten this project is *not being able to get in*,
+  not a stale session living too long.
+- **Revocation.** `Rotate-OperatorToken.ps1` exists, is documented, and does the whole job in one step
+  because there is exactly one operator credential to revoke. A session table would add a second
+  revocation surface without removing the first — the key would still exist underneath as the thing
+  that mints sessions.
+- **No reusable secret in client storage.** This is the strongest argument, and it is genuinely a
+  point against bearer keys: `localStorage` holds a token that works forever. But the same browser
+  would hold the session cookie, and Latch is served over Tailscale Serve HTTPS to the operator's own
+  devices, which are already the trust anchor for everything else. The realistic exposure is a
+  compromised operator device, and on a compromised operator device a session cookie is stolen just as
+  easily as a token.
+
+Against those modest gains, sessions add a login endpoint, a session store, cookie/CSRF handling
+(bearer headers are immune to CSRF by construction; cookies are not), clock-skew handling, and a
+second way to be locked out — in a dependency-free single-file server whose stated design value is
+that the whole authority boundary can be read in one sitting. That is real complexity added to the
+most security-critical path in the project, to mitigate a threat the deployment topology already
+mitigates.
+
+**What the question was actually pointing at.** The honest reading of "should this move to sessions
+before public use" is *"bearer keys feel weak"* — and the specific way they were weak was not the
+absence of expiry. It was that **nothing limited how many times you could guess one**. That was real,
+it was Medium, and it is now fixed (F7 in
+[SECURITY-FINDINGS-2026-07.md](./SECURITY-FINDINGS-2026-07.md)). Sessions would not have fixed it: a
+login endpoint that mints sessions is itself a gate you can guess at, and an unthrottled one is
+*exactly* as guessable as an unthrottled bearer key. The fix belonged at the attempt limit, not at the
+credential format.
+
+**What would change this answer:** more than one operator, any browser-based access from a device the
+operator does not control, or exposure beyond the tailnet (Funnel, or a public reverse proxy). Any one
+of those makes expiry and per-device revocation worth their complexity. Until then this is a
+considered no, not a deferral.
 
 ## Pre-Public Release Bar
 

@@ -119,6 +119,27 @@ const grantSessionTtlMs = Number(process.env.LATCH_GRANT_SESSION_TTL_MS || 12 * 
 // Default OFF for a public build: dev login mints a real session with no credential, so it must
 // be an explicit opt-in (LATCH_ENABLE_DEV_LOGIN=1) rather than an opt-out.
 const devUserLoginEnabled = process.env.LATCH_ENABLE_DEV_LOGIN === "1";
+// Failed-auth throttle (F7). Tunables live here with the other limits; the mechanism and the reasoning
+// behind how the bucket is keyed are at authGateBlocked() further down. Defaults are sized for a
+// single-operator install: five free misses, then one attempt per exponentially growing interval.
+const authFailureGrace = Number(process.env.LATCH_AUTH_FAILURE_GRACE || 5);
+const authBackoffBaseMs = Number(process.env.LATCH_AUTH_BACKOFF_BASE_MS || 1_000);
+// The cap is the operator's WORST-CASE WAIT after they lock themselves out, so it is deliberately
+// short. Security here comes from bounding the guess RATE, not from the length of one refusal: at a
+// 60s ceiling a grinder gets ~1,440 guesses a day against a 192-bit token, which is not a threat, while
+// an operator who fat-fingers their key is never more than a minute from getting back in.
+const authBackoffMaxMs = Number(process.env.LATCH_AUTH_BACKOFF_MAX_MS || 60_000);
+// A source that has been quiet for a whole window is forgiven, so yesterday's typo does not count
+// toward today's.
+const authFailureWindowMs = Number(process.env.LATCH_AUTH_FAILURE_WINDOW_MS || 15 * 60_000);
+const authAlertThreshold = Number(process.env.LATCH_AUTH_ALERT_THRESHOLD || 20);
+const authAlertCooldownMs = Number(process.env.LATCH_AUTH_ALERT_COOLDOWN_MS || 10 * 60_000);
+// In memory ON PURPOSE, and never written to db.json. Two reasons: a restart is then the operator's
+// documented escape hatch (see SECURITY.md "Locked out of your own Latch"), and this repo has already
+// been bitten once by an append-only array in db.json growing to 97.7% of the file. A failed-auth
+// record is exactly the shape that would do it again.
+const authFailures = new Map();
+const authFailuresMax = Number(process.env.LATCH_AUTH_TRACKED_SOURCES_MAX || 1_000);
 const defaultMessageChannels = [
   { id: "compass", label: "Companion", description: "Direct chat with Compass Companion", builtIn: true },
   { id: "general", label: "General", description: "Loose notes", builtIn: true },
@@ -581,11 +602,16 @@ async function handleApi(req, res, url) {
   // by the main auth gate, so it can reach nothing else. No account access and no send: it just
   // returns text; you review and send in your own client.
   if (url.pathname === "/api/draft" && req.method === "POST") {
+    // Gate name "draft", shared with /api/assist below: both accept the SAME credential, so they must
+    // share one bucket. Two buckets would double an attacker's guess budget for free.
+    if (authGateBlocked(req, res, "draft")) return;
     const token = bearerToken(req);
     if (!token || !safeEqual(token, auth.draftToken)) {
+      recordAuthFailure("draft", req, Boolean(token));
       sendJson(res, 401, { error: "unauthorized" });
       return;
     }
+    clearAuthFailures("draft", req);
     const out = await generateAssist("reply", await readJsonBody(req));
     if (!out.ok) sendJson(res, out.status || 502, { ok: false, error: out.error });
     else sendJson(res, 200, { ok: true, draft: out.output, subject: out.subject });
@@ -595,11 +621,14 @@ async function handleApi(req, res, url) {
   // Generalized read-only assist: reply / summarize / action_items / rewrite. Same scoped draft
   // token; local model by default; content is untrusted; nothing is sent -- it just returns text.
   if (url.pathname === "/api/assist" && req.method === "POST") {
+    if (authGateBlocked(req, res, "draft")) return;
     const token = bearerToken(req);
     if (!token || !safeEqual(token, auth.draftToken)) {
+      recordAuthFailure("draft", req, Boolean(token));
       sendJson(res, 401, { error: "unauthorized" });
       return;
     }
+    clearAuthFailures("draft", req);
     const body = await readJsonBody(req);
     const mode = cleanChoice(body.mode, ["reply", "summarize", "action_items", "rewrite"], "summarize");
     const out = await generateAssist(mode, body);
@@ -622,11 +651,17 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // The operator/agent gate. Checked here rather than at the top of handleApi so that a throttled
+  // console does not also refuse /api/health, /api/auth/config, or a Compass user holding a valid
+  // user_ session -- those are different credentials and have their own buckets.
+  if (authGateBlocked(req, res, "console")) return;
   const role = authenticate(req);
   if (!role) {
+    recordAuthFailure("console", req, Boolean(consoleToken(req)));
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
+  clearAuthFailures("console", req);
 
   if (url.pathname === "/api/state" && req.method === "GET") {
     // SECURITY (pre-public review F2): visibleState() is the full operator console -- every
@@ -671,6 +706,10 @@ async function handleApi(req, res, url) {
         archived: countArchived(db)
       },
       autonomy: publicAutonomyPolicy(db.meta.autonomyPolicy),
+      // Who has been failing to authenticate, and whether anything is currently throttled. Operator-only
+      // (this whole route is requireOperator); the log line and the burst notification are the paths that
+      // reach the operator when they are NOT looking at the console.
+      authThrottle: authThrottleStatus(),
       agentEmailPolicy: publicAgentEmailPolicy(db.meta.agentEmailPolicy),
       productContract: publicProductContract(),
       agencyWorkers: publicAgencyWorkers(db),
@@ -2290,11 +2329,14 @@ async function handleApi(req, res, url) {
 }
 
 async function handleNetworkWorkerApi(req, res, url) {
+  if (authGateBlocked(req, res, "worker")) return;
   const authResult = await authenticateNetworkWorker(req);
   if (!authResult) {
+    recordAuthFailure("worker", req, Boolean(bearerToken(req)));
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
+  clearAuthFailures("worker", req);
 
   const { db, worker } = authResult;
   if (url.pathname === "/api/network/worker/heartbeat" && req.method === "POST") {
@@ -2364,11 +2406,14 @@ async function handleMeApi(req, res, url) {
     return;
   }
 
+  if (authGateBlocked(req, res, "user")) return;
   const authResult = await authenticateUser(req);
   if (!authResult) {
+    recordAuthFailure("user", req, Boolean(bearerToken(req)));
     sendJson(res, 401, { error: "unauthorized" });
     return;
   }
+  clearAuthFailures("user", req);
 
   const { db, user, session } = authResult;
   session.lastSeenAt = new Date().toISOString();
@@ -3825,13 +3870,185 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-function authenticate(req) {
+// The console credential as the caller offered it, by either accepted spelling. Extracted so the
+// throttle can ask "did this request present a credential at all?" using exactly the same rule the
+// comparison below uses -- a second, subtly different extractor here would be a bypass.
+function consoleToken(req) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : req.headers["x-command-token"];
+  return (header.startsWith("Bearer ") ? header.slice(7) : req.headers["x-command-token"]) || "";
+}
+
+function authenticate(req) {
+  const token = consoleToken(req);
   if (!token) return null;
   if (safeEqual(token, auth.operatorToken)) return "operator";
   if (safeEqual(token, auth.agentToken)) return "agent";
   return null;
+}
+
+// ---------- failed-auth throttle (F7) ----------
+//
+// safeEqual above is timing-safe, and the July self-review recorded that as holding. Timing-safety and
+// brute-force resistance are DIFFERENT PROPERTIES, and until this change the repo had only the first:
+// a caller could offer an unlimited number of wrong keys at line rate, and nothing counted them, logged
+// them or told the operator. That gap is worse here than on a public web app, because the stated threat
+// model is a prompt-injected worker that ALREADY sits on the operator's tailnet and ALREADY holds a
+// valid agent key. Grinding the operator key from inside the perimeter was free.
+//
+// HOW THE BUCKET IS KEYED, and why: on the gate plus the TRUE SOCKET PEER (req.socket.remoteAddress),
+// and on nothing a caller can set. No X-Forwarded-For, no Tailscale-User-* header, no token prefix.
+// Those headers are simply absent on a direct connection to the port, so honouring them would let an
+// attacker mint a fresh bucket per request and evade the throttle entirely -- a header is a claim, not
+// a fact, and a throttle keyed on a claim is decoration.
+//
+// The consequence, stated plainly rather than buried: behind `tailscale serve` every request arrives
+// from loopback, so on that deployment there is ONE BUCKET PER GATE and the backoff is effectively
+// GLOBAL. A hostile worker can therefore slow the operator down on the same gate. That is the chosen
+// direction. A global backoff that briefly inconveniences a legitimate operator is recoverable; a
+// per-claimed-identity backoff an attacker sidesteps is not a control at all. Reached directly over the
+// tailnet each peer has its own 100.x address and its own bucket, so the isolation exists exactly where
+// it can be trusted and collapses to global where it cannot.
+function throttleSource(req) {
+  const address = req.socket?.remoteAddress || "unknown";
+  // ::ffff:127.0.0.1 and 127.0.0.1 are the same peer arriving over a dual-stack socket. Collapsing
+  // them keeps one bucket instead of handing the same caller two.
+  return address.startsWith("::ffff:") ? address.slice(7) : address;
+}
+
+function authThrottleKey(gate, req) {
+  return `${gate}|${throttleSource(req)}`;
+}
+
+// Growing interval between permitted attempts once the grace allowance is spent: 1s, 2s, 4s ... capped.
+function authBackoffMs(failures) {
+  const over = failures - authFailureGrace;
+  if (over <= 0) return 0;
+  return Math.min(authBackoffMaxMs, authBackoffBaseMs * 2 ** (over - 1));
+}
+
+function authThrottleRecord(gate, req, now) {
+  const key = authThrottleKey(gate, req);
+  const record = authFailures.get(key);
+  if (!record) return null;
+  // Forgiven only when the source has been quiet for a whole window AND is not still inside its
+  // backoff. The second half matters if an operator configures a backoff cap longer than the window:
+  // without it the record would be dropped while still blocking, and the throttle would fail OPEN at
+  // exactly the setting an operator chose because they wanted it stricter.
+  if (now - record.lastFailureAt > authFailureWindowMs && now >= record.nextAttemptAt) {
+    authFailures.delete(key);
+    return null;
+  }
+  return record;
+}
+
+// Call immediately before evaluating a credential. Returns true when it has already answered the
+// request with 429, in which case the caller MUST NOT compare anything.
+//
+// The check is deliberately in front of the comparison. A throttle that still compared the offered key
+// and only refused afterwards would hand back an unlimited number of guesses -- it would rate-limit the
+// answer, not the attempt, and leave the property being fixed here exactly as broken as it was.
+//
+// NOT a hard lock: once throttled, one attempt is let through per backoff interval. That single design
+// point is what keeps this from being a DoS primitive. A worker holding a stale agent key after a
+// rotation re-fails every poll; under a hard lock it would pin the gate shut and the operator -- who
+// arrives from the same loopback address behind Serve -- could never get in with the NEW key to fix it.
+// The trickle bounds an attacker to roughly one guess a minute while leaving the operator a way in at
+// all times.
+function authGateBlocked(req, res, gate) {
+  const now = Date.now();
+  const record = authThrottleRecord(gate, req, now);
+  if (!record || record.failures <= authFailureGrace) return false;
+  if (now >= record.nextAttemptAt) {
+    // Claim the slot synchronously, before returning and before any await, so a burst of concurrent
+    // requests cannot all pass through the same one.
+    record.nextAttemptAt = now + authBackoffMs(record.failures);
+    return false;
+  }
+  const retryAfter = Math.max(1, Math.ceil((record.nextAttemptAt - now) / 1000));
+  res.writeHead(429, {
+    "content-type": "application/json; charset=utf-8",
+    "retry-after": String(retryAfter)
+  });
+  res.end(JSON.stringify({ error: "too_many_auth_failures", gate, retryAfterSeconds: retryAfter }));
+  return true;
+}
+
+// Call at every site that answers 401. `presented` must be false when the request carried no
+// credential: a request with no key cannot be a guess AT a key, and counting it would let an
+// unauthenticated passer-by -- or the operator's own browser before they paste the key in -- spend the
+// operator's grace allowance for them.
+function recordAuthFailure(gate, req, presented) {
+  if (!presented) return;
+  const now = Date.now();
+  const key = authThrottleKey(gate, req);
+  const record = authThrottleRecord(gate, req, now)
+    || { failures: 0, nextAttemptAt: 0, lastFailureAt: 0, alertedAt: 0 };
+  record.failures += 1;
+  record.lastFailureAt = now;
+  record.nextAttemptAt = now + authBackoffMs(record.failures);
+  authFailures.set(key, record);
+  if (authFailures.size > authFailuresMax) sweepAuthFailures(now);
+  // Log line, always. The gate, the peer and the counters -- never the offered credential, which would
+  // put a near-miss guess (and, on an operator typo, most of the real key) into a file that rotates and
+  // is read over the shoulder.
+  console.warn(`auth.failure gate=${gate} source=${throttleSource(req)} failures=${record.failures} nextAttemptInMs=${Math.max(0, record.nextAttemptAt - now)}`);
+  if (record.failures >= authAlertThreshold && now - record.alertedAt >= authAlertCooldownMs) {
+    record.alertedAt = now;
+    notifyAuthBurst(gate, throttleSource(req), record.failures);
+  }
+}
+
+// A success clears the bucket, so an operator who mistypes and then gets it right is immediately clean
+// and never waits anything out.
+function clearAuthFailures(gate, req) {
+  authFailures.delete(authThrottleKey(gate, req));
+}
+
+function sweepAuthFailures(now) {
+  for (const [key, record] of authFailures) {
+    if (now - record.lastFailureAt > authFailureWindowMs) authFailures.delete(key);
+  }
+}
+
+// Reuses the ONE outbound notification path this repo has (sendNotification -> notificationRequest), so
+// a burst arrives wherever approvals already arrive -- ntfy or webhook, whichever the operator set up.
+// Inventing a second delivery path would mean a second thing to configure, and the untested one is
+// always the one that is silent when it matters.
+function notifyAuthBurst(gate, source, failures) {
+  sendNotification({
+    type: "auth.burst",
+    title: "Latch: repeated failed authentication",
+    body: `${failures} rejected key attempts on the ${gate} gate from ${source}. Latch is now throttling that source. If this is not you, treat the key as being guessed at.`,
+    url: "/?tab=settings"
+  }).catch((error) => console.warn(`auth.burst notification failed: ${error.message}`));
+}
+
+// Operator-only view of the throttle, surfaced through /api/about. Deliberately NOT written to
+// db.json as events: one record per failed attempt is precisely the unbounded-array shape that already
+// grew this repo's database to 97.7% heartbeat noise once.
+function authThrottleStatus(now = Date.now()) {
+  const sources = [];
+  for (const [key, record] of authFailures) {
+    const separator = key.indexOf("|");
+    sources.push({
+      gate: key.slice(0, separator),
+      source: key.slice(separator + 1),
+      failures: record.failures,
+      throttled: record.failures > authFailureGrace && now < record.nextAttemptAt,
+      retryAfterSeconds: Math.max(0, Math.ceil((record.nextAttemptAt - now) / 1000)),
+      lastFailureAt: new Date(record.lastFailureAt).toISOString()
+    });
+  }
+  sources.sort((a, b) => b.failures - a.failures);
+  return {
+    grace: authFailureGrace,
+    backoffBaseMs: authBackoffBaseMs,
+    backoffMaxMs: authBackoffMaxMs,
+    alertThreshold: authAlertThreshold,
+    trackedSources: sources.length,
+    throttledSources: sources.filter((item) => item.throttled).length,
+    recent: sources.slice(0, 20)
+  };
 }
 
 async function authenticateUser(req) {

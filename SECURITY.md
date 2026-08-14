@@ -109,6 +109,70 @@ Keep secrets, recovery codes, payment data, and long-lived credentials out of sh
 
 Use the built-in backup/export controls before manual maintenance. Backups remain local under `data\` and are not tracked by Git.
 
+## Failed-Auth Throttle
+
+Every key comparison in Latch is timing-safe (`safeEqual`). That is a different property from
+brute-force resistance, and until 2026-08-15 Latch had only the first one: a caller could offer wrong
+keys as fast as the socket allowed, forever, and nothing counted them, logged them or told you. See
+F7 in [SECURITY-FINDINGS-2026-07.md](./SECURITY-FINDINGS-2026-07.md).
+
+All five gates are now throttled — the operator/agent console key, the scoped draft token
+(`/api/draft` and `/api/assist` share one bucket, since they accept the same credential), the
+Compass user session, and the network-worker token.
+
+How it behaves:
+
+- **Five free misses** per source per gate. Fat-fingering your key costs you nothing.
+- After that the source is **throttled**: requests are answered `429` with a `Retry-After` header, and
+  exactly **one attempt is allowed through per backoff interval** — 1s, 2s, 4s, doubling to a 60-second
+  ceiling.
+- **A success clears the count immediately.** Mistype four times and get it right on the fifth: nothing
+  is remembered.
+- A request carrying **no credential at all is not counted**. It cannot be a guess at a key, and
+  counting it would let any passer-by spend your allowance for you.
+- The counter is forgiven after 15 quiet minutes.
+
+**What it is keyed on, and the honest limitation.** The bucket is keyed on the gate plus the *true
+socket peer address*, and on nothing a caller can set — no `X-Forwarded-For`, no `Tailscale-User-*`
+header. Those headers are absent on a direct connection to the port, so honouring them would let an
+attacker mint a fresh bucket per request. The consequence: **behind `tailscale serve` every request
+arrives from loopback, so there is one bucket per gate and the backoff is effectively global.** A
+hostile worker can slow you down on the same gate it is being throttled on. That is the deliberate
+choice — a global backoff that briefly inconveniences you is recoverable; a per-claimed-identity
+backoff an attacker sidesteps is not a control at all. Reached directly over the tailnet, each peer has
+its own address and its own bucket.
+
+**How you find out.** Every failed attempt writes a line to `latch.log`
+(`auth.failure gate=… source=… failures=…` — never the offered key). At 20 failures on one gate Latch
+sends an `auth.burst` notification through the notification provider you already configured, the same
+path approvals use, at most one per gate per 10 minutes. Current state is visible to the operator at
+`GET /api/about` under `authThrottle`.
+
+### Locked out of your own Latch
+
+This is designed so you cannot be. In order of escalation:
+
+1. **Wait up to 60 seconds and try once more with the correct key.** The throttle never hard-locks;
+   it lets one attempt through per interval, and the ceiling is 60 seconds. A success clears
+   everything. This is the intended path and needs no host access.
+2. **Restart Latch.** The counters are held in memory and deliberately never written to `data/db.json`,
+   so a restart clears every bucket. `Stop-Latch.ps1` then `Start-Latch-Tailscale.ps1`.
+3. **`Emergency-Latch-Lockdown.ps1`** rotates both keys and restarts by default, which clears the
+   throttle as a side effect. Use it when you think the key is actually being guessed at, not merely
+   when you are locked out — it invalidates the worker's key too.
+4. **`Rotate-OperatorToken.ps1`** rotates the operator key only and tells you to restart, which also
+   clears the throttle.
+
+**The case that matters most:** a worker still holding a *stale agent key* after a rotation re-fails on
+every poll and keeps the console gate throttled. This is exactly why the throttle is a trickle rather
+than a hard lock — under a hard lock that worker would pin the gate shut and you could never get in
+with the new key to fix it. With the trickle you always get an attempt; stop the worker or update its
+key to end the noise.
+
+Tunable, if the defaults do not fit your install: `LATCH_AUTH_FAILURE_GRACE`,
+`LATCH_AUTH_BACKOFF_BASE_MS`, `LATCH_AUTH_BACKOFF_MAX_MS`, `LATCH_AUTH_FAILURE_WINDOW_MS`,
+`LATCH_AUTH_ALERT_THRESHOLD`, `LATCH_AUTH_ALERT_COOLDOWN_MS`.
+
 ## Local App Lock
 
 The Latch web app can use a local PIN lock on each browser/device. On private HTTPS, it can also register a local passkey/biometric unlock. This protects against casual access when a phone is already unlocked, but it is not a replacement for the operator key, Tailscale, or the phone's OS-level lock.

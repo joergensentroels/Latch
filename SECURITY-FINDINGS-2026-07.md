@@ -13,11 +13,14 @@ ranked by how much they erode that promise.
 
 ## Summary
 
-Five findings. None is a remote-unauthenticated compromise; the core boundary (auth gate, timing-safe
-key compare, operator-only approval decisions, credential isolation) holds. The two that mattered
-were **confused-deputy / least-privilege** gaps against the untrusted worker (F1, F2) — both fixed in
-this pass. F3 is defense-in-depth on the root executor (fixed). F4 is a documented residual. F5 was
-stale documentation (fixed).
+Five findings in the original 2026-07-04 pass, plus F6 (2026-07-05 boundary sweep) and F7 (2026-08-15).
+None is a remote-unauthenticated compromise; the core boundary (auth gate, timing-safe key compare,
+operator-only approval decisions, credential isolation) holds. The two that mattered in the first pass
+were **confused-deputy / least-privilege** gaps against the untrusted worker (F1, F2) — both fixed
+then. F3 is defense-in-depth on the root executor (fixed). F4 is a documented residual. F5 was stale
+documentation (fixed). F6 was metadata leakage to the worker (fixed). **F7 is the one this review
+missed entirely rather than misjudged**: the gate was checked for *how* it compares keys and never for
+*how many times it will let you try*.
 
 | # | Severity | Finding | Status |
 |---|----------|---------|--------|
@@ -26,6 +29,8 @@ stale documentation (fixed).
 | F3 | Low | Executor `screenshot`/`download` wrote to an unconstrained `path` → root executor could write anywhere on the worker | **Fixed** (worker redeploy) |
 | F4 | Low | DNS-rebinding TOCTOU in `reject_private_url` (SSRF guard resolves, then Playwright re-resolves) | Accepted residual |
 | F5 | Doc | `SECURITY-REVIEW.md` said the bridge cannot send email / `external_contact` is draft-only — no longer true | **Fixed** (docs) |
+| F6 | Low | Unshared context *metadata* (titles, filenames, tags) reached the worker via `/api/agent/poll` | **Fixed** (host restart) |
+| F7 | **Medium** | No brute-force protection on any auth gate — unlimited, unlogged, unalerted key guessing by a worker that is already inside the perimeter | **Fixed** (host restart) |
 
 ---
 
@@ -137,7 +142,9 @@ host-brokered email boundary.
 
 - **Global auth gate:** every `/api/*` route is behind a valid-key check (401 otherwise).
 - **Key comparison is timing-safe:** `safeEqual` hashes both sides with SHA-256 and uses
-  `timingSafeEqual` — length-safe and no empty-token bypass.
+  `timingSafeEqual` — length-safe and no empty-token bypass. **(Still true, but see F7: this line was
+  the only thing this review said about the gate's resistance to guessing, and a reader could easily
+  come away believing the gate was hard to guess at. It was not — there was no attempt limit at all.)**
 - **Approval *decisions* are operator-only:** PATCH/DELETE `/api/approvals/:id` are `requireOperator`.
   The agent cannot approve or deny its own requests — the most important property, and it holds. The
   executor additionally only runs approvals with server-set `status === "approved"`.
@@ -184,9 +191,105 @@ network path already pre-filtered on `shareWithNetwork`; the agent path did not 
 the network path. Regression test in `test/smoke.mjs` (an unshared note must not appear in the poll at
 all). Applies on host restart.
 
-**Also reviewed, no change needed:** profile/anchor are operator-only + file-locked; approval
+**Also reviewed, no change needed (but see F7 below — one line here was wrong):** profile/anchor are operator-only + file-locked; approval
 decisions operator-only; auto-approval is typed-only; the executor runs only approved plans as a
 non-root user; `publicAuthConfig` exposes no secrets; user/network-worker feeds are per-caller scoped.
 (Very-minor notes, not acted on: the network-worker token is matched by hash equality rather than
 `timingSafeEqual` — acceptable since the stored value is already a hash; channel labels are returned
 to signed-in users unfiltered — labels are not secrets.)
+
+---
+
+## Addendum — 2026-08-15
+
+### F7 — No brute-force protection on any authentication gate (Medium, Fixed)
+
+**Where:** `server.js` — every 401 site. `/api/draft` and `/api/assist` (draft token), the
+operator/agent console gate (`authenticate`), `handleMeApi` (Compass user session), and
+`handleNetworkWorkerApi` (network-worker token).
+
+**What:** Latch counted failed authentication attempts nowhere. There was no throttle, no backoff and
+no lockout on any gate — the words *throttle*, *lockout* and *backoff* had zero occurrences in
+`server.js`, and the file's only `429` was on email sending. A caller could offer wrong keys as fast as
+the socket allowed, indefinitely, and the host produced no log line, no counter and no alert. Nothing
+downstream would have noticed either: a rejected key wrote no event, so `db.json` held no record that
+anyone had ever tried.
+
+**Why this is worse here than the generic "no rate limiting" note.** The threat model this review is
+written against (see the top of this document) is *a compromised or prompt-injected worker*. That
+worker is not an anonymous stranger on the internet — it sits on the operator's tailnet, it is already
+speaking HTTP to this host, and it **already holds a valid agent key**. The cheapest possible thing for
+such a worker to do is grind the operator key from inside the perimeter. It costs nothing, is invisible
+in every artifact the operator looks at, and the operator key is described in this repo's own
+`Rotate-OperatorToken.ps1` as "effectively shell access on the host". Latch's design promise is that a
+compromised worker cannot reach the operator's authority; an unmetered, unlogged guess loop against
+that exact credential is a direct attack on that promise, and no document acknowledged it.
+
+**On "the key compare is timing-safe".** It is, and the *What held up* section above says so. That
+statement is true and was doing real work — but timing-safety and brute-force resistance are different
+properties, and it was the only thing the review said about the gate's resistance to guessing. A
+reader could reasonably have inferred the gate was hard to attack. It was not. That inference is part
+of what this finding is about, so the line above has been annotated rather than left to stand alone.
+
+**Corroborating evidence that this was an oversight rather than a decision:** `Rotate-OperatorToken.ps1`
+(step 4, added 2026-07-31) already warns the operator that repeated 401s "start returning 429" and that
+this is "the guard working, not a rotation problem" — describing **Bureau's** damper, on the sibling
+service gated by the *same operator token*. The control existed on one of the two services that token
+opens, and its absence on the other was documented nowhere.
+
+**Fix:** a per-source, per-gate failed-attempt throttle covering all five gates.
+
+- **Keyed on the gate plus the true socket peer (`req.socket.remoteAddress`), and on nothing a caller
+  can set.** No `X-Forwarded-For`, no `Tailscale-User-*`, no token prefix. Those headers are absent on
+  a direct connection to the port, so honouring them would let an attacker mint a fresh bucket per
+  request — a header is a claim, not a fact. The stated consequence: behind `tailscale serve` every
+  request presents as loopback, so on that deployment there is one bucket per gate and **the backoff is
+  effectively global**. That is the chosen direction. A global backoff that briefly inconveniences the
+  operator is recoverable; a per-claimed-identity backoff an attacker sidesteps is not a control.
+  Reached directly over the tailnet each peer has its own address and its own bucket, so the isolation
+  exists where it can be trusted and collapses to global where it cannot.
+- **The check runs before the comparison.** A throttle that still evaluated the offered key would
+  rate-limit the *answer* rather than the *attempt*, and leave the guess budget unlimited. A correct
+  operator key is therefore also refused while a source is throttled — which is what makes the recovery
+  design below load-bearing rather than decorative.
+- **Five free misses, then one attempt per exponentially growing interval** (1s, 2s, 4s … capped at
+  60s), forgiven after 15 quiet minutes, and cleared outright by any success.
+- **Requests presenting no credential are not counted** — they cannot be guesses at a key, and counting
+  them would let an unauthenticated passer-by, or the operator's own browser before the key is pasted
+  in, spend the allowance.
+- **`/api/draft` and `/api/assist` share one bucket**, because they accept the same credential. Two
+  buckets would have doubled an attacker's guess budget for free.
+- **Observable:** a `console.warn` line per failed attempt (gate, peer, counters — never the offered
+  key), an `auth.burst` notification at 20 failures on a gate through the *existing*
+  `sendNotification` path so it arrives wherever approvals already arrive, and live state at
+  `GET /api/about` under `authThrottle`. State is in memory and deliberately never written to
+  `db.json`: one record per failed attempt is precisely the unbounded-array shape that once grew this
+  repo's database to 97.7% heartbeat noise.
+
+**Not a hard lockout, on purpose.** The obvious design — N failures, source locked for 15 minutes —
+would have converted a brute-force control into a denial-of-service primitive handed to the exact
+attacker in the threat model. Behind Serve the worker and the operator share a peer address; a hostile
+worker could pin the console shut on demand. The realistic *non*-hostile version is worse, because it
+happens by accident: a worker still holding a stale agent key after a rotation re-fails on every poll,
+and under a hard lock the operator could never get in with the new key to fix it. The trickle bounds an
+attacker to roughly one guess per minute — against a 192-bit token, not a threat under any budget —
+while leaving the operator a way in at all times. Recovery is documented in
+[SECURITY.md](./SECURITY.md#locked-out-of-your-own-latch): wait one interval and succeed, or restart
+(counters are in memory), or `Emergency-Latch-Lockdown.ps1` / `Rotate-OperatorToken.ps1`, both of which
+restart and so clear the state as a side effect.
+
+**Regression test:** `test/auth-throttle.mjs`, wired into `npm test`. Every assertion is a behaviour —
+make N bad requests, assert the (N+1)th is refused — and never the presence of a name; the F1b pass
+recorded three checks that stayed green under their own controls because they grepped for an
+identifier instead of exercising a path. Verified with **12 negative controls**, each removing one
+protection and confirmed to turn the suite red *for the stated reason*, with the source restored and
+re-verified green afterwards: unwiring the gate check while leaving every function definition verbatim
+in the file (a grep-based check would stay green); moving the check behind the comparison; not counting
+failures; removing the burst notification; removing the log line; never clearing on success; splitting
+the shared draft bucket; counting credential-less requests; collapsing all gates into one bucket;
+dropping the `Retry-After` header; hiding state from `/api/about`; and logging the offered credential.
+The suite also carries its own positive control: the "anonymous requests never accumulate" check is
+followed by a credentialled loop proving that same gate *can* throttle, so the absence result cannot be
+satisfied by a gate that never throttles at all.
+
+**Applies on:** host server restart (server-side only; no worker redeploy needed).
