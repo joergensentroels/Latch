@@ -3422,6 +3422,16 @@ function reasoningOptions(body) {
   if (thinking && typeof thinking === "object" && (thinking.type === "enabled" || thinking.type === "disabled")) {
     out.thinking = { type: thinking.type };
   }
+  // JSON mode — the third and last field on this allowlist, and the narrowest. Only {"type":"json_object"} is
+  // forwarded, REBUILT so nothing rides along; json_schema and every other shape are dropped, because a schema is
+  // caller-authored content and this list only carries fixed switches. Why it was added: an agent caller measured
+  // fourteen unparsed replies across ten rounds and every single one was JSON truncated or malformed mid-object —
+  // constrained decoding at the provider removes that class outright. Like the reasoning fields, it changes how
+  // the model ANSWERS, not what the API key can be used for.
+  const rf = body.responseFormat || body.response_format;
+  if (rf && typeof rf === "object" && rf.type === "json_object") {
+    out.response_format = { type: "json_object" };
+  }
   return out;
 }
 

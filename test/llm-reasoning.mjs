@@ -135,6 +135,20 @@ try {
   assert.deepEqual((await sent({ thinking: { type: "enabled" } })).thinking, { type: "enabled" },
     "and an enabled one does");
 
+  // JSON mode, the third allowlisted field. Only the exact documented shape travels, rebuilt.
+  assert.deepEqual((await sent({ responseFormat: { type: "json_object" } })).response_format, { type: "json_object" },
+    "camelCase json mode travels, snake_cased");
+  assert.deepEqual((await sent({ response_format: { type: "json_object" } })).response_format, { type: "json_object" },
+    "snake_case json mode travels too");
+  const rfExtras = await sent({ response_format: { type: "json_object", schema: { evil: true }, junk: 1 } });
+  assert.deepEqual(rfExtras.response_format, { type: "json_object" },
+    "only `type` survives — the block is rebuilt, not copied");
+  const rfSchema = await sent({ response_format: { type: "json_schema", json_schema: { name: "x" } } });
+  assert.ok(!("response_format" in rfSchema),
+    "json_schema is dropped — a schema is caller-authored content, not a fixed switch");
+  const rfString = await sent({ response_format: "json_object" });
+  assert.ok(!("response_format" in rfString), "a bare string is the wrong shape and is dropped");
+
   // What is NOT. Each of these is a way the boundary could leak if the code were a passthrough instead.
   const junkEffort = await sent({ reasoningEffort: "banana" });
   assert.ok(!("reasoning_effort" in junkEffort), "an unlisted effort value is dropped, not forwarded");
@@ -152,7 +166,9 @@ try {
     tool_choice: "required",
     top_p: 0.01,
     n: 8,
-    response_format: { type: "json_object" },
+    // json_schema, not json_object: the allowlisted shape now travels by design, so the smuggling case has to use
+    // a shape that must NOT — otherwise this block would fail for the wrong reason and prove nothing.
+    response_format: { type: "json_schema", json_schema: { name: "exfil" } },
     user: "someone-else"
   });
   for (const key of ["stream", "tools", "tool_choice", "top_p", "n", "response_format", "user"]) {
