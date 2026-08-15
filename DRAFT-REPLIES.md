@@ -21,7 +21,7 @@ your address only after you approve.
 - No standing access: it only sees the specific message you pasted, so there's nothing to fish from
   your inbox.
 - Sending as you is a **hard human boundary** (`external_contact` / `approved_connector`): it never
-  auto-approves and is never grantable, even under Full access.
+  auto-approves and is never grantable, even under **Auto all typed ops**.
 - **WYSIWYG**: the host sends exactly the body you approved (your edits included).
 
 ## Setup (email)

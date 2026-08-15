@@ -12,7 +12,7 @@ Implemented now:
 - approved read-only research against exact seed URLs
 - compact source-note reporting back into Latch
 - VM-local source-note caching by URL
-- approved headless browser execution plans for operator and Pro-user Full access workflows
+- approved headless browser execution plans for operator and Pro-user workflows under Auto all typed ops
 - no automatic sending
 - no personal browser profiles
 - no mailbox credentials on the OpenClaw VM

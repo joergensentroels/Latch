@@ -2174,7 +2174,7 @@ function approvalAdvice(approval) {
     return "GitHub repo creation uses the trusted host connector after approval. The worker never receives the GitHub token.";
   }
   if (approval.type === "github_file") {
-    return "CompassProjects file updates can auto-commit in Full access for operators and Pro users. The worker never receives the GitHub token.";
+    return "CompassProjects file updates can auto-commit under Auto all typed ops for operators and Pro users. The worker never receives the GitHub token.";
   }
   if (approval.sensitive) {
     return "Sensitive request. Do not paste passwords, recovery codes, payment details, or long-lived tokens back to the agent.";
@@ -2205,7 +2205,7 @@ function approvalActionOutcome(approval) {
     return "If approved, Latch creates the repository with the configured GitHub connector and records the resulting URL.";
   }
   if (approval.type === "github_file") {
-    return "If approved by the operator or Full access policy, Latch commits this file update through the trusted host connector and records the resulting URL.";
+    return "If approved by the operator, or automatically under Auto all typed ops, Latch commits this file update through the trusted host connector and records the resulting URL.";
   }
   if (approval.sensitive) {
     return "Approval records a human step; sensitive notes stay inside Latch.";
@@ -3864,7 +3864,7 @@ function renderCapabilities() {
     ["Credentials/payments", "Disabled", "Compass Companion should not receive secrets or control purchases/payment tools.", "bad"],
     ["Worker pairing", agencyWorker ? agencyWorker.status : "Not paired", agencyWorker ? agencyCapabilitySummary(agencyWorker) : "Pair OpenClaw before action runtime is available.", agencyWorker?.health === "ok" ? "ok" : "warn"],
     ["Browser automation", caps.browser || executorSeen ? "Policy-gated" : "Executor-ready", "Playwright-managed Firefox runs approved headless browser plans for operators and Pro users.", caps.browser || executorSeen ? "ok" : "warn"],
-    ["Write/system commands", caps.shell || executorSeen ? "Policy-gated" : "Executor-ready", "Full access can auto-run non-sensitive approved VM plans for operators and Pro users.", caps.shell || executorSeen ? "ok" : "warn"]
+    ["Write/system commands", caps.shell || executorSeen ? "Approval-gated" : "Executor-ready", "Shell plans always need you — no autonomy tier auto-approves them. Once you approve, the executor runs the exact stored plan on the VM.", caps.shell || executorSeen ? "ok" : "warn"]
   ];
   capabilityGrid.innerHTML = capabilities.map(([label, value, note, status]) => `
     <article class="capability-card ${status}">

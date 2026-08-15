@@ -4787,12 +4787,23 @@ function publicAgentEmailPolicy(policy = {}) {
   };
 }
 
+// The ONE set of tier names. This map, the <option> texts in public/index.html, the map in
+// public/app.js and every document must agree — test/autonomy-vocabulary.mjs fails if they do not.
+//
+// Two were renamed on 2026-08-15 because the old names described tiers this code does not implement.
+// "Auto-browse" and "Full auto" both promise unattended arbitrary action; neither tier does that, and
+// neither ever did. isArbitraryExecution() refuses shell and browser plans at EVERY tier and they are
+// not grantable either, so both tiers auto-approve only typed, host-verifiable operations. The drift was
+// visible in one screen: the dropdown said "Auto-browse", the summary rendered directly beside it said
+// "Auto typed tools", and the event log wrote a third thing — the UI disagreeing with itself about the
+// primary security dial. The STORED values are untouched; `auto_browse` and `full_access` are still what
+// is persisted and compared, because renaming those is a migration and a label is not a boundary.
 function autonomyModeLabel(mode) {
   const labels = {
     default_permissions: "Approve everything",
     auto_review: "Auto read-only",
-    auto_browse: "Auto-browse",
-    full_access: "Full auto"
+    auto_browse: "Auto typed tools",
+    full_access: "Auto all typed ops"
   };
   return labels[mode] || labels.default_permissions;
 }
@@ -4843,7 +4854,7 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false, db = nul
   }
 
   if (mode === "default_permissions") {
-    return { decisionMode: "human", reason: "Default permissions require operator review." };
+    return { decisionMode: "human", reason: "Approve everything: every approval waits for the operator." };
   }
 
   const auto = (what) => ({
@@ -4861,14 +4872,14 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false, db = nul
   if (mode === "auto_review") {
     if (readOnly) return auto("read-only diagnostic");
     if (research) return auto("bounded public research");
-    return { decisionMode: "human", reason: "Auto review only auto-approves read-only diagnostics and bounded research." };
+    return { decisionMode: "human", reason: "Auto read-only only auto-approves read-only diagnostics and bounded research." };
   }
 
   if (mode === "auto_browse") {
     if (readOnly) return auto("read-only diagnostic");
     if (research) return auto("bounded public research");
     if (mcpTyped) return auto("operator-listed MCP tool");
-    return { decisionMode: "human", reason: "Auto-browse auto-approves read-only diagnostics, bounded research, and operator-listed MCP tools — not arbitrary execution." };
+    return { decisionMode: "human", reason: "Auto typed tools auto-approves read-only diagnostics, bounded research, and operator-listed MCP tools — not arbitrary execution." };
   }
 
   if (mode === "full_access") {
@@ -4876,7 +4887,7 @@ function reviewApprovalForAutonomy(approval, mode, proEligible = false, db = nul
     if (research) return auto("bounded public research");
     if (mcpTyped) return auto("operator-listed MCP tool");
     if (isOwnRepoGithubFileApproval(approval) && proEligible) return auto("CompassProjects file update");
-    return { decisionMode: "human", reason: "Full access auto-approves typed operations only; arbitrary execution still needs you." };
+    return { decisionMode: "human", reason: "Auto all typed ops auto-approves typed operations only; arbitrary execution still needs you." };
   }
 
   return { decisionMode: "human", reason: "Operator review required." };

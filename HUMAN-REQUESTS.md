@@ -13,13 +13,26 @@ The default VM bridge creates approval requests automatically when a task or inb
 
 ## Autonomy Modes
 
-Operators can choose an autonomy mode in Compass:
+Operators can choose one of **four** autonomy modes in Compass. Each one adds *types* of operation the
+host can verify; none of them adds arbitrary execution.
 
-- `Default permissions`: every approval card waits for the operator.
-- `Auto review`: low-risk fixed read-only diagnostics and tightly bounded public URL research can be approved by policy.
-- `Full access`: non-sensitive VM shell/browser execution plans and `CompassProjects` file updates for the operator and operator-managed Pro users can be approved by policy.
+- **Approve everything** (`default_permissions`): every approval card waits for the operator.
+- **Auto read-only** (`auto_review`): low-risk fixed read-only diagnostic templates and tightly bounded exact-URL public research can be approved by policy.
+- **Auto typed tools** (`auto_browse`): the above, plus operator-listed MCP tools whose arguments the host validates against the tool's declared schema.
+- **Auto all typed ops** (`full_access`): the above, plus `CompassProjects` file updates for the operator and operator-managed Pro users.
 
-Credentials, purchases, external contact, account setup, GitHub repo creation, human verification, and context questions remain human-boundary requests in every mode.
+_Corrected 2026-08-15. This list named three modes and omitted `auto_browse` entirely, so a reader of
+this file believed there were three tiers; and it described `Full access` as releasing "non-sensitive VM
+shell/browser execution plans", which has never been true — those require a human at **every** tier and
+are not grantable. See [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md) for the same table with the code
+reference._
+
+**Arbitrary `shell` and `browser` execution plans are never auto-approved in any tier, and are never
+grantable.** Nor is anything the worker marks `sensitive`, any browser/research plan using an HTTP URL,
+credentials embedded in a URL, or a login/credential step — plus every approval type on the human
+boundary. That
+list is enumerated with its type identifiers in [SECURITY.md](./SECURITY.md#autonomy-and-auto-approval),
+which is the authoritative copy.
 
 ## Request Shape
 

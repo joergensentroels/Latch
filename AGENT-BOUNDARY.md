@@ -6,14 +6,34 @@ Latch's safety rests on two independent axes. Keep them separate in your head �
 
 The operator picks one tier (and only the operator can — `/api/autonomy` is operator-gated; the agent can never raise its own level). Default is **Approve everything**.
 
-| Tier | The agent may do, unattended | Still always asks the operator |
-|------|------------------------------|-------------------------------|
-| **Approve everything** (`default_permissions`) | Plan, draft, suggest | Every real action |
-| **Auto read-only** (`auto_review`) | Read-only diagnostics; tightly bounded exact-URL public research | Anything that changes state |
-| **Auto-browse** (`auto_browse`) | The above **plus** navigate/read/extract on HTTPS sites unattended | Shell, commits, using your accounts, and any login/credential/HTTP step |
-| **Full auto** (`full_access`) | Non-sensitive shell + browser plans + CompassProjects commits | The hard boundaries in Axis 2 below |
+Every tier auto-approves only **typed, host-verifiable operations**. Raising the tier adds *types*; it
+never adds "and now arbitrary things too". **Arbitrary shell and browser plans are never auto-approved in
+any tier**, including the highest, and cannot be granted either — `isArbitraryExecution()` in `server.js`
+returns them to the operator before any tier is consulted.
 
-> ⚠️ **Full auto** lets a compromised or prompt-injected agent run code on the worker without asking. It is an explicit operator opt-in — only enable it on the disposable, network-isolated worker (see [SECURITY.md](./SECURITY.md) → Deployment Topology).
+| Tier | Adds, unattended | Still always asks the operator |
+|------|------------------|-------------------------------|
+| **Approve everything** (`default_permissions`) | nothing — plan, draft, suggest | Every real action |
+| **Auto read-only** (`auto_review`) | read-only diagnostics (fixed host templates); tightly bounded exact-URL public research | Anything that changes state |
+| **Auto typed tools** (`auto_browse`) | the above **plus** operator-listed MCP tools whose arguments the host validates against the tool's declared schema | Arbitrary browsing and shell, commits, using your accounts, and any login/credential/HTTP step |
+| **Auto all typed ops** (`full_access`) | the above **plus** `CompassProjects` file commits, for operator or operator-managed Pro sources | Arbitrary shell and browser plans, plus the hard boundaries in Axis 2 below |
+
+> ⚠️ **This table was wrong until 2026-08-15, in the direction that flatters the code.** The
+> `auto_browse` row described unattended page navigation and extraction across HTTPS sites, and the
+> `full_access` row described the release of non-sensitive shell and browser plans. Neither has ever been
+> true: `auto_browse` adds operator-listed MCP tools and nothing else — it says so in its own refusal
+> string — and shell and browser plans are refused at every tier. The tiers were also *named* for the
+> behaviour the table described, so the names taught the same wrong model; the accurate names are above.
+> The code errs safe; the documentation did not. `test/autonomy-vocabulary.mjs` now derives this table's
+> tier names from `server.js` and fails if they drift again.
+>
+> _The old wordings are described here rather than quoted, deliberately. The same test blocks their
+> literal strings from reappearing in any document, and prose explaining a forbidden phrase is a
+> well-worn way to disarm the check that forbids it._
+
+> ⚠️ Even at **Auto all typed ops**, an operator-listed MCP tool runs without you seeing it. That is an
+> explicit opt-in, and the list is yours to keep short — prefer the disposable, network-isolated worker
+> (see [SECURITY.md](./SECURITY.md) → Deployment Topology).
 
 ## Axis 2 — Whose account an action uses (a hard boundary at *every* tier)
 

@@ -74,7 +74,7 @@ the model can't invent a server or tool; if nothing fits, it falls back to a pla
 
 ## Autonomy
 
-Every MCP call requires a human by default. The one exception: under **Full access**, a tool the
+Every MCP call requires a human by default. The one exception: under **Auto typed tools** (`auto_browse`) or **Auto all typed ops** (`full_access`), a tool the
 operator has listed in that server's `autoApprove` array auto-approves (computed as
 `mcpAutoApprovable` at creation). A newly-reachable tool never runs unattended without that explicit
 per-tool opt-in.

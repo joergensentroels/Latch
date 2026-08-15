@@ -110,7 +110,7 @@ The bridge is intentionally not root-capable. It does not control finance, acces
 
 Approved read-only diagnostics are the only exception inside the bridge. The bridge can run fixed internal templates such as bridge status, recent bridge logs, OpenClaw Gateway health, Docker status, Tailscale status, and read-only repo status.
 
-Compass autonomy modes can auto-approve some approval cards before the worker sees them. `Auto review` can release low-risk read-only diagnostics and bounded exact-URL public research. `Full access` can release non-sensitive VM shell/browser plans and `CompassProjects` file updates for operator tasks and operator-managed Pro users. Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers still require a human.
+Compass autonomy modes can auto-approve some approval cards before the worker sees them. There are **four**, and each adds types rather than latitude. **Auto read-only** (`auto_review`) can release low-risk read-only diagnostic templates and bounded exact-URL public research. **Auto typed tools** (`auto_browse`) adds operator-listed MCP tools. **Auto all typed ops** (`full_access`) adds `CompassProjects` file updates for operator tasks and operator-managed Pro users. **VM shell and browser plans are never auto-approved at any tier** — this line used to say the top tier released them, and that was never true. The always-human list, by wire identifier, is in [SECURITY.md](./SECURITY.md#autonomy-and-auto-approval).
 
 ## Install The Approved Executor
 

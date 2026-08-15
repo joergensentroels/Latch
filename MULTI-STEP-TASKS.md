@@ -26,7 +26,7 @@ either boundary:
   meaningful ("finished stage 1: scraped 3 sites — go to stage 2?"). Each sub-goal carries its **own
   depth** (the step cap for that stage), prefilled from the global default and editable per stage.
 
-`task_continue` is never auto-approvable — even under Full access, the decision to keep going is
+`task_continue` is never auto-approvable — even under **Auto all typed ops**, the decision to keep going is
 always yours. That's what makes the budget mean something. This stacks on top of the existing
 autonomy tiers: every individual risky step is *still* approval-gated by your review policy; the loop
 budget is a second, independent bound.

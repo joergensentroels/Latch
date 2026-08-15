@@ -87,7 +87,7 @@ GitHub repository-creation tokens live in:
 data/github.json
 ```
 
-or in trusted-host environment variables such as `GITHUB_TOKEN`. The OpenClaw worker should never receive the GitHub token. It can request a `github_file` approval for an existing repository or a broader `github_repo` approval for repository creation; after operator approval, or Full access auto-approval for the configured `CompassProjects` repo, the trusted Latch host performs the GitHub action and returns only the URL/name to the worker.
+or in trusted-host environment variables such as `GITHUB_TOKEN`. The OpenClaw worker should never receive the GitHub token. It can request a `github_file` approval for an existing repository or a broader `github_repo` approval for repository creation; after operator approval, or Auto all typed ops auto-approval for the configured `CompassProjects` repo, the trusted Latch host performs the GitHub action and returns only the URL/name to the worker.
 
 Operator-provided context lives in:
 
@@ -200,7 +200,19 @@ Execution is split into a separate `latch-agent-executor` service. The bridge re
 
 For MCP tool calls, the host validates arguments against the tool's declared `inputSchema` (and optional operator `argConstraints`) before running — a typed tool with unbounded arguments is not treated as safe. For `github_file` commits, CI/hook/action paths (`.github/workflows/**`, `.githooks/`, `Jenkinsfile`, `action.yml`, …) never auto-approve and are never grantable, since a pushed workflow would execute code with the repo's token. Web-fetched content auto-saved as context is marked untrusted and is **not** shared with the agent by default (a stored-injection guard), and the agent's own inbound-email auto-replies treat the incoming message as untrusted input.
 
-Auto-approval rests only on **host-verifiable typed operations**, never on worker-asserted risk, and **arbitrary shell/browser plans are never auto-approved in any tier** — a human always reads the exact plan. Under Full access the auto-approvable set is: read-only diagnostic templates, bounded exact-URL research, operator-listed MCP tools, and `CompassProjects` file commits (operator / operator-managed Pro users only). The operator can additionally allow specific typed operations via host-side grants (see [AUTONOMY.md](./AUTONOMY.md)). Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers always require a human. This design follows external review: worker self-assessed sensitivity is not a security boundary, and arbitrary operations cannot be validated host-side.
+### Autonomy and auto-approval
+
+Auto-approval rests only on **host-verifiable typed operations**, never on worker-asserted risk, and **arbitrary shell/browser plans are never auto-approved in any tier** — a human always reads the exact plan, and those plans are not grantable either. The four tiers are **Approve everything** (`default_permissions`), **Auto read-only** (`auto_review`), **Auto typed tools** (`auto_browse`) and **Auto all typed ops** (`full_access`); each adds types, none adds arbitrary execution. Under **Auto all typed ops** the auto-approvable set is: read-only diagnostic templates, bounded exact-URL research, operator-listed MCP tools, and `CompassProjects` file commits (operator / operator-managed Pro users only). The operator can additionally allow specific typed operations via host-side grants (see [AUTONOMY.md](./AUTONOMY.md)). This design follows external review: worker self-assessed sensitivity is not a security boundary, and arbitrary operations cannot be validated host-side.
+
+**Always a human, in every tier, and never grantable.** These are the approval types `humanBoundaryReason()` returns a reason for, listed by their wire identifiers so this can be checked against the code rather than read as a summary:
+
+`purchase` · `credential` · `account_setup` · `human_verification` · `external_contact` · `context_question` · `github_repo` · `github_file` · `github_issue` · `github_issue_comment` · `github_pull_request` · `email_campaign` · `email_thread_continue` · `task_continue`
+
+Plus, independent of type: anything the worker marks `sensitive`, and any browser or research plan whose URLs use plain HTTP, embed credentials, or whose steps mention a login/credential/2FA action.
+
+The single exemption is `github_file` **to the configured `CompassProjects` repository**, which may auto-commit under **Auto all typed ops** for operator or operator-managed Pro sources. File updates to any other repository stay on the human boundary. Issues, comments and pull requests are deliberately **not** given that exemption: a commit is content — silent, and reversible through git history — while opening an issue or commenting emails every watcher the instant it posts and nothing recalls that, which puts it with `external_contact`.
+
+_Expanded 2026-08-15. This paragraph previously named seven of those types and omitted five — `github_issue`, `github_issue_comment`, `github_pull_request`, `email_thread_continue` and `task_continue` — so the code was **stricter** than its own security document said. That is the safe direction to be wrong in and still a real cost, because this is the file an external reviewer opens first and an unlisted control is one nobody can credit you for. `test/autonomy-vocabulary.mjs` now parses that list out of `server.js` and fails if a type is enforced but unlisted here._
 
 Shell plans run on the OpenClaw VM through `bash -lc` with a timeout and audit logs. Browser plans use Playwright-managed Firefox in a headless isolated profile under `/var/lib/latch-agent-executor/browser`.
 
@@ -231,7 +243,7 @@ Agents should not scrape broadly or browse without a reviewed plan. Latch suppor
 
 ## GitHub Repository Creation
 
-GitHub repository updates are host-side connectors, not VM credentials. Keep the GitHub token narrow, rotate it if exposed, and prefer a fine-grained token scoped to one existing repository with `Contents: read/write`. Repo creation always stays on the human-boundary approval path. File updates to the configured `CompassProjects` repo may auto-commit in Full access for operator or Pro-user sources; file updates to other repositories still require human review.
+GitHub repository updates are host-side connectors, not VM credentials. Keep the GitHub token narrow, rotate it if exposed, and prefer a fine-grained token scoped to one existing repository with `Contents: read/write`. Repo creation always stays on the human-boundary approval path. File updates to the configured `CompassProjects` repo may auto-commit under **Auto all typed ops** for operator or Pro-user sources; file updates to other repositories still require human review.
 
 ## Phone Install
 

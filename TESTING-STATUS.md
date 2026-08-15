@@ -14,7 +14,7 @@ unchanged since 2026-07-05.** What has been verified for this release, and what 
 - the GitHub connector's write path, end-to-end (`test/github-write-path.mjs`)
 
 The smoke suite exercises the security-critical host behaviour directly: arbitrary shell/browser
-plans stay `pending` (human-required) even under Full access; operation grants (grant → auto-approve
+plans stay `pending` (human-required) even under Auto all typed ops; operation grants (grant → auto-approve
 → revoke → human again); arbitrary operations are never grantable; the agent key is rejected on
 revoke; CI/workflow-path commits never auto-approve; MCP tool arguments are validated against the
 tool's declared schema; and web-search findings are not auto-shared with the agent.
@@ -24,7 +24,7 @@ the GitHub token and creates branches, commits and pull requests on the operator
 driven against a mock GitHub API — the connector's base URL is an env var — which records every
 request, so the assertions are about the bytes that reached the API rather than about what the host
 says it sends. Covered: `github_issue`, `github_issue_comment` and `github_pull_request` stay
-`pending` under Full access and are never grantable; filing an approval touches the API zero times;
+`pending` under Auto all typed ops and are never grantable; filing an approval touches the API zero times;
 a **denied** approval reaches the API zero times; an approved one sends exactly the typed fields the
 operator saw (each fixture's free-text `title` differs from its typed field on purpose, so a test can
 only pass by reading the typed one); a pull request branches from the approved base, commits the

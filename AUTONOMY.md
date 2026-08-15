@@ -19,10 +19,16 @@ free-form execution.
 
 ## Dial 1 — tiers (breadth over typed operations)
 
-- **Approve everything** (default): nothing auto-runs.
-- **Auto read-only**: read-only diagnostics (fixed host templates) + bounded exact-URL research.
-- **Auto typed tools**: the above + operator-listed MCP tools.
-- **Auto all typed ops**: the above + `CompassProjects` file commits + low-risk typed requests.
+- **Approve everything** (`default_permissions`) — the default: nothing auto-runs.
+- **Auto read-only** (`auto_review`): read-only diagnostics (fixed host templates) + bounded exact-URL research.
+- **Auto typed tools** (`auto_browse`): the above + operator-listed MCP tools.
+- **Auto all typed ops** (`full_access`): the above + `CompassProjects` file commits + low-risk typed requests.
+
+_The backticked values are what is stored and compared; the bold names are what every UI surface and
+document must call them. Two of those names changed on 2026-08-15 — `auto_browse` used to be shown as
+"Auto-browse" and `full_access` as "Full auto", each naming a tier that releases arbitrary action, which
+neither does. `test/autonomy-vocabulary.mjs` derives the names from `server.js` and fails if any surface
+drifts from it again._
 
 **Arbitrary shell and browser plans are never auto-approved in any tier** — a human always reads the
 exact plan. The hard human boundaries (credentials, purchases, email/external contact, account and

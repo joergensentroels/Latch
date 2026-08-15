@@ -22,11 +22,13 @@ Product tiers:
 
 **Planned (not yet implemented):** a *Latch Network* — shared, credit-metered compute contributed by community nodes. The credits/economy UI is disabled for now because the network doesn't exist yet; it will return when the network does. Either way, credits are not an agent runtime — real action always requires a worker somewhere (self-hosted, community-operated, or future hosted).
 
-> ⚠️ **Security first.** Latch is designed so the worker running your AI agent never holds your credentials — but it is still early software. Do not expose it beyond localhost or your private Tailscale network before reading [SECURITY.md](./SECURITY.md), and don't run "Full auto" autonomy against anything you can't afford to lose. Found a vulnerability? See [Reporting a Vulnerability](./SECURITY.md#reporting-a-vulnerability).
+> ⚠️ **Security first.** Latch is designed so the worker running your AI agent never holds your credentials — but it is still early software. Do not expose it beyond localhost or your private Tailscale network before reading [SECURITY.md](./SECURITY.md), and don't run the top "Auto all typed ops" autonomy tier against anything you can't afford to lose. Found a vulnerability? See [Reporting a Vulnerability](./SECURITY.md#reporting-a-vulnerability).
 
 Read [SECURITY.md](./SECURITY.md) before exposing it beyond localhost.
 
-How much the agent does without asking — and why it's built around bounded, typed operations rather than trusting the agent's own risk assessment — is in [AUTONOMY.md](./AUTONOMY.md).
+How much the agent does without asking — and why it's built around bounded, typed operations rather than trusting the agent's own risk assessment — is in [AUTONOMY.md](./AUTONOMY.md). There are **four** tiers — Approve everything, Auto read-only, Auto typed tools, Auto all typed ops — and each one adds *types* of operation the host can verify. None of them adds arbitrary execution: shell and browser plans require a human at every tier.
+
+**Where this sits relative to the agent frameworks.** 2026 comparisons of the main ones — LangGraph, CrewAI, and the merged Microsoft Agent Framework — note that none of them natively provides out-of-process security or a pre-dispatch approval gate, and recommend pairing whichever you pick with a separate agent control plane for policy, approvals and audit. That layer is what Latch is. It is not an orchestrator and does not compete with those: it holds the credentials the orchestrator must not have, and decides each action before it is dispatched. [Bureau](https://github.com/joergensentroels/bureau) is one orchestrator built against it, and the coupling is deliberately loose — the approval API is HTTP, and anything can file against it. Stated as a description of layers, not a claim to be first or only.
 
 Want to contribute? See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
@@ -241,7 +243,7 @@ Use a fine-grained GitHub token with the narrowest permission you can. For an ex
 powershell -ExecutionPolicy Bypass -File .\Configure-GitHub.ps1 -Owner "your-github-username" -DefaultRepo "CompassProjects" -PromptForToken
 ```
 
-When the companion asks for development work, code, websites, a README, or another file update, Latch creates a `github_file` approval card with the repository, path, commit message, and proposed content. Development and code/file updates default to `CompassProjects` unless another repository is named. In Full access, non-sensitive `CompassProjects` file updates from the operator or operator-managed Pro users can auto-approve and commit through the trusted host connector. The worker never receives the GitHub token.
+When the companion asks for development work, code, websites, a README, or another file update, Latch creates a `github_file` approval card with the repository, path, commit message, and proposed content. Development and code/file updates default to `CompassProjects` unless another repository is named. Under **Auto all typed ops** (`full_access`), non-sensitive `CompassProjects` file updates from the operator or operator-managed Pro users can auto-approve and commit through the trusted host connector. The worker never receives the GitHub token.
 
 Repository creation is still supported with `github_repo`, but it requires broader GitHub administration permission because the repository does not exist yet. Prefer creating the repo yourself and using `github_file` updates for day-to-day companion work.
 
@@ -404,7 +406,7 @@ Read-only diagnostics still use fixed templates:
 
 Latch shows the template summary first and keeps exact commands behind an expandable details section. Execution results are stored as concise audit summaries under Timeline > Operations.
 
-Full access can also auto-approve non-sensitive `shell` and `browser` execution plans, plus non-sensitive `CompassProjects` file updates, for operator tasks and operator-managed Pro users. Standard signed-in users stay approval-limited. Credentials, purchases, account setup, external contact, GitHub repo creation, human verification, and context answers remain human-boundary approvals.
+**Arbitrary `shell` and `browser` plans are never auto-approved, at any tier** — a human always reads the exact plan, and they cannot be granted either. The top tier, **Auto all typed ops** (`full_access`), additionally auto-approves non-sensitive `CompassProjects` file updates for operator tasks and operator-managed Pro users; standard signed-in users stay approval-limited. The full always-human list, by wire identifier, is in [SECURITY.md](./SECURITY.md#autonomy-and-auto-approval). _Until 2026-08-15 this paragraph said the top tier could release non-sensitive shell and browser plans. It never could._
 
 The VM executor uses Playwright-managed Firefox for headless browser plans. Browser actions support opening pages, extracting text, screenshots, clicks, fills, key presses, waits, and controlled downloads. Shell plans run through `bash -lc` with a timeout and audit logging.
 

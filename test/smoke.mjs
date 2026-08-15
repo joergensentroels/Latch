@@ -1399,7 +1399,7 @@ try {
   assert(proShellApproval.status === "pending", "arbitrary browser plans must NOT auto-approve, even for Pro users in full access");
   assert(proShellApproval.executionPlan.actions.length === 2, "browser execution plan should persist");
 
-  // --- Auto-browse tier: typed ops auto-approve, but arbitrary execution (browser/shell) needs a human ---
+  // --- Auto typed tools tier (auto_browse): typed ops auto-approve, arbitrary execution (browser/shell) needs a human ---
   const browseTierPolicy = await request("/api/autonomy", {
     method: "PATCH",
     headers: operatorHeaders,

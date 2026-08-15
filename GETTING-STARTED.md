@@ -100,7 +100,7 @@ Full worker reference, deploy helpers, and start/stop commands: [OPENCLAW-WORKER
 
 - From the **worker**, confirm it can reach the host: `curl -fsS http://<host-tailscale-ip>:8787/api/health` → should return `{"ok":true,...}`.
 - In Compass, the **Inbox** shows the worker posting an "online" message once the bridge connects.
-- Leave autonomy on **Approve everything** to start (**Settings → Review Policy**). Loosen it later only on a worker you trust and have isolated.
+- Leave autonomy on **Approve everything** to start (**Settings → Autonomy → Review Policy**). The four tiers, and what each one really auto-approves, are in [AGENT-BOUNDARY.md](./AGENT-BOUNDARY.md). Loosen it later only on a worker you trust and have isolated.
 
 ## Step 4 — Your first task
 
