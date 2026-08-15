@@ -539,6 +539,24 @@ The companion should help the user think clearly and act responsibly; it should 
           <div class="ops-panel pro-only">
             <div class="panel-toolbar split-toolbar">
               <div>
+                <p class="eyebrow">GitHub</p>
+                <h2 class="section-title">Connector</h2>
+              </div>
+              <button id="githubDoctorButton" class="secondary-button compact-button" type="button">Check token</button>
+            </div>
+            <p class="help-note">The token lives on the trusted host (<code>data/github.json</code>, or <code>Configure-GitHub.ps1</code>) and is never sent to the worker. "Check token" probes each capability the connector uses and reports them separately &mdash; a connector reads <em>configured</em> whenever a URL and a token are merely present, which looks healthy while every write is refused.</p>
+            <div class="form-row github-target-row">
+              <input id="githubOwner" type="text" maxlength="120" placeholder="Owner" aria-label="GitHub owner" autocomplete="off" spellcheck="false">
+              <input id="githubRepo" type="text" maxlength="100" placeholder="Repository" aria-label="GitHub repository" autocomplete="off" spellcheck="false">
+              <button id="githubBranchesButton" class="secondary-button" type="button">List&nbsp;branches</button>
+            </div>
+            <div id="githubDoctorGrid" class="status-grid"></div>
+            <div id="githubBranchList" class="list compact-list"></div>
+            <p id="githubStatus" class="form-status" aria-live="polite"></p>
+          </div>
+          <div class="ops-panel pro-only">
+            <div class="panel-toolbar split-toolbar">
+              <div>
                 <p class="eyebrow">Automation</p>
                 <h2 class="section-title">Scheduled tasks</h2>
               </div>

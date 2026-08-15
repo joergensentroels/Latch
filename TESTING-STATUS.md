@@ -35,9 +35,23 @@ The "stays pending" assertions carry a positive control — an own-repo `github_
 auto-approves in the same run under the same policy — because on their own they would also pass with
 the hard boundary deleted, since no Full-access rule matches these types either.
 
-Not covered by the suite: the operator-only connector routes — `/api/github/doctor`, `branches`,
-`delete-branch`, `repo-settings`, `close` and `issues`. `github.mjs`'s branch-prune decision, which
-`branches` calls, is unit-tested (`test/github-prune.mjs`); the routes themselves are not.
+**The connector panel's read routes** (same file). `/api/github/doctor`, `branches` and
+`delete-branch` now have a UI (Settings → GitHub connector), so they are checked the way that catches
+what actually breaks a panel: `renderGithubDoctor` and `renderGithubBranches` are pulled out of
+`public/app.js` and RUN on the real endpoint responses, and the assertions are on the HTML they
+produce. A field renamed on either side drops those values out of the output and the check goes red —
+which a name-by-name comparison of the JSON would not catch, since the panel can read a field the
+endpoint never had and simply render nothing. Also covered: the doctor never echoes the token and
+still reports what no read can verify; delete-branch refuses the default branch and any branch with an
+open pull request, and neither refusal reaches the DELETE.
+
+Verified in a browser (Playwright, desktop 1280px and phone 375px) against the same mock: the panel
+renders, the delete runs end to end through its confirm, and there are no console errors. Three
+defects no assertion caught were fixed there — the button stretched into a full-width bar, a run-on
+sentence in the failed-capability note, and a 21px horizontal overflow at phone width.
+
+Not covered by the suite: `/api/github/repo-settings`, `close` and `issues`, which still have no UI
+and no test.
 
 **Live host + worker — verified on real hardware (2026-07-05):**
 

@@ -1348,6 +1348,14 @@ body.simple-mode .chat-composer {
   grid-template-columns: minmax(120px, 0.5fr) minmax(120px, 0.5fr) auto;
 }
 
+/* Three children, not two: without its own rule the third one wraps onto a second line and the 1fr
+   column stretches it into a full-width bar that reads as a banner rather than a button.
+   minmax(0, 1fr) rather than a px floor -- a 120px floor plus the button's intrinsic width overflows
+   a 375px phone viewport by 21px, which is only visible by measuring it. */
+.github-target-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
 .network-invite-form {
   display: grid;
   gap: 10px;

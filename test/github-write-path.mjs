@@ -1,4 +1,5 @@
-// The GitHub connector's WRITE path: issue, issue comment, pull request.
+// The GitHub connector: the WRITE path (issue, issue comment, pull request) and the read routes the
+// Settings -> GitHub connector panel drives (doctor, branches, delete-branch).
 //
 // This subsystem holds the GitHub token and, on an operator's approval, creates branches, commits files
 // and opens pull requests on their behalf. Until this file existed, `github_issue`, `github_issue_comment`
@@ -22,10 +23,11 @@
 //    lookup goes through `oneCall`, which fails loudly when it finds zero matches, and the denial
 //    section asserts silence only after the identical payload has been shown to produce traffic.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
+import vm from "node:vm";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
@@ -52,6 +54,8 @@ const lockedRepo = "fixture-locked";   // the mock answers 403 here, to exercise
 const repoDefaultBranch = "mainline";  // deliberately NOT the base the PR approval asks for
 const prBase = "trunk";
 const baseSha = "1111111111111111111111111111111111111111";
+const reviewBranch = "fixture/under-review";   // an OPEN pull request points at this one
+const abandonedBranch = "fixture/abandoned";   // closed without merging, so prunable
 
 // ---------------------------------------------------------------------------------------------
 // The mock GitHub API. Records everything; answers only what the connector actually calls.
@@ -105,12 +109,35 @@ const mockGithub = http.createServer(async (req, res) => {
   const refMatch = /^\/git\/ref\/heads\/(.+)$/.exec(rest);
   if (refMatch && req.method === "GET") {
     const ref = decodeURIComponent(refMatch[1]);
-    if (ref === prBase || ref === repoDefaultBranch) return json(200, { ref: `refs/heads/${ref}`, object: { sha: baseSha } });
+    if ([prBase, repoDefaultBranch, abandonedBranch, reviewBranch].includes(ref)) return json(200, { ref: `refs/heads/${ref}`, object: { sha: baseSha } });
     return notFound();
   }
   if (rest === "/git/refs" && req.method === "POST") {
     return json(201, { ref: body?.ref, object: { sha: baseSha } });
   }
+  if (/^\/git\/refs\/heads\/.+$/.test(rest) && req.method === "DELETE") return json(204, {});
+
+  // The panel's read routes. One branch of each kind the classifier distinguishes, so the listing the
+  // panel renders is not all one shape.
+  if (rest === "/branches" && req.method === "GET") {
+    return json(200, [
+      { name: repoDefaultBranch, protected: false, commit: { sha: baseSha } },
+      { name: "release-guard", protected: true, commit: { sha: baseSha } },
+      { name: reviewBranch, protected: false, commit: { sha: baseSha } },
+      { name: abandonedBranch, protected: false, commit: { sha: baseSha } },
+      { name: "wip-no-pr-yet", protected: false, commit: { sha: baseSha } }
+    ]);
+  }
+  if (rest === "/pulls" && req.method === "GET") {
+    if (url.searchParams.get("state") === "closed") {
+      return json(200, [{ number: 51, head: { ref: abandonedBranch }, merged_at: null }]);
+    }
+    // The open-PR list is also how delete-branch decides to refuse; `head` narrows it to one branch there.
+    const head = url.searchParams.get("head") || "";
+    const open = [{ number: 60, head: { ref: reviewBranch } }];
+    return json(200, head ? open.filter((p) => head.endsWith(`:${p.head.ref}`)) : open);
+  }
+  if (rest === "/issues" && req.method === "GET") return json(200, []);
 
   if (rest.startsWith("/contents/")) {
     const filePath = decodeURIComponent(rest.slice("/contents/".length));
@@ -455,12 +482,105 @@ try {
   assert.equal(failed.githubIssueNumber, 0, "nor a number");
 
   // ===========================================================================================
+  // 5. The panel's read routes, checked by RENDERING them.
+  //
+  // The Settings -> GitHub connector panel drives /doctor, /branches and /delete-branch. Asserting the
+  // endpoints "return the right fields" by name would not catch the failure that actually happens here:
+  // the panel reading a field the endpoint does not have (`.deliverables` from something that returns
+  // `.files`), which renders as nothing at all and passes every name-based check on the server side.
+  //
+  // So this pulls the panel's own render functions out of public/app.js and RUNS them on the real
+  // responses, then asserts the distinctive values are present in the HTML they produce. A field-name
+  // drift on either side removes those values from the output, and this goes red.
+  // ===========================================================================================
+  const appSource = await readFile(path.join(root, "public", "app.js"), "utf8");
+
+  // Top-level functions in this file all close on a line that is exactly "}". Floored below, so a
+  // formatting change fails loudly instead of extracting nothing and making the checks vacuous.
+  function topLevelFunction(name, marker) {
+    const lines = appSource.split("\n");
+    const start = lines.findIndex((line) => line.startsWith(`function ${name}(`));
+    assert.ok(start !== -1, `public/app.js: function ${name} not found — the panel it belongs to is gone or renamed`);
+    const end = lines.findIndex((line, index) => index > start && line === "}");
+    assert.ok(end !== -1, `public/app.js: could not find the end of ${name}`);
+    const source = lines.slice(start, end + 1).join("\n");
+    // Each extraction must contain something only that function has. An extractor that silently returns
+    // a fragment would make every render assertion below vacuous, which is the failure this guards.
+    assert.ok(source.includes(marker),
+      `public/app.js: extracted ${source.length} chars for ${name} and it does not contain ${JSON.stringify(marker)} — the extractor is broken, not the panel`);
+    return source;
+  }
+
+  const doctorGrid = { innerHTML: "" };
+  const branchList = { innerHTML: "" };
+  const sandbox = vm.createContext({ githubDoctorGrid: doctorGrid, githubBranchList: branchList, String, Object, Array, Boolean, Number });
+  vm.runInContext(
+    [
+      topLevelFunction("escapeHtml", "&amp;"),
+      topLevelFunction("renderGithubDoctor", "status-card"),
+      topLevelFunction("renderGithubBranches", "data-github-delete-branch")
+    ].join("\n\n"),
+    sandbox,
+    { filename: "public/app.js (github panel)" }
+  );
+
+  // ---- doctor ----
+  const report = await request(`/api/github/doctor?owner=${owner}&repo=${repo}`, { headers: operatorHeaders });
+  assert.ok(report.checks?.length >= 3, `the doctor must probe several capabilities, got ${JSON.stringify(report.checks)}`);
+  assert.equal(report.allOk, true, `every capability must be reachable against the mock, got hint: ${report.hint}`);
+  assert.ok(report.unprovable?.length >= 1, "the doctor must still report what no read can verify");
+  assert.ok(!JSON.stringify(report).includes(githubToken), "the doctor must never echo the token");
+
+  vm.runInContext(`renderGithubDoctor(${JSON.stringify(report)})`, sandbox);
+  assert.ok(doctorGrid.innerHTML.length > 0, "the doctor panel rendered nothing at all");
+  for (const check of report.checks) {
+    assert.ok(doctorGrid.innerHTML.includes(check.capability),
+      `the doctor panel does not show the "${check.capability}" capability the endpoint reported`);
+  }
+  assert.ok(doctorGrid.innerHTML.includes("Administration"),
+    "the panel must surface the unprovable Administration note — a green verdict must not imply a check that never ran");
+
+  // ---- branches ----
+  const listing = await request(`/api/github/branches?owner=${owner}&repo=${repo}`, { headers: operatorHeaders });
+  assert.equal(listing.count, 5, `the branch listing must come back complete, got ${listing.count}`);
+  assert.equal(listing.prunableCount, 1, `exactly the abandoned fixture branch is prunable, got ${listing.prunableCount}`);
+  assert.equal(listing.branches.find((b) => b.name === reviewBranch)?.openPr, 60, "the branch under review reports its open pull request");
+  assert.equal(listing.branches.find((b) => b.name === abandonedBranch)?.prunable, true, "the abandoned branch is the prunable one");
+  assert.equal(listing.branches.find((b) => b.name === repoDefaultBranch)?.isDefault, true, "the default branch is flagged as default");
+
+  vm.runInContext(`renderGithubBranches(${JSON.stringify(listing)})`, sandbox);
+  for (const branch of listing.branches) {
+    assert.ok(branchList.innerHTML.includes(branch.name), `the branch panel does not show ${branch.name}`);
+  }
+  assert.ok(branchList.innerHTML.includes("PR #60 open"), "the panel must show that an open pull request points at a branch");
+  assert.ok(branchList.innerHTML.includes(`data-github-delete-branch="${abandonedBranch}"`),
+    "the prunable branch must offer a delete button");
+  assert.ok(!branchList.innerHTML.includes(`data-github-delete-branch="${reviewBranch}"`),
+    "a branch with an open pull request must NOT offer a delete button");
+  assert.ok(!branchList.innerHTML.includes(`data-github-delete-branch="${repoDefaultBranch}"`),
+    "the default branch must NOT offer a delete button");
+
+  // ---- delete-branch: the host's own two refusals, which the panel is only a second lock on ----
+  const beforeDelete = calls.length;
+  const refusedDefault = await request("/api/github/delete-branch", { method: "POST", headers: operatorHeaders, body: { owner, repo, branch: repoDefaultBranch } });
+  assert.match(refusedDefault.error, /default branch/, `deleting the default branch must be refused, got ${JSON.stringify(refusedDefault)}`);
+  const refusedOpen = await request("/api/github/delete-branch", { method: "POST", headers: operatorHeaders, body: { owner, repo, branch: reviewBranch } });
+  assert.match(refusedOpen.error, /still open/, `deleting a branch under review must be refused, got ${JSON.stringify(refusedOpen)}`);
+  assert.equal(calls.slice(beforeDelete).filter((c) => c.method === "DELETE").length, 0,
+    "neither refusal may have reached the DELETE — the guard must run before the call, not after");
+
+  const deleted = await request("/api/github/delete-branch", { method: "POST", headers: operatorHeaders, body: { owner, repo, branch: abandonedBranch } });
+  assert.equal(deleted.ok, true, `the abandoned branch must actually delete, got ${JSON.stringify(deleted)}`);
+  oneCall(beforeDelete, "DELETE", (p) => p === `/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(abandonedBranch)}`, "the branch deletion");
+
+  // ===========================================================================================
   // Floors: the recorder recorded, and the token travelled on every call.
   // ===========================================================================================
   assert.ok(calls.length >= 12, `only ${calls.length} GitHub calls recorded across the whole run — the mock is not being reached`);
   assert.equal(badAuth, 0, `${badAuth} GitHub call(s) arrived without the configured token`);
 
-  console.log(`GitHub write-path test passed: issue, comment and pull request executed from approvals, ${calls.length} API calls recorded and checked.`);
+  console.log(`GitHub connector test passed: issue, comment and pull request executed from approvals, `
+    + `doctor/branches/delete-branch rendered through the panel's own functions, ${calls.length} API calls recorded and checked.`);
 } finally {
   child.kill("SIGTERM");
   await new Promise((resolve) => { child.on("exit", resolve); setTimeout(resolve, 3000); });

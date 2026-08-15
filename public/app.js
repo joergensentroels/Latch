@@ -197,6 +197,13 @@ const networkGrid = document.querySelector("#networkGrid");
 const mcpServerList = document.querySelector("#mcpServerList");
 const mcpRefreshButton = document.querySelector("#mcpRefreshButton");
 const mcpStatus = document.querySelector("#mcpStatus");
+const githubDoctorButton = document.querySelector("#githubDoctorButton");
+const githubBranchesButton = document.querySelector("#githubBranchesButton");
+const githubOwnerInput = document.querySelector("#githubOwner");
+const githubRepoInput = document.querySelector("#githubRepo");
+const githubDoctorGrid = document.querySelector("#githubDoctorGrid");
+const githubBranchList = document.querySelector("#githubBranchList");
+const githubStatus = document.querySelector("#githubStatus");
 const scheduleForm = document.querySelector("#scheduleForm");
 const scheduleCadenceType = document.querySelector("#scheduleCadenceType");
 const scheduleEveryMinutes = document.querySelector("#scheduleEveryMinutes");
@@ -3097,6 +3104,158 @@ async function loadMcpServers() {
 }
 
 mcpRefreshButton?.addEventListener("click", loadMcpServers);
+
+// ---- GitHub connector -------------------------------------------------------------------------
+//
+// The connector's operator-only routes had no UI at all, so the only way to ask "what can this token
+// actually do" was curl. That question is worth a button: /api/github/config answers `ready: true`
+// whenever a URL and a token are merely PRESENT, which is not the same claim and reads as healthy while
+// every write 403s. /api/github/doctor probes each capability separately and is what this panel leads
+// with. Both calls cost real GitHub API requests, so they are button-driven like the MCP panel's
+// Refresh rather than running on every state poll.
+
+// The owner/repo the panel is pointed at. Empty means "whatever the host has configured as default",
+// which the server resolves itself -- so an operator who never touches these inputs still gets answers.
+function githubTargetQuery() {
+  const params = new URLSearchParams();
+  const owner = (githubOwnerInput?.value || "").trim();
+  const repo = (githubRepoInput?.value || "").trim();
+  if (owner) params.set("owner", owner);
+  if (repo) params.set("repo", repo);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+// Fill the inputs from the host's configured defaults the first time the panel is used, so the
+// operator can see what it will act on before pressing anything destructive.
+async function fillGithubDefaults() {
+  try {
+    const config = await api("/api/github/config");
+    if (githubOwnerInput && !githubOwnerInput.value) githubOwnerInput.value = config.owner || "";
+    if (githubRepoInput && !githubRepoInput.value) githubRepoInput.value = config.defaultRepo || "";
+    return config;
+  } catch {
+    return null;
+  }
+}
+
+function renderGithubDoctor(report) {
+  if (!githubDoctorGrid) return;
+  const checks = report?.checks || [];
+  if (!checks.length) {
+    githubDoctorGrid.innerHTML = "";
+    return;
+  }
+  const capability = (check) => `
+    <article class="status-card ${check.ok ? "ok" : "bad"}">
+      <span>${escapeHtml(check.capability || "")}</span>
+      <strong>${check.ok ? "OK" : escapeHtml(check.status ? `HTTP ${check.status}` : "Failed")}</strong>
+      <p>${escapeHtml(check.ok ? check.note || "" : `${check.note || ""} — needs ${check.needs || "a broader token"}.`)}</p>
+    </article>
+  `;
+  // `allOk` covers the PROBED capabilities only, so anything the host says it could not verify is shown
+  // as its own card rather than folded into the verdict -- a green summary must never imply a check
+  // that never ran.
+  const unprovable = (report.unprovable || []).map((note) => `
+    <article class="status-card warn">
+      <span>Not verifiable by any read</span>
+      <strong>Unknown</strong>
+      <p>${escapeHtml(note)}</p>
+    </article>
+  `).join("");
+  githubDoctorGrid.innerHTML = `
+    <article class="status-card ${report.allOk ? "ok" : "bad"}">
+      <span>${escapeHtml([report.owner, report.repo].filter(Boolean).join("/") || "Token")}</span>
+      <strong>${report.allOk ? "All probed capabilities OK" : "Something is missing"}</strong>
+      <p>${escapeHtml(report.hint || `${checks.length} capability check(s) passed.`)}</p>
+    </article>
+  ` + checks.map(capability).join("") + unprovable;
+}
+
+function renderGithubBranches(listing) {
+  if (!githubBranchList) return;
+  const branches = listing?.branches || [];
+  if (!branches.length) {
+    githubBranchList.innerHTML = `<p class="empty-state">No branches listed.</p>`;
+    return;
+  }
+  const sweepNote = listing.deleteBranchOnMerge
+    ? `Head branches are deleted on merge. What is left here was closed WITHOUT merging.`
+    : `"Automatically delete head branches" is OFF for this repository, so every merged branch stays behind.`;
+  githubBranchList.innerHTML = `
+    <p class="help-note">${escapeHtml(`${listing.count} branch(es), ${listing.prunableCount} prunable. ${sweepNote}`)}</p>
+  ` + branches.map((branch) => {
+    const badges = [
+      branch.isDefault ? `<span class="type-pill">default</span>` : "",
+      branch.protectedBranch ? `<span class="type-pill">protected</span>` : "",
+      branch.openPr ? `<span class="type-pill risk-high">PR #${branch.openPr} open</span>` : "",
+      branch.prunable ? `<span class="type-pill auto-review">prunable</span>` : ""
+    ].filter(Boolean).join(" ");
+    // The Delete button appears only where the host already said `prunable`. That is deliberately
+    // narrow -- a branch with no finished pull request may simply be work in progress -- and the host
+    // re-checks both refusals itself, so this is a second lock rather than the only one.
+    const action = branch.prunable
+      ? `<div class="approval-actions"><button class="danger-button" data-github-delete-branch="${escapeHtml(branch.name)}" type="button">Delete branch</button></div>`
+      : "";
+    return `
+      <article class="item">
+        <div class="item-header">
+          <h2 class="item-title">${escapeHtml(branch.name)}</h2>
+          <div class="meta-row">${badges}</div>
+        </div>
+        <p class="item-body">${escapeHtml(branch.reason || "")}</p>
+        ${action}
+      </article>
+    `;
+  }).join("");
+}
+
+async function loadGithubDoctor() {
+  if (state.authMode !== "operator") return;
+  await fillGithubDefaults();
+  setFormStatus(githubStatus, "Probing what the token can do...", "");
+  try {
+    const report = await api(`/api/github/doctor${githubTargetQuery()}`);
+    renderGithubDoctor(report);
+    setFormStatus(githubStatus, report.allOk ? "Every probed capability is available." : "Some capabilities are unavailable — see the cards above.", report.allOk ? "success" : "error");
+  } catch (error) {
+    renderGithubDoctor(null);
+    setFormStatus(githubStatus, `Could not check the token: ${error.message}`, "error");
+  }
+}
+
+async function loadGithubBranches() {
+  if (state.authMode !== "operator") return;
+  await fillGithubDefaults();
+  setFormStatus(githubStatus, "Listing branches...", "");
+  try {
+    const listing = await api(`/api/github/branches${githubTargetQuery()}`);
+    renderGithubBranches(listing);
+    setFormStatus(githubStatus, `${listing.count} branch(es) in ${listing.owner}/${listing.repo}.`, "success");
+  } catch (error) {
+    setFormStatus(githubStatus, `Could not list branches: ${error.message}`, "error");
+  }
+}
+
+githubDoctorButton?.addEventListener("click", loadGithubDoctor);
+githubBranchesButton?.addEventListener("click", loadGithubBranches);
+
+githubBranchList?.addEventListener("click", async (event) => {
+  const branch = event.target.closest("[data-github-delete-branch]")?.dataset.githubDeleteBranch;
+  if (!branch) return;
+  if (!confirm(`Delete the branch "${branch}"? Deleting a ref cannot be undone by re-running this.`)) return;
+  setFormStatus(githubStatus, `Deleting ${branch}...`, "");
+  try {
+    const owner = (githubOwnerInput?.value || "").trim();
+    const repo = (githubRepoInput?.value || "").trim();
+    await api("/api/github/delete-branch", { method: "POST", body: JSON.stringify({ branch, owner, repo }) });
+    // Re-list FIRST, then report — otherwise the refresh overwrites the outcome the operator needs to read.
+    await loadGithubBranches();
+    setFormStatus(githubStatus, `Deleted ${branch}.`, "success");
+  } catch (error) {
+    setFormStatus(githubStatus, `Could not delete ${branch}: ${error.message}`, "error");
+  }
+});
 
 function updateScheduleCadenceVisibility() {
   if (!scheduleCadenceType) return;
