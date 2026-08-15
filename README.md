@@ -139,9 +139,21 @@ See [LLM-PROVIDER.md](./LLM-PROVIDER.md) for the agent endpoint and security not
 
 ## Latch Network (planned, not yet implemented)
 
-The Latch Network is a **planned** private-alpha worker marketplace and is **not yet implemented** for end users. Its credits/economy UI is gated behind a feature flag (`NETWORK_ENABLED` in [`public/app.js`](./public/app.js)) and is **off by default**, so no credits, balances, or network-billing surfaces are reachable. When the network is actually built, flip `NETWORK_ENABLED` to `true` (or wire it to a config/env value) to restore the full credits experience, and update the descriptions in this README (here and in the "Planned (not yet implemented)" note above) to match.
+The Latch Network is a **planned** private-alpha worker marketplace. **There is no network to join** — no directory, no other operators, no marketplace. That part is not built, and this section is not a preview of something you can turn on and use.
 
-When enabled, the design is: operators create one-time worker invites in Timeline > Latch Network, workers poll Latch over Tailscale/HTTPS, and eligible non-sensitive LLM calls can route to them with internal credits. The server-side plumbing below is included for reference and testing.
+What *does* exist, in this repo, working: the server-side half. One-time worker invites (`Create-Network-Worker-Invite.ps1`), a distinct worker-token auth gate, the worker endpoints under `/api/network/worker/` (heartbeat, job poll, result submission), operator routes for registering and pausing workers, a credit ledger, and the `Share with network compute` context control that decides what a network worker would ever be sent. A lending worker (`worker/latch-network-worker.py`) is included and targets exactly those endpoints; it is written to be pointed at your own machines. That is the honest description: **private plumbing, with no public network behind it.**
+
+The credits/economy UI on top of it is **off by default** and is controlled by the host, not by editing shipped source:
+
+```bash
+LATCH_NETWORK_ENABLED=1
+```
+
+Set it in `.env` (see `.env.example`) and restart. The server sends `networkEnabled` in its state payload and the UI follows; leave it unset and no credits, balances or network-billing surfaces are reachable. It was previously a `const` in `public/app.js`, which meant exercising the plumbing required editing a source file that ships to every install — the wrong home for an operational switch, as the earlier version of this section said itself.
+
+Turning it on does not connect you to anything. It reveals the credit accounting for workers you run yourself, and it is meant for working on that plumbing rather than for everyday use.
+
+When the network does exist, the design is: operators create one-time worker invites in Timeline > Latch Network, workers poll Latch over Tailscale/HTTPS, and eligible non-sensitive LLM calls route to them with internal credits. At that point this section and the "Planned (not yet implemented)" note above both need rewriting.
 
 Run a lending worker on a trusted machine with either Ollama or an OpenAI-compatible local endpoint:
 

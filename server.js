@@ -102,6 +102,13 @@ const networkWorkerStaleMs = Number(process.env.LATCH_NETWORK_WORKER_STALE_MS ||
 const agencyWorkerStaleMs = Number(process.env.LATCH_AGENCY_WORKER_STALE_MS || 120_000);
 const simplePlannerIntervalMs = Number(process.env.LATCH_SIMPLE_PLANNER_INTERVAL_MS || 15_000);
 const defaultNetworkCredits = Number(process.env.LATCH_DEFAULT_NETWORK_CREDITS || 10_000);
+// The Latch Network does not exist yet as a thing to join. The server-side plumbing for it does
+// (worker invites, the worker token gate, job dispatch, the credit ledger), and this switch decides
+// whether the operator's UI shows the credits/network surfaces that sit on top of it. Default OFF,
+// so a fresh install shows no credits, balances or billing for a network nobody can join. It lives
+// here, and reaches the browser through the state payload, because the switch used to be a `const`
+// in public/app.js -- which meant the only way to exercise the plumbing was to edit shipped source.
+const networkEnabled = cleanBoolean(process.env.LATCH_NETWORK_ENABLED, false);
 const contextCategories = ["goals", "personality", "security", "project", "memory", "reference", "other"];
 // local = your primary (local) model only; backup = primary then your own external provider on
 // failure; network = the (not-yet-implemented) shared Latch Network. "auto" is accepted as a legacy
@@ -4315,6 +4322,7 @@ function visibleState(db) {
     executions: activeItems(db.executions).slice(0, 100),
     researchRuns: activeItems(db.researchRuns).slice(0, 100),
     schedules: activeItems(db.schedules).slice(0, 100).map(publicSchedule),
+    networkEnabled,
     network: publicNetworkState(db),
     agencyWorkers: publicAgencyWorkers(db),
     productContract: publicProductContract(),
@@ -5303,6 +5311,7 @@ function simpleUserState(db, user) {
     mode: "simple",
     meta: { name: "Compass" },
     productContract: publicProductContract(),
+    networkEnabled,
     user: publicUser(user),
     credits: {
       account: publicLedgerAccount(account),
