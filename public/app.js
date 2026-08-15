@@ -2541,6 +2541,23 @@ function emailCampaignApprovalSummary(approval) {
   `;
 }
 
+function emailThreadContinueApprovalSummary(approval) {
+  // The contact IS the payload here. Approving resets this thread's reply counter and un-pauses it,
+  // so the companion resumes auto-replying to this one address (the worker matches on `emailTo`).
+  // Before, the address reached the operator only inside the worker's own title/details prose.
+  const contact = String(approval.emailTo || "").trim();
+  return `
+    <div class="approval-summary contact-summary">
+      <strong>Resume automatic replies to one contact</strong>
+      <dl class="detail-grid">
+        <dt>Contact</dt><dd>${contact ? escapeHtml(contact) : "Not recorded — the host has no address to resume, so approving would do nothing"}</dd>
+        <dt>On approve</dt><dd>The thread's reply counter resets and auto-replies to this address resume</dd>
+        <dt>On deny</dt><dd>The thread stays paused and nothing is sent</dd>
+      </dl>
+    </div>
+  `;
+}
+
 function mcpToolCallApprovalSummary(approval) {
   const args = approval.mcpArgs && typeof approval.mcpArgs === "object" ? approval.mcpArgs : {};
   let argsText = "";
@@ -2587,6 +2604,7 @@ function approvalExecutionSummary(approval) {
   if (approval.type === "github_issue_comment") return githubIssueCommentApprovalSummary(approval);
   if (approval.type === "github_pull_request") return githubPullRequestApprovalSummary(approval);
   if (approval.type === "email_campaign") return emailCampaignApprovalSummary(approval);
+  if (approval.type === "email_thread_continue") return emailThreadContinueApprovalSummary(approval);
   if (approval.type === "mcp_tool_call") return mcpToolCallApprovalSummary(approval);
   return "";
 }
