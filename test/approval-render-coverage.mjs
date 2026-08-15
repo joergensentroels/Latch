@@ -426,9 +426,17 @@ assert.ok(renderedFields.size >= 20, `only ${renderedFields.size} rendered field
 assert.ok(styledTypes.size >= 5, `only ${styledTypes.size} type-pill rules found — the CSS scan is broken`);
 // The fields named in the F1 generalisation must still be recognised as worker-supplied input. If a
 // refactor moves them out of the creation record this fires, rather than the check going quiet.
+//
+// This is also the ONLY thing standing between a re-narrowed gate and silence. The per-type render
+// loop below skips any type with no gated fields (`if (!fields.size) continue`), which is right for
+// types that carry no payload -- but it means narrowing a gate until a type has none left removes it
+// from coverage instead of failing it, and its summary branch quietly becomes dead code. That is how
+// email_thread_continue lost `emailTo`: the host blanked the one field naming the contact, and the
+// worker, which reads it back to decide WHICH thread to un-pause, resumed nothing at all.
 for (const [type, field] of [
   ["email_campaign", "emailBody"],
   ["email_campaign", "campaignRecipients"],
+  ["email_thread_continue", "emailTo"],
   ["mcp_tool_call", "mcpArgs"],
   ["github_pull_request", "githubPrFiles"],
   ["github_issue", "githubIssueBody"]
