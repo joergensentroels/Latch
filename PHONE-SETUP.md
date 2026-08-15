@@ -1,5 +1,12 @@
 # Latch on Android
 
+> **Parts of this have never run on a handset.** Browsing to Latch over Tailscale has been done on
+> a phone; these have not: the "Share → Compass" share target, the Android HTTP Shortcuts route,
+> and the newer in-app controls (autonomy selector, allowed-operations list, sub-goal rows), all of
+> which have only ever been exercised in a desktop browser. See
+> [TESTING-STATUS.md](./TESTING-STATUS.md). If you are reading this with a phone in your hand, you
+> are the person who can close that.
+
 Use the private Tailscale HTTPS URL first when available:
 
 ```text

@@ -1,7 +1,7 @@
 # Testing status
 
-**Host behaviour as of 2026-08-15; live-hardware section as of 2026-07-05.** What has been verified
-for this release, and what has not.
+**Host behaviour as of 2026-08-15. Live-hardware section as of 2026-07-05. Device-client section
+unchanged since 2026-07-05.** What has been verified for this release, and what has not.
 
 ## Verified
 
@@ -64,17 +64,38 @@ and no test.
 
 ## Not yet tested on a device (optional client integrations)
 
-These are convenience entry points. The underlying `/api/draft` endpoint and its scoped-token
-behaviour are covered by the automated smoke suite, but the client/device pieces have not been
-exercised on real hardware yet:
+**Open since 2026-07-05 — about six weeks as of 2026-08-15, and unchanged in that time.** Two
+rounds of host-behaviour work landed above this line in the same period without touching this
+list. That is worth stating plainly, because it is exactly how a section like this stops being
+read: the file keeps getting updated and the untested part keeps being the part that does not
+move.
 
-- **Android "Share → Compass"** (Web Share Target) — reinstall/refresh the PWA, then share text from
-  another app into Compass.
-- **Android HTTP Shortcuts** — POST to `/api/draft` with the draft key.
-- **Outlook add-in ("Draft with Latch")** — the Office.js taskpane has not been sideloaded into a
-  live Outlook client (needs HTTPS via Tailscale Serve + a manifest sideload).
-- **Phone UI** — the newer controls (autonomy selector, allowed-operations list, sub-goal rows) have
-  been exercised in a desktop browser but not verified on a phone.
+**This cannot be closed from a keyboard.** Each item needs physical hardware — an Android phone,
+or a desktop Outlook signed into a real mailbox. No amount of work on `npm test` moves any of
+them, and nothing in the automated suite should be read as covering them. It is an operator task
+and it stays open until an operator does it.
 
-None of these affect the security model or the worker trust boundary; they are UI/client
-conveniences that will be verified as they are used.
+What IS covered: the `/api/draft` and `/api/assist` endpoints these clients call, and their
+scoped-token behaviour, are exercised by the automated smoke suite. What has never run is the
+client half — the code on the device.
+
+Each item below says what would settle it, so it can be executed and struck out rather than
+re-assessed:
+
+- **Android "Share → Compass"** (Web Share Target). Never run. *Done when:* the PWA is
+  reinstalled/refreshed on a phone, text is shared into Compass from another app, and it arrives
+  in the composer.
+- **Android HTTP Shortcuts.** Never run. *Done when:* a shortcut POSTs to `/api/draft` with the
+  draft key from the phone and a draft comes back.
+- **Outlook add-in ("Draft with Latch").** Never sideloaded. The Office.js taskpane at
+  `public/addin/taskpane.js` is real code whose single network call is a POST to `/api/assist`,
+  and it has never executed against a live Outlook. *Done when:* the manifest is sideloaded over
+  HTTPS (Tailscale Serve), the taskpane opens on a real message, and a draft comes back into a
+  reply.
+- **Phone UI.** The newer controls (autonomy selector, allowed-operations list, sub-goal rows)
+  have been exercised in a desktop browser but never on a phone. *Done when:* each of those three
+  is operated on an actual handset.
+
+None of these affects the security model or the worker trust boundary. That is a reason they are
+low priority; it is not a reason to describe them as working. Until the four lines above are
+struck out, the honest description of every one of them is "written, never run".

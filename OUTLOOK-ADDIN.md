@@ -12,9 +12,10 @@ it into a reply. So:
 
 - **No account credentials on Latch** — not even send-only. Outlook stays the reader and sender.
 - **No standing access** — Latch only ever sees the message you explicitly draft against.
-- **Scoped key** — the add-in uses the `draftToken` (in `data/auth.json`), which works **only** on
-  `/api/draft`. It cannot read state, approve anything, or send. Even if it leaked, all it can do is
-  request drafts.
+- **Scoped key** — the add-in uses the `draftToken` (in `data/auth.json`), which the main auth gate
+  does not recognise at all. It opens exactly two routes, `/api/draft` and `/api/assist` (the one the
+  taskpane actually calls), and both only generate text and return it. It cannot read state, approve
+  anything, or send. Even if it leaked, all it can do is ask for drafts.
 - Drafting runs on your host's **local** model by default, so the (untrusted) message content stays
   local; the composer is injection-resistant.
 

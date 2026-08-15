@@ -1,7 +1,12 @@
 /* "Draft with Latch" Outlook add-in taskpane.
- * Reads the message you're viewing, asks Latch's scoped /api/draft endpoint for a suggested reply,
- * and opens a prefilled reply. Latch never gets your mailbox credentials -- the add-in (running in
- * your authenticated Outlook session) hands over only the message you're looking at, and YOU send. */
+ * Reads the message you're viewing, asks Latch's scoped /api/assist endpoint (same draft token as
+ * /api/draft, and it carries the reply/summarize/action_items/rewrite modes this pane offers) for
+ * suggested text, and opens a prefilled reply. Latch never gets your mailbox credentials -- the
+ * add-in (running in your authenticated Outlook session) hands over only the message you're looking
+ * at, and YOU send.
+ *
+ * NEVER RUN IN A LIVE OUTLOOK. This file has not been sideloaded into a real client; see
+ * TESTING-STATUS.md. Treat it as written-but-unexercised code. */
 
 const el = (id) => document.getElementById(id);
 const KEY_BASE = "latchDraftBaseUrl";
