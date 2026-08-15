@@ -1708,7 +1708,12 @@ async function handleApi(req, res, url) {
       plannedRecipients: approvalType === "email_campaign" ? cleanInteger(body.plannedRecipients, 1, 1000, 1) : 0,
       campaignPurpose: approvalType === "email_campaign" ? cleanText(body.campaignPurpose || body.purpose || "", 1000) : "",
       campaignRecipients: approvalType === "email_campaign" ? cleanTextArray(body.campaignRecipients, 200, 320) : [],
-      emailTo: approvalType === "email_campaign" ? String(cleanText(body.emailTo || body.to || "", 320)).trim().toLowerCase() : "",
+      // Also the paused contact on email_thread_continue. The worker sends it (email_to=sender) and
+      // reads it back from the poll to decide WHICH thread to un-pause; gating it to email_campaign
+      // blanked it in storage, so approving a continue resumed nothing and the address survived only
+      // inside the worker's own title/details prose. The host's immediate-send path is type-gated to
+      // email_campaign, so carrying an address here never sends anything by itself.
+      emailTo: ["email_campaign", "email_thread_continue"].includes(approvalType) ? String(cleanText(body.emailTo || body.to || "", 320)).trim().toLowerCase() : "",
       emailSubject: approvalType === "email_campaign" ? cleanText(body.emailSubject || "", 300) : "",
       emailBody: approvalType === "email_campaign" ? cleanText(body.emailBody || body.body || "", 20000) : "",
       emailSentAt: "",

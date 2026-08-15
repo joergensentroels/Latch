@@ -1548,6 +1548,35 @@ try {
   assert(approvedAgentMail.emailSentAt, "approving an email_campaign carrying a message should send it from the agent mailbox");
   assert(approvedAgentMail.responseNote.includes("Sent from the agent mailbox to jane@example.com"), "approved send should record the recipient in the response note");
 
+  // email_thread_continue carries the paused contact in `emailTo`, and the worker reads it back off
+  // the poll to decide WHICH thread to un-pause. The host used to gate `emailTo` to email_campaign
+  // and blank it here, so approving a continue silently resumed nothing and the address survived
+  // only inside the worker's own prose. approval-render-coverage.mjs cannot catch a re-narrowing --
+  // an ungated type simply drops out of its per-field loop -- so the round-trip is pinned here.
+  const threadContinue = await request("/api/approvals", {
+    method: "POST",
+    headers: agentHeaders,
+    body: {
+      type: "email_thread_continue",
+      title: "Continue replying to Ana?",
+      details: "The companion has auto-replied 3 time(s) in its thread with ana@contact.example.",
+      emailTo: "Ana@Contact.Example"
+    }
+  });
+  assert(threadContinue.emailTo === "ana@contact.example", "the host must store the contact an email_thread_continue would resume, normalised");
+  const threadPoll = await request("/api/agent/poll", { headers: agentHeaders });
+  const polledContinue = threadPoll.approvals.find((item) => item.id === threadContinue.id);
+  assert(polledContinue?.emailTo === "ana@contact.example", "the worker must be able to read the contact back off the poll, or it cannot resume the right thread");
+  const approvedContinue = await request(`/api/approvals/${threadContinue.id}`, {
+    method: "PATCH",
+    headers: operatorHeaders,
+    body: { status: "approved", note: "Keep replying to Ana." }
+  });
+  assert(approvedContinue.status === "approved", "operator can approve a thread continue");
+  // Carrying an address must not by itself make the host send: the immediate-send path is gated to
+  // email_campaign. This is what makes widening the emailTo gate safe.
+  assert(!approvedContinue.emailSentAt, "approving an email_thread_continue must not send anything from the agent mailbox");
+
   const shoppingApproval = await request("/api/approvals", {
     method: "POST",
     headers: agentHeaders,
