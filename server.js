@@ -4969,10 +4969,10 @@ function sourceCanUseFullAccess(approval, db) {
   return Boolean(user?.preferences?.proMode);
 }
 
-function requiresHumanBoundary(approval) {
-  return Boolean(humanBoundaryReason(approval));
-}
-
+// There is deliberately no boolean requiresHumanBoundary() wrapper. There was one, it had no callers,
+// and a second name for this question is how the two answers drift apart — the note below records a
+// near-miss from exactly that kind of contract ambiguity. Callers that want a yes/no use this in
+// boolean context, as the guard at the top of autoApprovalDecision does.
 function humanBoundaryReason(approval) {
   if (approval.sensitive) return "Human boundary: sensitive approvals require the operator.";
   if (browserPlanNeedsHumanApproval(approval)) {
@@ -6880,7 +6880,7 @@ async function computeMcpAutoApprovable(db, serverName, toolName) {
       .find((tool) => tool.name === name);
     if (!liveTool) return false; // can't verify the tool's identity right now -> require a human
     const fingerprint = toolFingerprint(liveTool);
-    const key = `${server.name} ${name}`;
+    const key = `${server.name}\u0000${name}`;
     if (!Array.isArray(db.mcpToolFingerprints)) db.mcpToolFingerprints = [];
     const record = db.mcpToolFingerprints.find((entry) => entry.key === key);
     const now = new Date().toISOString();
