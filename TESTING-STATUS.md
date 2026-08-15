@@ -1,6 +1,7 @@
 # Testing status
 
-**As of 2026-07-05.** What has been verified for this release, and what has not.
+**Host behaviour as of 2026-08-15; live-hardware section as of 2026-07-05.** What has been verified
+for this release, and what has not.
 
 ## Verified
 
@@ -10,12 +11,33 @@
 - worker templates + executor + SSRF hardening (Python)
 - agent-email, MCP (including the real stdio transport), scheduling, and the full smoke suite
 - MCP tool-poisoning / rug-pull guard, end-to-end (`test/mcp-fingerprint.mjs`)
+- the GitHub connector's write path, end-to-end (`test/github-write-path.mjs`)
 
 The smoke suite exercises the security-critical host behaviour directly: arbitrary shell/browser
 plans stay `pending` (human-required) even under Full access; operation grants (grant → auto-approve
 → revoke → human again); arbitrary operations are never grantable; the agent key is rejected on
 revoke; CI/workflow-path commits never auto-approve; MCP tool arguments are validated against the
 tool's declared schema; and web-search findings are not auto-shared with the agent.
+
+**The GitHub connector's write path** (`test/github-write-path.mjs`). This is the subsystem that holds
+the GitHub token and creates branches, commits and pull requests on the operator's approval. It is
+driven against a mock GitHub API — the connector's base URL is an env var — which records every
+request, so the assertions are about the bytes that reached the API rather than about what the host
+says it sends. Covered: `github_issue`, `github_issue_comment` and `github_pull_request` stay
+`pending` under Full access and are never grantable; filing an approval touches the API zero times;
+a **denied** approval reaches the API zero times; an approved one sends exactly the typed fields the
+operator saw (each fixture's free-text `title` differs from its typed field on purpose, so a test can
+only pass by reading the typed one); a pull request branches from the approved base, commits the
+approved bytes onto the new branch, and opens with the approved title/head/base; and a **failed**
+write returns the approval to `pending` with the reason rather than recording it as done.
+
+The "stays pending" assertions carry a positive control — an own-repo `github_file` commit that
+auto-approves in the same run under the same policy — because on their own they would also pass with
+the hard boundary deleted, since no Full-access rule matches these types either.
+
+Not covered by the suite: the operator-only connector routes — `/api/github/doctor`, `branches`,
+`delete-branch`, `repo-settings`, `close` and `issues`. `github.mjs`'s branch-prune decision, which
+`branches` calls, is unit-tested (`test/github-prune.mjs`); the routes themselves are not.
 
 **Live host + worker — verified on real hardware (2026-07-05):**
 
