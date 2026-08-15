@@ -18,7 +18,12 @@ import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 
-const PROTOCOL_VERSION = "2025-06-18";
+// Latch speaks ONE revision of MCP, and only as a legacy-era client (the `initialize` handshake).
+// MCP-PROTOCOL-SUPPORT.md records what that covers, what it deliberately does not, and why the two
+// newer revisions are not implemented. Change that file in the same commit as this list: a version
+// number with no written scope is how a client ends up claiming a protocol it cannot speak.
+const PROTOCOL_VERSION = "2025-06-18";                    // what Latch announces in `initialize`
+const SUPPORTED_PROTOCOL_VERSIONS = [PROTOCOL_VERSION];   // what Latch will actually proceed against
 const DEFAULT_OP_TIMEOUT_MS = 20_000;
 const TOOLS_CACHE_TTL_MS = 60_000;
 
@@ -354,7 +359,7 @@ function runStdioOps(server, ops, timeoutMs) {
         const waiter = pending.get(message.id);
         if (!waiter) continue;
         pending.delete(message.id);
-        if (message.error) waiter.reject(new Error(message.error.message || "MCP error"));
+        if (message.error) waiter.reject(new Error(mcpErrorText(message.error)));
         else waiter.resolve(message.result);
       }
     });
@@ -362,11 +367,22 @@ function runStdioOps(server, ops, timeoutMs) {
     // Handshake, then the requested ops.
     (async () => {
       try {
-        await request("initialize", {
+        const hello = await request("initialize", {
           protocolVersion: PROTOCOL_VERSION,
           capabilities: {},
           clientInfo: { name: "latch", version: "0.1.0" }
         });
+        // The server picks the revision, and it is allowed to pick one we did not ask for: "otherwise,
+        // the server MUST respond with another protocol version it supports". The decision is then ours
+        // — "if the client does not support the version in the server's response, it SHOULD disconnect" —
+        // and disconnecting is the honest move here, because every op Latch runs over this connection is
+        // a credential-bearing tool call the operator approved on the understanding that the host could
+        // actually speak to the server. finish() ends stdin and kills the child, which is the stdio
+        // shutdown the spec describes.
+        const agreed = hello?.protocolVersion;
+        if (!SUPPORTED_PROTOCOL_VERSIONS.includes(agreed)) {
+          throw new Error(`MCP server "${server.name}" negotiated protocol ${agreed ? `"${agreed}"` : "(none announced)"}, but Latch speaks ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")}. Disconnecting rather than guessing.`);
+        }
         send({ jsonrpc: "2.0", method: "notifications/initialized" });
         for (const op of ops) {
           results.push(await request(op.method, op.params));
@@ -377,6 +393,18 @@ function runStdioOps(server, ops, timeoutMs) {
       }
     })();
   });
+}
+
+// A modern (2026-07-28+) server has no `initialize` at all and rejects ours with a JSON-RPC error. The
+// spec asks such a server to name the versions it supports in that error precisely because a legacy
+// client like Latch has no fall-forward mechanism and "this message may be the only diagnostic they can
+// surface to users". Carrying `data.supported` through turns an opaque failure into an actionable one.
+function mcpErrorText(error) {
+  const base = error?.message || "MCP error";
+  const supported = error?.data?.supported;
+  return Array.isArray(supported) && supported.length
+    ? `${base} (server supports: ${supported.join(", ")})`
+    : base;
 }
 
 function stripBom(text) {

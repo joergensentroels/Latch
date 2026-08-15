@@ -134,6 +134,82 @@ try {
   const broken = findServer(brokenConfig, "broken");
   await assert.rejects(() => listTools(broken, { useCache: false, timeoutMs: 5000 }), "a crashing MCP server should reject, not hang");
 
+  // -------------------------------------------------------------------------
+  // Version negotiation, client half.
+  // -------------------------------------------------------------------------
+  // Latch announces 2025-06-18 in `initialize` and used to ignore whatever came back. The spec puts the
+  // decision on the client — "if the client does not support the version in the server's response, it
+  // SHOULD disconnect" — and for Latch that matters more than usual: every op on this connection is a
+  // credential-bearing tool call the operator approved believing the host could speak to the server.
+  //
+  // All four servers below come from ONE generator and differ only in the `initialize` reply. That is
+  // the control: a check that simply threw on every handshake would satisfy the three rejection cases
+  // and be indistinguishable from a working one, so the fourth server — same script, supported version —
+  // has to still list its tools.
+  const handshakeServer = (initializeReply) => `
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "initialize") {
+      send(Object.assign({ jsonrpc: "2.0", id: message.id }, ${initializeReply}));
+    } else if (message.method === "tools/list") {
+      send({ jsonrpc: "2.0", id: message.id, result: { tools: [{ name: "greet", description: "Greet someone", inputSchema: { type: "object" } }] } });
+    }
+  }
+});
+function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
+`;
+  const handshakeEntry = (name, initializeReply) => ({
+    name, transport: "stdio", command: process.execPath,
+    args: ["-e", handshakeServer(initializeReply)], allowedTools: ["greet"]
+  });
+
+  await writeFile(configPath, JSON.stringify({
+    enabled: true,
+    servers: [
+      // The control: a revision Latch actually implements.
+      handshakeEntry("hs-supported", `{ result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "s", version: "1" } } }`),
+      // A server that picks a revision Latch has not implemented. Under the old code this sailed through
+      // and Latch brokered tool calls over a wire format it does not speak.
+      handshakeEntry("hs-newer", `{ result: { protocolVersion: "2026-07-28", capabilities: {}, serverInfo: { name: "s", version: "1" } } }`),
+      // A server that announces nothing at all. "Absent" is not "compatible".
+      handshakeEntry("hs-silent", `{ result: { capabilities: {}, serverInfo: { name: "s", version: "1" } } }`),
+      // A modern server: no `initialize` at all, so it errors — and names what it does support, which for
+      // a legacy client is the only diagnostic available.
+      handshakeEntry("hs-modern", `{ error: { code: -32022, message: "Unsupported protocol version", data: { supported: ["2026-07-28", "2025-11-25"], requested: "2025-06-18" } } }`)
+    ]
+  }));
+  const hsConfig = await loadMcpConfig(configPath, {});
+
+  // The control runs first: if this one fails, every rejection below is meaningless.
+  const supportedTools = await listTools(findServer(hsConfig, "hs-supported"), { useCache: false, timeoutMs: 5000 });
+  assert.ok(supportedTools.length === 1 && supportedTools[0].name === "greet",
+    "control: a server on a revision Latch implements still completes the handshake and lists tools");
+
+  // Asserted on the message, not just "it rejected" — a timeout or a spawn failure also rejects, and
+  // would otherwise be scored as a successful version check.
+  await assert.rejects(
+    () => listTools(findServer(hsConfig, "hs-newer"), { useCache: false, timeoutMs: 5000 }),
+    /negotiated protocol "2026-07-28".*Latch speaks 2025-06-18/s,
+    "a server negotiating an unimplemented revision is disconnected from, naming both versions");
+
+  await assert.rejects(
+    () => listTools(findServer(hsConfig, "hs-silent"), { useCache: false, timeoutMs: 5000 }),
+    /negotiated protocol \(none announced\)/,
+    "a server that announces no version is refused rather than assumed compatible");
+
+  await assert.rejects(
+    () => listTools(findServer(hsConfig, "hs-modern"), { useCache: false, timeoutMs: 5000 }),
+    /Unsupported protocol version \(server supports: 2026-07-28, 2025-11-25\)/,
+    "a modern server's rejection reaches the operator with the versions it does support");
+
   // Tool fingerprint (rug-pull guard): stable across inputSchema key reordering, changes when the
   // model-visible surface (name / description / inputSchema) changes.
   const baseTool = { name: "greet", description: "Greet someone", inputSchema: { type: "object", properties: { name: { type: "string" }, loud: { type: "boolean" } } } };
