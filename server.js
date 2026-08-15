@@ -4954,7 +4954,11 @@ function humanBoundaryReason(approval) {
   if (browserPlanNeedsHumanApproval(approval)) {
     return "Human boundary: browser/research plans using HTTP URLs, embedded URL credentials, or login/credential steps require operator approval.";
   }
-  if (approval.type === "github_file" && isOwnRepoGithubFileApproval(approval)) return false;
+  // "" rather than false: this function's contract is "the reason, or empty if none", and every
+  // other path returns a string. Today's three callers all use it in boolean context, so the
+  // boolean was harmless; a caller that renders or concatenates the result would have printed
+  // "false" as the reason a human was required.
+  if (approval.type === "github_file" && isOwnRepoGithubFileApproval(approval)) return "";
   // Issues and comments are deliberately NOT given the own-repo exemption that github_file gets. A commit
   // is content: silent, and reversible through git history. Opening an issue or commenting on one is
   // COMMUNICATION — it emails every watcher and cannot be recalled, which puts it with external_contact
