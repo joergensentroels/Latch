@@ -59,6 +59,11 @@ async function stopServer() {
   await new Promise((resolve) => { current.on("exit", resolve); setTimeout(resolve, 3000); });
 }
 
+// Returns the STATUS alongside the body. It used to return the parsed body alone, so a 401, a 429 or a 500 was
+// handed to the assertions as an ordinary object — and every error body Latch sends lacks the field under test,
+// so the failure read "networkEnabled: expected false, actual undefined". That is a request which never
+// succeeded, wearing the costume of a payload that answered the question and said no. CI has been red on it
+// since 2026-08-15 with nothing in the output naming a cause.
 async function request(pathname, options = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
     method: options.method || "GET",
@@ -66,32 +71,46 @@ async function request(pathname, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined
   });
   const text = await response.text();
-  return text ? JSON.parse(text) : {};
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { unparsed: text.slice(0, 300) }; }
+  return { status: response.status, body };
+}
+
+// Fails with what the server actually said. "undefined" names neither the status nor the reason; this names both.
+function must200(what, res) {
+  assert.ok(res.status >= 200 && res.status < 300,
+    `${what} must answer 2xx before its payload means anything — got HTTP ${res.status}: ${JSON.stringify(res.body).slice(0, 300)}`);
+  return res.body;
 }
 
 async function waitForHealth() {
   const deadline = Date.now() + 10000;
+  let last = "no attempt completed";
   while (Date.now() < deadline) {
     try {
       const health = await request("/api/health");
-      if (health.ok) return;
-    } catch {
-      await delay(120);
-    }
+      if (health.body.ok) return;
+      last = `HTTP ${health.status}: ${JSON.stringify(health.body).slice(0, 200)}`;
+    } catch (e) { last = String(e?.message || e); }
+    // Outside the catch. It used to delay only when the fetch THREW, so a server that answered without ok
+    // spun this loop with no pause for the full ten seconds — thousands of requests, and a report of
+    // "did not become healthy" that never said what it had been answering.
+    await delay(120);
   }
-  throw new Error(`server did not become healthy\nstderr:\n${stderr}`);
+  throw new Error(`server did not become healthy — last: ${last}\nstderr:\n${stderr}`);
 }
 
 // Both payloads, because the operator console and the Compass user UI read different endpoints and
 // the flag has to reach both. A user session is needed for the second one.
 async function readBothPayloads() {
-  const operatorState = await request("/api/state", { headers: operatorHeaders });
-  const session = await request("/api/me/session/dev", {
+  const operatorState = must200("GET /api/state", await request("/api/state", { headers: operatorHeaders }));
+  const session = must200("POST /api/me/session/dev", await request("/api/me/session/dev", {
     method: "POST",
     body: { email: "netflag@example.com", displayName: "Net Flag" }
-  });
+  }));
   assert.ok(String(session.token || "").startsWith("user_"), `dev session should return a user token, got ${JSON.stringify(session).slice(0, 200)}`);
-  const userState = await request("/api/me/state", { headers: { authorization: `Bearer ${session.token}` } });
+  const userState = must200("GET /api/me/state",
+    await request("/api/me/state", { headers: { authorization: `Bearer ${session.token}` } }));
   return { operatorState, userState };
 }
 
