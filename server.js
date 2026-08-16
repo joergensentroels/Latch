@@ -403,8 +403,20 @@ function normalizeReadDb(db) {
   return normalizeDb(db);
 }
 
+// Counter + randomness, not pid + clock. The temp name used to be `${dbPath}.${pid}.${Date.now()}.tmp`, which
+// is IDENTICAL for two writes in the same millisecond in the same process — and this is a single-process server
+// whose saves are not serialised, so that is reachable. Both writes then use one file:
+//
+//   the loser's rename finds nothing and throws ENOENT, surfacing as a 500 on whatever request triggered it —
+//   which is how CI found this, on PATCH /api/autonomy;
+//   or, worse and silently, B's writeFile overwrites A's temp before A renames, so A's rename publishes B's
+//   content under A's write. No error, and the save that "succeeded" wrote something it never composed.
+//
+// The second is the one that matters: this file is the entire datastore — approvals, grants, users, tokens.
+let dbWriteSeq = 0;
 async function atomicWriteDbJson(db) {
-  const tempPath = `${dbPath}.${process.pid}.${Date.now()}.tmp`;
+  dbWriteSeq = (dbWriteSeq + 1) >>> 0;
+  const tempPath = `${dbPath}.${process.pid}.${Date.now()}.${dbWriteSeq}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
     await writeFile(tempPath, JSON.stringify(db, null, 2));
     await renameWithRetry(tempPath, dbPath);
