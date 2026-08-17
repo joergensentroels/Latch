@@ -1,10 +1,42 @@
 import { readdir, readFile, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ignoredDirs = new Set([".git", "data", "node_modules", "__pycache__"]);
 const binaryExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".ico"]);
+
+// WHAT GIT WOULD PUBLISH, asked of git rather than kept in a list here.
+//
+// This scan used to fail on any hit anywhere in the working tree. That blocked a push on `latch.log`,
+// which is matched by `*.log` in .gitignore and therefore cannot reach a remote by any path — the server
+// had simply logged its own tailnet bind address after a restart. The finding was real and the file was
+// unpublishable, and the two are different things.
+//
+// It matters more than a tidiness complaint. A gate that blocks a push over something git will never
+// publish, on a file the running server rewrites continuously, fails on every push until somebody
+// deletes the log. That is how `--no-verify` becomes routine, and a gate people routinely bypass will
+// not stop the real finding either. Crying wolf is a security defect in a security check.
+//
+// So the distinction is drawn where it actually lies — publishable or not — and it is drawn by GIT,
+// not by the `ignoredDirs` set above. That set is a hand-kept list of what to skip, which is the shape
+// that cannot notice something absent from itself; it stays only as a cheap walk-pruner for large
+// directories. `data/` being on it is now belt-and-braces rather than the mechanism.
+//
+// Fails CLOSED: if git cannot answer, nothing is treated as ignored and every hit fails the run, which
+// is the old behaviour. A scan that quietly stops failing because a subprocess broke is the worst of
+// the available outcomes.
+const ignoredPaths = (() => {
+  try {
+    const out = execFileSync("git", ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
+                             { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return new Set(out.split("\0").filter(Boolean));
+  } catch {
+    return null;   // null, not empty — "unknown", and the caller treats unknown as publishable
+  }
+})();
+const isPublishable = (relative) => ignoredPaths === null || !ignoredPaths.has(relative);
 
 const patterns = [
   {
@@ -35,7 +67,8 @@ const patterns = [
   }))
 ];
 
-const findings = [];
+const findings = [];        // in files git would publish — these fail the run
+const unpublishable = [];   // in files git ignores — reported, but they cannot reach a remote
 for await (const file of walk(root)) {
   const relative = path.relative(root, file).replaceAll("\\", "/");
   const text = await readFile(file, "utf8");
@@ -44,9 +77,19 @@ for await (const file of walk(root)) {
       const value = match[0];
       if (pattern.allow?.(value, relative)) continue;
       const line = lineNumber(text, match.index || 0);
-      findings.push(`${relative}:${line} ${pattern.name}`);
+      // Never the matched VALUE — this output goes to terminals, CI logs and pasted bug reports, and
+      // printing the secret to report the secret has been its own incident in other projects.
+      (isPublishable(relative) ? findings : unpublishable).push(`${relative}:${line} ${pattern.name}`);
     }
   }
+}
+
+// Said before the verdict, so it is read either way. Silence here would be the wrong trade: the file is
+// unpublishable today and one `git add -f` away from not being.
+if (unpublishable.length) {
+  console.warn(`Secret scan: ${unpublishable.length} match(es) in files git IGNORES — not published, not failing:`);
+  for (const finding of unpublishable) console.warn(`- ${finding}`);
+  console.warn("  (a runtime log or local file. Harmless where it is; do not commit it with -f.)");
 }
 
 if (findings.length) {
@@ -55,7 +98,7 @@ if (findings.length) {
   process.exit(1);
 }
 
-console.log("Secret scan passed.");
+console.log(`Secret scan passed.${ignoredPaths === null ? " (git could not list ignored files; every match was treated as publishable)" : ""}`);
 
 async function* walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
