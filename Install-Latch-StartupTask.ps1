@@ -25,11 +25,15 @@ $Action = New-ScheduledTaskAction `
 
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+# ExecutionTimeLimit 0 = never stop it. Omitting this takes Task Scheduler's DEFAULT of PT72H, so
+# Latch was killed after three days of healthy uptime — a stop with no error, no log line and no
+# obvious cause. The SYSTEM installer beside this one always set it; this one did not.
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit (New-TimeSpan -Days 0)
 
 Register-ScheduledTask `
     -TaskName $TaskName `
