@@ -13,16 +13,34 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
+      # These three are pinned for the RUNTIME they declare, not for their features. The runners no longer
+      # offer node20: an action declaring `using: node20` is forced onto node24 and announced as deprecated
+      # on every run. Each pin below is the FIRST major of that action to declare node24 itself, read out of
+      # its action.yml rather than guessed — and that is not the same number for all three:
+      #
+      #   actions/checkout      v4 = node20, v5 = node24   -> v5
+      #   actions/setup-node    v4 = node20, v5 = node24   -> v5
+      #   actions/setup-python  v5 = node20, v6 = node24   -> v6
+      #
+      # So setup-python sitting at a higher number than its neighbours is CORRECT, not an oversight. Pinning
+      # it to v5 "for consistency" would restore exactly the deprecation this removes.
+      #
+      # All three need a runner at v2.327.1+, which GitHub-hosted ubuntu-latest is. v7 is current for all
+      # three and deliberately not taken: these are the versions that fix the stated problem. The only
+      # behaviour change in the set worth knowing is setup-node v5's automatic caching when package.json
+      # carries a `packageManager` field — this repo has none, so it is off here.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
 
+      # Load-bearing, not leftover: `npm test` runs test/run-python-tests.mjs, which exits non-zero when no
+      # interpreter is found.
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
