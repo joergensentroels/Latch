@@ -37,9 +37,31 @@ Copy [`mcp.example.json`](./mcp.example.json) to `data/mcp.json` (gitignored) an
 ```
 
 - **`transport`** — `stdio` spawns the server as a subprocess and speaks newline-delimited JSON-RPC
-  2.0 over stdin/stdout. (`mock` exists for tests.)
-- **`env`** — credentials for that server. Live only on the host; **never** exposed. The operator
-  API shows env *key names* but not values.
+  2.0 over stdin/stdout. `http` POSTs JSON-RPC to a `url` instead. (`mock` exists for tests.)
+- **`env`** — credentials for that server, for `stdio`. Live only on the host; **never** exposed. The
+  operator API shows env *key names* but not values.
+
+An `http` server looks like this instead, and the extra fields are all about credentials leaving the box:
+
+```json
+{
+  "name": "bureau",
+  "transport": "http",
+  "url": "http://127.0.0.1:4173/mcp",
+  "headers": { "Authorization": "Bearer <operator-token>" },
+  "allowRemote": false,
+  "allowedTools": ["list_agents", "list_deliverables"]
+}
+```
+
+- **`url`** — the JSON-RPC endpoint. Which MCP era it speaks is **probed, not configured** — see
+  [MCP-PROTOCOL-SUPPORT.md](./MCP-PROTOCOL-SUPPORT.md). The MCP panel shows the negotiated era once known.
+- **`headers`** — credentials for an `http` server. What `env` is to a subprocess. Same treatment: the
+  operator API shows header *key names*, never values.
+- **`allowRemote`** — required to be `true` before Latch will POST to a non-loopback host. It defaults to
+  false so a mistyped hostname fails closed rather than sending a bearer token somewhere unintended. A
+  server that needs it is badged **`remote credentials`** in the MCP panel, because credential egress is
+  not something an operator should have to infer from a hostname.
 - **`allowedTools`** — optional hard allowlist. If non-empty, only those tool names can be called at
   all, even with approval.
 - **`autoApprove`** — optional; tools pre-authorised for autonomy auto-approval once bridge-side
@@ -50,8 +72,9 @@ Copy [`mcp.example.json`](./mcp.example.json) to `data/mcp.json` (gitignored) an
   `inputSchema` (required fields, types, enums, no unexpected fields) — a typed tool with unbounded
   arguments is not treated as safe.
 
-No npm dependency is added: the MCP stdio client is implemented directly on Node built-ins
-(`mcp.mjs`), consistent with the rest of the host.
+No npm dependency is added: both transports are implemented directly on Node built-ins (`mcp.mjs`) —
+newline-delimited JSON-RPC on `node:child_process` for stdio, and the global `fetch` for http — consistent
+with the rest of the host.
 
 ## Flow
 
@@ -92,12 +115,14 @@ and (via **Refresh**) their live tools. Read-only — servers are configured in 
 
 ## Status
 
-Fully implemented across host and worker: the MCP client (stdio + mock transports), config
+Fully implemented across host and worker: the MCP client (stdio, http and mock transports), config
 load/redaction, `/api/mcp/servers`, the `mcp_tool_call` approval type + host-side execution,
 bridge-side detection + LLM planning against the poll catalog, Full-access auto-approve for
 `autoApprove` tools, result feedback into the Inbox/task, and the Settings UI. Covered by
-`test/mcp.mjs` (incl. the real stdio transport), `test/worker-readonly-templates.py` (detection +
-planning), and the end-to-end path in `test/smoke.mjs`.
+`test/mcp.mjs` (incl. the real stdio transport, and the dual-era http transport against an inline peer that
+grades each request), `test/worker-readonly-templates.py` (detection + planning), and the end-to-end path in
+`test/smoke.mjs`. Interoperability against a server this repo did not write is a separate claim, checked by
+`tools/mcp-interop.mjs` by hand — see [MCP-PROTOCOL-SUPPORT.md](./MCP-PROTOCOL-SUPPORT.md).
 
 **Takes effect on:** host restart (server) + bridge redeploy (worker detection/planning). The
 Settings UI is static (PWA reload).

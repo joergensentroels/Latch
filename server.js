@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadEmailConfig, sendEmail, pollInbox, classifySend, publicEmailConfig } from "./email.mjs";
-import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed, toolFingerprint } from "./mcp.mjs";
+import { loadMcpConfig, publicMcpConfig, findServer, listTools, callTool, isToolAllowed, toolFingerprint, negotiateHttpEra, isLoopbackUrl } from "./mcp.mjs";
 import { normalizeCadence, describeCadence, computeNextRun, dueSchedules } from "./schedule.mjs";
 import { newestClosedByRef, classifyBranch } from "./github.mjs";
 
@@ -1318,11 +1318,22 @@ async function handleApi(req, res, url) {
     // taking down the whole listing.
     summary.servers = await Promise.all(summary.servers.map(async (server) => {
       const full = findServer(config, server.name);
+      // Two facts the panel could not show before, both decided at runtime rather than in the config:
+      //
+      //   era    — which MCP era this endpoint actually speaks. It is negotiated by probing, so no config
+      //            file can state it, and "which protocol is my host really using" should not be a
+      //            question an operator has to answer by reading a log.
+      //   remote — whether reaching it sends Latch's configured credentials off this machine. The url is
+      //            listed already, but leaving the reader to judge loopback-or-not from a hostname is
+      //            leaving a security-relevant reading to whoever happens to look.
+      const remote = full?.transport === "http" && !isLoopbackUrl(full.url || "");
+      let era = full?.transport === "http" ? "unknown" : "legacy";
       try {
+        if (full?.transport === "http") era = (await negotiateHttpEra(full)).era;
         const tools = await listTools(full);
-        return { ...server, ready: true, tools };
+        return { ...server, ready: true, era, remote, tools };
       } catch (error) {
-        return { ...server, ready: false, tools: [], error: cleanText(error.message, 500) };
+        return { ...server, ready: false, era, remote, tools: [], error: cleanText(error.message, 500) };
       }
     }));
     sendJson(res, 200, summary);

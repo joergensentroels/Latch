@@ -14,6 +14,16 @@
       "argConstraints": { "read_file": { "path": { "prefix": "/home/you/shared" } } }
     },
     {
+      "name": "bureau",
+      "description": "An MCP server reached over HTTP rather than spawned. The era it speaks (legacy 2025-06-18 vs modern 2026-07-28) is PROBED at runtime, not configured -- see MCP-PROTOCOL-SUPPORT.md.",
+      "transport": "http",
+      "url": "http://127.0.0.1:4173/mcp",
+      "headers": { "Authorization": "Bearer REPLACE_WITH_OPERATOR_TOKEN" },
+      "allowRemote": false,
+      "allowedTools": ["list_agents", "list_deliverables"],
+      "autoApprove": []
+    },
+    {
       "name": "example-with-secret",
       "description": "An MCP server that needs an API key (kept on the host, never on the worker)",
       "transport": "stdio",
@@ -25,7 +35,10 @@
     }
   ],
   "_fields": {
-    "transport": "'stdio' spawns the server as a subprocess and speaks JSON-RPC over stdin/stdout; 'mock' is for tests.",
+    "transport": "'stdio' spawns the server as a subprocess and speaks JSON-RPC over stdin/stdout; 'http' POSTs JSON-RPC to 'url'; 'mock' is for tests. stdio is legacy-era only; http negotiates legacy or modern by probing.",
+    "url": "http transport only. The JSON-RPC endpoint. Latch probes it with server/discover to decide which MCP era it speaks, and caches that per server for 60s.",
+    "headers": "http transport only. Credentials for the endpoint -- what 'env' is to a spawned command. Kept on the host; the operator API reports header KEY NAMES and never values.",
+    "allowRemote": "http transport only, default false. Must be true before Latch will POST to a non-loopback host. Sending operator credentials off this machine is a different act from spawning a local subprocess, so it is declared rather than implied by giving a URL -- a mistyped hostname then fails closed instead of posting a bearer token somewhere unintended. Such a server is badged 'remote credentials' in the MCP panel.",
     "command_args": "Pin the server to an explicit version rather than letting a floating fetch pull the latest -- e.g. '@modelcontextprotocol/server-filesystem@X.Y.Z' instead of the bare package name. An unpinned 'npx -y pkg' re-resolves to the newest release on every spawn, so a compromised or rug-pulled upstream release silently becomes the server you vetted. Pinning (plus a lockfile or registry mirror) is the supply-chain control.",
     "allowedTools": "Optional. If non-empty, ONLY these tool names may be called on this server. Empty = allow any tool the server exposes (still approval-gated).",
     "autoApprove": "Optional. Tool names pre-authorised for autonomy auto-approval (Full access only). Still audited. Leave empty to require a human for every call. Auto-approval is bound to the tool's fingerprint (name + description + inputSchema): if the server later changes that tool's description or schema, the fingerprint no longer matches and the call falls back to a human approval instead of auto-running -- blocking the MCP tool-poisoning / rug-pull vector where a trusted tool's description is mutated into an injection payload after you allowlisted it.",

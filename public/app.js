@@ -3097,6 +3097,15 @@ function renderMcpServers() {
   mcpServerList.innerHTML = servers.map((server) => {
     const badges = [
       server.transport ? `<span class="type-pill">${escapeHtml(server.transport)}</span>` : "",
+      // Which MCP era this endpoint actually speaks, once probed. Shown for http only — the one transport
+      // where it is negotiated rather than fixed. A stdio server is legacy by construction, and a pill
+      // saying so on every row would be noise.
+      server.transport === "http" && server.era && server.era !== "unknown"
+        ? `<span class="type-pill">${escapeHtml(server.era)}</span>` : "",
+      // risk-high deliberately: this one means Latch sends the credentials configured for this server to
+      // another machine. It is the property an operator should never have to infer by reading a hostname,
+      // and it belongs beside the url this panel already lists.
+      server.remote ? `<span class="type-pill risk-high">remote credentials</span>` : "",
       server.ready === false ? `<span class="type-pill risk-high">unreachable</span>` : "",
       (server.allowedTools?.length) ? `<span class="type-pill shared">allowlist: ${server.allowedTools.length}</span>` : "",
       (server.autoApprove?.length) ? `<span class="type-pill auto-review">auto: ${server.autoApprove.length}</span>` : ""

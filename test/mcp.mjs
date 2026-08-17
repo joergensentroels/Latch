@@ -1,6 +1,7 @@
 // Unit tests for the host-brokered MCP client (mcp.mjs).
-// Covers config loading + redaction, the allowlist, the mock transport, and — importantly — the
-// real stdio JSON-RPC transport against a tiny inline MCP server subprocess.
+// Covers config loading + redaction, the allowlist, the mock transport, the real stdio JSON-RPC
+// transport against a tiny inline MCP server subprocess, and the dual-era HTTP transport against a
+// real inline HTTP server that GRADES what the client sent rather than accepting anything.
 
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,7 +16,11 @@ import {
   isToolAllowed,
   isToolAutoApprovable,
   validateToolArgs,
-  toolFingerprint
+  toolFingerprint,
+  negotiateHttpEra,
+  assertComplete,
+  isLoopbackUrl,
+  encodeMcpName
 } from "../mcp.mjs";
 
 // A minimal MCP server that speaks newline-delimited JSON-RPC 2.0 over stdio.
@@ -209,6 +214,240 @@ function send(obj) { process.stdout.write(JSON.stringify(obj) + "\\n"); }
     () => listTools(findServer(hsConfig, "hs-modern"), { useCache: false, timeoutMs: 5000 }),
     /Unsupported protocol version \(server supports: 2026-07-28, 2025-11-25\)/,
     "a modern server's rejection reaches the operator with the versions it does support");
+
+  // ---------------------------------------------------------------------------------------------
+  // The HTTP transport, dual-era.
+  //
+  // A REAL http server, real fetch, real headers — not a stubbed transport. What matters here is what
+  // Latch SENDS: the modern era mirrors body fields into headers, and a client that omits them is not
+  // detectably broken by a peer that never checks. So the server below GRADES each request the way
+  // Bureau's does, and records every one, so the assertions can read the wire rather than only the
+  // client's return value.
+  // ---------------------------------------------------------------------------------------------
+  {
+    const { createServer } = await import("node:http");
+    const NS = "io.modelcontextprotocol/";
+    const seen = [];                 // every request received, including ones that should never happen
+    const behaviour = new Map();     // url path -> handler, so one server can play several kinds of peer
+
+    const srv = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        let msg = null;
+        try { msg = JSON.parse(raw); } catch { msg = null; }
+        const record = { path: req.url, method: msg?.method, headers: req.headers, body: msg };
+        seen.push(record);
+        const reply = (status, payload) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(payload));
+        };
+        const fn = behaviour.get(req.url);
+        if (!fn) return reply(404, { jsonrpc: "2.0", id: msg?.id ?? null, error: { code: -32601, message: "no such peer" } });
+        fn(msg, reply, record);
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${srv.address().port}`;
+
+    const httpServer = (name, urlPath, extra = {}) => ({
+      name, transport: "http", url: `${base}${urlPath}`, headers: {}, allowRemote: false,
+      description: "", command: "", args: [], env: {}, cwd: "",
+      autoApprove: [], allowedTools: [], argConstraints: {}, mockTools: [], ...extra
+    });
+    const TOOL = { name: "greet", description: "Greet", inputSchema: { type: "object", properties: { who: { type: "string" } } } };
+    const decodeSentinel = (v) => {
+      const s = String(v ?? "");
+      if (!s.startsWith("=?base64?") || !s.endsWith("?=")) return s;
+      try { return Buffer.from(s.slice(9, -2), "base64").toString("utf8"); } catch { return s; }
+    };
+
+    // ---- a MODERN peer that validates the envelope, using Bureau's own rules -------------------
+    const modernPeer = (msg, reply, rec) => {
+      const err = (code, message) => reply(400, { jsonrpc: "2.0", id: msg?.id ?? null, error: { code, message } });
+      const meta = msg?.params?._meta || {};
+      const version = meta[NS + "protocolVersion"];
+      if (typeof version !== "string") return err(-32602, `_meta.${NS}protocolVersion is required`);
+      if (meta[NS + "clientCapabilities"] === undefined) return err(-32602, `_meta.${NS}clientCapabilities is required`);
+      if (rec.headers["mcp-protocol-version"] !== version) return err(-32020, "MCP-Protocol-Version header does not match _meta");
+      if (rec.headers["mcp-method"] !== msg.method) return err(-32020, "Mcp-Method header does not match body");
+      if (msg.method === "tools/call" && decodeSentinel(rec.headers["mcp-name"]) !== msg.params?.name) {
+        return err(-32020, `Mcp-Name does not match body '${msg.params?.name}'`);
+      }
+      const ok = (payload) => reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", ...payload, _meta: { [NS + "serverInfo"]: { name: "fake-modern", version: "1" } } } });
+      if (msg.method === "server/discover") return ok({ supportedVersions: ["2026-07-28", "2025-06-18"], capabilities: { tools: {} } });
+      if (msg.method === "tools/list") return ok({ tools: [TOOL] });
+      if (msg.method === "tools/call") return ok({ content: [{ type: "text", text: `modern:${msg.params?.name}:${JSON.stringify(msg.params?.arguments || {})}` }] });
+      return reply(404, { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+    };
+    behaviour.set("/modern", modernPeer);
+
+    const modernSrv = httpServer("h-modern", "/modern");
+    const modernEra = await negotiateHttpEra(modernSrv, { useCache: false });
+    assert.deepEqual([modernEra.era, modernEra.version], ["modern", "2026-07-28"],
+      "a server answering server/discover is detected as modern");
+    assert.deepEqual((await listTools(modernSrv, { useCache: false })).map((t) => t.name), ["greet"],
+      "tools/list works over the modern envelope");
+    assert.match((await callTool(modernSrv, "greet", { who: "world" })).text, /^modern:greet:/,
+      "tools/call works over the modern envelope");
+
+    // Graded twice on purpose. The peer 400s on a missing header, so reaching here means they were sent —
+    // and the record is asserted directly, because "the peer accepted it" and "the header was present"
+    // are different claims and the spec requires the second.
+    const callReq = seen.filter((s) => s.method === "tools/call").pop();
+    assert.equal(callReq.headers["mcp-method"], "tools/call", "Mcp-Method is mirrored into the headers");
+    assert.equal(callReq.headers["mcp-protocol-version"], "2026-07-28", "MCP-Protocol-Version is mirrored");
+    assert.equal(decodeSentinel(callReq.headers["mcp-name"]), "greet", "Mcp-Name mirrors params.name");
+    assert.equal(callReq.body.params._meta[NS + "protocolVersion"], "2026-07-28", "_meta carries the version on every request");
+    assert.ok(callReq.body.params._meta[NS + "clientCapabilities"] !== undefined, "_meta carries clientCapabilities on every request");
+    // CONTROL for those header reads: a header the client never sends must come back undefined, or the
+    // three assertions above could be passing on undefined === undefined.
+    assert.equal(callReq.headers["mcp-nonsense"], undefined,
+      "control: an unsent header reads as undefined, so the header assertions are not vacuous");
+    assert.equal(seen.filter((s) => s.path === "/modern" && s.method === "initialize").length, 0,
+      "a modern peer is never sent an initialize handshake — the era has none");
+
+    // A tool name that needs the sentinel is encoded, and the peer decodes it back to the body value.
+    behaviour.set("/modern-unicode", modernPeer);
+    const uniSrv = httpServer("h-modern-uni", "/modern-unicode");
+    await negotiateHttpEra(uniSrv, { useCache: false });
+    assert.match((await callTool(uniSrv, "værktøj", {})).text, /modern:værktøj/,
+      "a non-ASCII tool name survives the base64 header sentinel");
+    assert.match(String(seen.filter((s) => s.method === "tools/call").pop().headers["mcp-name"]), /^=\?base64\?/,
+      "and it really went out encoded, not raw");
+    assert.equal(encodeMcpName("greet"), "greet", "control: an ASCII name is NOT encoded, so the sentinel is conditional");
+
+    // ---- a LEGACY peer: no server/discover, so fall back to initialize -------------------------
+    behaviour.set("/legacy", (msg, reply) => {
+      if (msg.method === "server/discover") return reply(404, { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+      if (msg.method === "initialize") return reply(200, { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fake-legacy", version: "1" } } });
+      if (msg.method === "tools/list") return reply(200, { jsonrpc: "2.0", id: msg.id, result: { tools: [TOOL] } });
+      if (msg.method === "tools/call") return reply(200, { jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "legacy:" + msg.params?.name }] } });
+      return reply(200, { jsonrpc: "2.0", id: msg.id ?? null, result: {} });
+    });
+    const legacySrv = httpServer("h-legacy", "/legacy");
+    assert.equal((await negotiateHttpEra(legacySrv, { useCache: false })).era, "legacy",
+      "a -32601 on server/discover means legacy, and the client falls back");
+    assert.deepEqual((await listTools(legacySrv, { useCache: false })).map((t) => t.name), ["greet"],
+      "tools/list works over the legacy handshake on HTTP");
+    assert.ok(seen.some((s) => s.path === "/legacy" && s.method === "initialize"),
+      "the legacy path really performed the initialize handshake");
+    // The mirror-image bug: sending the modern envelope to a legacy peer would announce a revision it has
+    // no handshake for. Asserted absent.
+    const legacyList = seen.filter((s) => s.path === "/legacy" && s.method === "tools/list").pop();
+    assert.equal(legacyList.body.params?._meta, undefined, "legacy requests carry no modern _meta");
+    assert.equal(legacyList.headers["mcp-protocol-version"], undefined, "and no mirrored version header");
+    // And the version it OFFERED was legacy, never MODERN_VERSION.
+    const legacyHello = seen.filter((s) => s.path === "/legacy" && s.method === "initialize").pop();
+    assert.equal(legacyHello.body.params.protocolVersion, "2025-06-18",
+      "initialize offers a legacy revision — announcing a modern one would name a handshake that does not exist");
+
+    // ---- -32022: the peer names what it supports, and the client retries on the best shared one
+    behaviour.set("/older", (msg, reply) => {
+      const version = msg?.params?._meta?.[NS + "protocolVersion"];
+      if (version === "2026-07-28") {
+        return reply(400, { jsonrpc: "2.0", id: msg.id, error: { code: -32022, message: "Unsupported protocol version", data: { supported: ["2025-06-18"], requested: version } } });
+      }
+      return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", supportedVersions: ["2025-06-18"], capabilities: { tools: {} } } });
+    });
+    const olderEra = await negotiateHttpEra(httpServer("h-older", "/older"), { useCache: false });
+    assert.deepEqual([olderEra.era, olderEra.version], ["modern", "2025-06-18"],
+      "-32022 naming a shared revision is retried on it, and stays in the modern era");
+    assert.deepEqual(seen.filter((s) => s.path === "/older").map((s) => s.body.params._meta[NS + "protocolVersion"]),
+      ["2026-07-28", "2025-06-18"],
+      "the retry offered the shared revision, and happened exactly once");
+
+    // ---- -32022 with NO overlap: refuse rather than guess --------------------------------------
+    behaviour.set("/alien", (msg, reply) => reply(400, { jsonrpc: "2.0", id: msg.id, error: { code: -32022, message: "Unsupported protocol version", data: { supported: ["2099-01-01"], requested: "x" } } }));
+    await assert.rejects(
+      () => negotiateHttpEra(httpServer("h-alien", "/alien"), { useCache: false }),
+      /supports 2099-01-01.*Latch speaks 2026-07-28, 2025-06-18.*Refusing rather than guessing/s,
+      "a modern peer sharing no revision with Latch is refused, naming both sides");
+
+    // ---- a modern error must NOT trigger the legacy fallback -----------------------------------
+    // The subtle one. -32020 means the peer parsed a modern request and found it malformed, so falling
+    // back would run the legacy path, succeed, and bury a CLIENT defect as a pass.
+    behaviour.set("/strict", (msg, reply) => reply(400, { jsonrpc: "2.0", id: msg.id, error: { code: -32020, message: "Header mismatch: contrived" } }));
+    const strictBefore = seen.length;
+    await assert.rejects(
+      () => negotiateHttpEra(httpServer("h-strict", "/strict"), { useCache: false }),
+      /is a modern \(2026-07-28\) server and rejected Latch's request.*not.*falling back/s,
+      "a reserved-range error is read as proof of a modern peer, not as a reason to fall back");
+    assert.equal(seen.slice(strictBefore).filter((s) => s.method === "initialize").length, 0,
+      "and no initialize was attempted — the half that proves it did not fall back");
+
+    // ---- a 401 is a credential fault, not an era ----------------------------------------------
+    // Found by a control, not by reading: pointing the client at Bureau with a WRONG TOKEN reported "fell
+    // back to the initialize handshake". A 401 carries no modern error code, so the fallback fired and the
+    // message named a protocol difference that did not exist — sending the reader after the wrong problem
+    // while the actual cause went unmentioned.
+    behaviour.set("/needs-auth", (msg, reply, rec) => {
+      if (!rec.headers.authorization) return reply(401, { error: "unauthorized" });
+      if (msg.method === "server/discover") return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", supportedVersions: ["2026-07-28"] } });
+      return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", tools: [TOOL] } });
+    });
+    await assert.rejects(
+      () => negotiateHttpEra(httpServer("h-401", "/needs-auth"), { useCache: false }),
+      /HTTP 401.*authentication failure, not a protocol one/s,
+      "a 401 is reported as a credential fault rather than classified as a legacy server");
+    assert.equal(seen.filter((s) => s.path === "/needs-auth" && s.method === "initialize").length, 0,
+      "and no initialize was attempted — a 401 is not evidence that the peer is legacy");
+    // CONTROL: the same peer WITH a credential negotiates modern, so the assertion above is about the 401
+    // and not about this peer being unreachable.
+    const authed = await negotiateHttpEra(
+      httpServer("h-401-ok", "/needs-auth", { headers: { Authorization: "Bearer test" } }), { useCache: false });
+    assert.equal(authed.era, "modern", "control: the same peer with a credential is detected as modern");
+
+    // ---- resultType: anything but complete is refused ------------------------------------------
+    behaviour.set("/task", (msg, reply) => {
+      if (msg.method === "server/discover") return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", supportedVersions: ["2026-07-28"] } });
+      return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "task", taskId: "t-1" } });
+    });
+    await assert.rejects(
+      () => listTools(httpServer("h-task", "/task"), { useCache: false }),
+      /resultType "task", not "complete".*no Tasks extension/s,
+      "a task handle is refused rather than reported as a finished call");
+    // CONTROL: the same shape with resultType "complete" must PASS — otherwise the assertion above would
+    // also hold for a client that refused every HTTP result it ever received.
+    behaviour.set("/task-ok", (msg, reply) => {
+      if (msg.method === "server/discover") return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", supportedVersions: ["2026-07-28"] } });
+      return reply(200, { jsonrpc: "2.0", id: msg.id, result: { resultType: "complete", tools: [TOOL] } });
+    });
+    assert.deepEqual((await listTools(httpServer("h-task-ok", "/task-ok"), { useCache: false })).map((t) => t.name), ["greet"],
+      "control: the same shape with resultType complete is accepted");
+    assert.deepEqual(assertComplete({ name: "x" }, "tools/list", { tools: [] }), { tools: [] },
+      "an absent resultType is read as complete, as earlier revisions require");
+
+    // ---- credentials do not leave the machine without being asked to ---------------------------
+    const remoteBefore = seen.length;
+    await assert.rejects(
+      () => listTools(httpServer("h-remote", "/modern", { url: "http://mcp.example.invalid/mcp" }), { useCache: false }),
+      /non-loopback url and does not set allowRemote/,
+      "a non-loopback endpoint without allowRemote is refused");
+    assert.equal(seen.length, remoteBefore,
+      "and refused BEFORE any request — the gate is not a post-hoc complaint about a call already made");
+    assert.equal(isLoopbackUrl("http://localhost:9/mcp"), true, "localhost counts as loopback");
+    assert.equal(isLoopbackUrl("http://[::1]:9/mcp"), true, "so does ::1");
+    assert.equal(isLoopbackUrl("http://127.0.0.1.evil.example/mcp"), false,
+      "a hostname merely CONTAINING a loopback literal is not loopback");
+
+    // ---- the credential-redaction control -------------------------------------------------------
+    // publicMcpConfig is served over the API, so a header value reaching it is a token disclosure.
+    const SECRET = "Bearer zzz-not-a-real-token-9f1c";
+    const redacted = publicMcpConfig({
+      enabled: true, fileLoaded: true,
+      servers: [{ name: "h", transport: "http", url: `${base}/modern`, headers: { Authorization: SECRET }, env: { API_KEY: "also-secret" }, allowRemote: true, autoApprove: [], allowedTools: [], argConstraints: {}, args: [], command: "", description: "" }]
+    });
+    assert.deepEqual(redacted.servers[0].headerKeys, ["Authorization"], "header NAMES are reported");
+    assert.equal(redacted.servers[0].headers, undefined, "header values are not carried at all");
+    assert.ok(!JSON.stringify(redacted).includes(SECRET), "no header value appears anywhere in the public config");
+    assert.ok(!JSON.stringify(redacted).includes("also-secret"), "nor an env value, as before");
+    // CONTROL: the serialisation DOES contain the url, so those negative searches are looking at real output.
+    assert.ok(JSON.stringify(redacted).includes(`${base}/modern`),
+      "control: the url is present, so the negative searches are not scanning an empty object");
+
+    srv.close();
+  }
 
   // Tool fingerprint (rug-pull guard): stable across inputSchema key reordering, changes when the
   // model-visible surface (name / description / inputSchema) changes.
