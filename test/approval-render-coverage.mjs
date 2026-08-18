@@ -478,12 +478,28 @@ function render(approval) {
 
 const unrendered = [];
 const missingSummary = [];
+// CHANGED IS NOT THE SAME AS LEGIBLE, and this file could not previously tell them apart.
+//
+// The check below proves a field reaches the screen by varying it and requiring the output to differ.
+// That is the F1 property and it is the right one — but "[object Object]" differs from "[object
+// Object]" never, and differs from the baseline always. A structured field (mcpArgs, githubPrFiles)
+// stringified by accident would satisfy every assertion in this file while telling the operator
+// nothing about what they are approving. The gap is narrow and it sits exactly where the payloads are
+// richest, so it is the one place a passing gate would still leave an operator guessing.
+const illegible = [];
+const NOT_CONTENT = ["[object Object]", "[Object]", "undefined", "NaN", "null,null"];
 for (const [type, fields] of fieldsByType) {
   if (!fields.size) continue;
   const baseline = render({ ...baseFixture, type });
   if (!baseline.trim()) {
     missingSummary.push(`${type} (${fields.size} worker-supplied field${fields.size === 1 ? "" : "s"} accepted)`);
     continue;
+  }
+  // Read as an operator does: tags stripped, whitespace collapsed. A placeholder hidden inside an
+  // attribute is just as unreadable as one in the text.
+  const asRead = baseline.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  for (const marker of NOT_CONTENT) {
+    if (asRead.includes(marker)) illegible.push(`${type}: renders "${marker}" instead of content`);
   }
   for (const field of [...fields].sort()) {
     const [, beta] = fixtureValues(field);
@@ -494,6 +510,24 @@ for (const [type, fields] of fieldsByType) {
 // ---------------------------------------------------------------------------------------------
 // The gate
 // ---------------------------------------------------------------------------------------------
+
+// Asserted before the label checks because it is about the same cards: a labelled, styled, field-varying
+// card that reads "[object Object]" has passed every other gate in this file.
+const NL = String.fromCharCode(10);
+assert.deepEqual(illegible, [],
+  ["Approval cards that reach the operator with a placeholder where the payload should be:",
+   ...illegible,
+   "Render the field's contents, not the object."].join(NL));
+
+// CONTROL on the marker list itself. An empty `illegible` is only meaningful if these strings would be
+// caught when present — the same non-vacuity floor the extractors above carry.
+{
+  const probe = "server fs tool read_file args [object Object] approved";
+  assert.ok(NOT_CONTENT.some((mk) => probe.includes(mk)),
+    "the placeholder markers no longer match the shape they exist for, so an empty list proves nothing");
+  assert.ok(!NOT_CONTENT.some((mk) => "server fs tool read_file args path=/etc/hosts".includes(mk)),
+    "and they must not fire on a card that legibly shows its payload");
+}
 
 const proLabels = labelMapKeys(appFunctions, "formatApprovalType");
 const simpleLabels = labelMapKeys(appFunctions, "simpleApprovalType");
