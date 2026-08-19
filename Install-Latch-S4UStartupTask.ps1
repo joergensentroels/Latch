@@ -28,8 +28,15 @@
 
     Measured 2026-08-18: shut down at 22:37:29 from the Start menu, powered back on five seconds
     later. Every user process died with the session — Latch and Bureau both — and neither came back,
-    while uptime still read 2026-08-13. This task, registered the evening before, had at that point
-    never fired once: the last full boot predated its existence by four days.
+    while uptime still read 2026-08-13. The AtStartup definition registered the evening before had not
+    fired since, and could not have: no boot happened between the two.
+
+    An earlier draft of this comment said the task had "never fired once". That was wrong, and the
+    task's own history says so: checked 2026-08-19, "Latch Private Gateway" reported LastRunTime
+    2026-08-13 18:18:15, result 1. The NAME is older than this file — Install-Latch-StartupTask.ps1
+    beside it registers the same task name with a logon trigger — and re-registering replaces the
+    definition while KEEPING the run history. That is how one sentence about "this task" ends up
+    describing two different tasks, and why the history is worth reading before claiming an absence.
 
     AtLogOn closes the gap, because a Fast Startup resume still logs you on. The pair means an
     unattended real boot starts Latch before anyone signs in, and every other route back to a
