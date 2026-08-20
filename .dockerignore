@@ -1,0 +1,48 @@
+# WHAT MUST NOT GO INTO THE IMAGE.
+#
+# This is a security control, not a build-time optimisation. `COPY . /app` copies the build context
+# verbatim, and the build context is this working tree -- which on a live machine holds
+# data/auth.json (the operator token, which is shell access to the host), data/llm-provider.json (paid
+# API keys), latch.log (the tailnet address the secret scanner already flags), and .git (every secret
+# ever committed and later reverted, still reachable by hash).
+#
+# An image layer is not private. It is content-addressed, cached, pushed to registries, and readable by
+# anyone who can pull it -- `docker history` plus a tar extract is enough, no running container needed.
+# Nor can a secret be removed by deleting it in a later layer: the earlier layer still carries it.
+#
+# DENY FIRST, then admit. A gitignore-shaped denylist is the wrong way round here, because the risk is
+# the file nobody thought to name. The two failure modes are not symmetric:
+#   - allowlist too narrow  -> the image fails to start. Loud, immediate, fixed in minutes.
+#   - denylist too narrow   -> a credential is baked into a layer and possibly pushed. Silent.
+# Only one of those is recoverable, so the build is arranged to break rather than to leak.
+#
+# The admitted list below is derived, not guessed: `git ls-files` for top-level JS, plus every local
+# import in server.js and its four siblings, checked on 2026-08-20. There are no dynamic imports, so
+# static reading is sufficient. If a new top-level module appears, the first build after it will fail
+# with MODULE_NOT_FOUND naming exactly what is missing.
+*
+
+# --- runtime, admitted deliberately -----------------------------------------------------------------
+!package.json
+!server.js
+!email.mjs
+!github.mjs
+!mcp.mjs
+!schedule.mjs
+!public/
+
+# AGPL-3.0: building and handing someone an image is conveying the program, and section 4 requires the
+# licence text to travel with it. Omitting this would be a licence violation, not untidiness.
+!LICENSE
+
+# --- re-excluded INSIDE the admitted trees -----------------------------------------------------------
+# The `!public/` line above admits that directory wholesale, so anything sensitive that ever lands
+# inside it needs naming here. These cost nothing and close the case where a log or a dotenv is written
+# into a served directory.
+**/data/
+**/data-dev/
+**/*.log
+**/*.log.*
+**/.env
+**/.env.*
+**/node_modules/
