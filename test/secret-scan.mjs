@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { gitSafeEnv } from "../tools/git-env.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,8 +30,12 @@ const binaryExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".ico"]);
 // the available outcomes.
 const ignoredPaths = (() => {
   try {
+    // gitSafeEnv: an inherited GIT_DIR would point this at a DIFFERENT repository, and the answer would
+    // look perfectly plausible — a list of ignored files belonging to some other tree, used to decide which
+    // matches in THIS tree are publishable. The pre-push hook runs npm test, so that path is live.
     const out = execFileSync("git", ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"],
-                             { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+                             { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+                               env: gitSafeEnv(process.env) });
     return new Set(out.split("\0").filter(Boolean));
   } catch {
     return null;   // null, not empty — "unknown", and the caller treats unknown as publishable

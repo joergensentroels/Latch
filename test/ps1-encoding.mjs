@@ -22,6 +22,8 @@
 // Comments are inert and stay that way: the files carry em dashes in prose throughout, on purpose,
 // and flagging those would make this check noise that gets switched off.
 import { readdir, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { gitSafeEnv } from "../tools/git-env.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,6 +96,40 @@ if (brokenControls.length) {
   process.exit(1);
 }
 
+// WHAT GIT TRACKS, asked of git rather than found by walking the disk.
+//
+// Measured 2026-08-21: the walk saw 60 .ps1 files and git tracks 31. The other 29 live under
+// .claude/worktrees/ — another agent session's checkout of this same repository, gitignored and
+// machine-specific. So this suite spent half its time scanning files that are not this commit's source,
+// and whose contents are controlled by whatever that session happens to be doing. A non-ASCII character
+// over there would fail this repo's test for a reason no commit here could fix.
+//
+// The sibling Bureau repo had the same defect at a smaller scale (6 files seen, 3 tracked) and it broke CI
+// there, because its assertion count moved with local scratch state. Latch's runner does not couple the
+// count to anything, so here it was pure waste plus a false-failure risk rather than a red build — which is
+// exactly why it would have sat unnoticed.
+//
+// Same answer as secret-scan.mjs beside it, for the same reason: git already knows what belongs to the
+// project, and a hand-kept skip list is the shape that cannot notice what is absent from itself.
+let gitAnswered = true;
+async function* trackedPs1() {
+  try {
+    const out = execFileSync("git", ["ls-files", "-z", "*.ps1"],
+                             { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+                               env: gitSafeEnv(process.env) });
+    // String.fromCharCode(0), not a "\0" escape: writing that escape put a LITERAL NUL byte into the
+    // sibling repo's copy of this file, and test/searchable-source.mjs caught it on the next run — which is
+    // precisely what that suite exists for, since ripgrep stops searching a file containing a NUL.
+    for (const rel of out.split(String.fromCharCode(0)).filter(Boolean)) yield path.join(root, rel);
+    return;
+  } catch {
+    // Fallback: git could not answer, so walk. A superset is the safe direction for a check like this, and
+    // it is reported at the end so a differing file count has a stated cause rather than looking like drift.
+    gitAnswered = false;
+  }
+  yield* walk(root);
+}
+
 async function* walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -106,7 +142,7 @@ async function* walk(dir) {
 
 const findings = [];
 let scanned = 0;
-for await (const file of walk(root)) {
+for await (const file of trackedPs1()) {
   scanned++;
   const relative = path.relative(root, file).replaceAll("\\", "/");
   for (const hit of liveNonAscii(await readFile(file, "utf8"))) {
@@ -132,4 +168,5 @@ if (findings.length) {
   process.exit(1);
 }
 
-console.log(`ps1-encoding passed. ${scanned} .ps1 file(s) scanned, ${controls.length} scanner controls held.`);
+console.log(`ps1-encoding passed. ${scanned} tracked .ps1 file(s) scanned, ${controls.length} scanner controls held.`
+          + `${gitAnswered ? "" : " (git could not list them; walked the tree instead)"}`);

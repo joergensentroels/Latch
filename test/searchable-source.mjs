@@ -45,7 +45,11 @@ const TEXT = new Set([".js", ".mjs", ".cjs", ".json", ".md", ".py", ".html", ".c
 // data/ and data-dev/ hold the credential store and live state. They are deliberately NOT walked: this
 // file opens and reads every byte of what it enumerates, that directory is gitignored, and nothing in it
 // is source anyone searches. Skipping it is a rule about what this instrument may open, not an oversight.
-const SKIP = new Set(["node_modules", ".git", "data", "data-dev", "backups", "logs", "dist", "coverage"]);
+// .claude added 2026-08-21: it holds another agent session's git worktree — a full checkout of this
+// same repository, gitignored and machine-specific. Scanning it means asserting properties about
+// files this commit does not control, and for the git-spawn check below it meant reading a STALE
+// copy of the very file being checked and reporting it as unscrubbed.
+const SKIP = new Set(["node_modules", ".git", ".claude", "data", "data-dev", "backups", "logs", "dist", "coverage"]);
 
 async function* walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -129,6 +133,64 @@ try {
   }
 } finally {
   await rm(tmp, { recursive: true, force: true }).catch(() => {});
+}
+
+
+// ---- every git spawn must scrub the caller's repository out of its environment --------------------------
+//
+// WHY HERE. This suite already asserts a structural property over the whole source tree, which is the same
+// shape as the question "does every place that shells out to git do it safely". Latch has two such places
+// as of 2026-08-21 -- test/secret-scan.mjs and test/ps1-encoding.mjs -- and both ask git what belongs to
+// the project. Pointed at the wrong repository they do not fail: they answer confidently about a different
+// tree, and for a secret scan that is the worst available outcome.
+//
+// The hazard is live rather than theoretical. .githooks/pre-push runs `npm test`, and git exports GIT_DIR
+// and friends into every hook it runs. The sibling Bureau repo carries the incident: `git init -q` with
+// GIT_DIR set re-initialises GIT_DIR as BARE rather than the directory it runs in, which is how
+// `core.bare = true` reached that repository's own config and stopped every work-tree operation.
+//
+// A DERIVED CHECK rather than a note in tools/git-env.mjs saying "remember to use this". Both spawns are
+// scrubbed today; this is what makes a third one a test failure instead of a silent hole. The evidence from
+// this repository's own history is that prose does not hold: Install-Heartbeat.ps1 documented the CP1252
+// encoding trap in its header and the identical mistake was made in a sibling file anyway.
+{
+  const SPAWN = /(?:execFileSync|execFile|spawnSync|spawn)\(\s*"git"/;
+  // Reuses the walk this file already performed, which is now .claude-free — see SKIP above.
+  const scripts = files.filter((f) => /\.(mjs|js)$/.test(f));
+  ok("read the source tree to look for git spawns", scripts.length > 0, scripts.length + " scripts");
+
+  // SELF-EXCLUDED, and the reason is worth stating. This file matched its own pattern -- not because it
+  // spawns git, which it does not, but because the CONTROL fixtures below contain the literal text
+  // `execFileSync("git", ...)` in order to prove the detector can say yes. A checker's controls necessarily
+  // look like the thing it detects, so leaving it in reported "searchable-source.mjs spawns git", which is
+  // false and would send the next reader looking for a spawn that is not there.
+  const SELF = path.relative(REPO, fileURLToPath(import.meta.url)).replaceAll("\\", "/");
+  const spawners = [];
+  for (const f of scripts) {
+    const rel = path.relative(REPO, f).replaceAll("\\", "/");
+    if (rel === SELF) continue;
+    const text = await readFile(f, "utf8");
+    if (!SPAWN.test(text)) continue;
+    spawners.push({ file: rel, text });
+  }
+  // If this finds nothing the check has stopped asking its question, which is indistinguishable from a
+  // clean answer. Both known spawners must be present or the walk/pattern has drifted.
+  ok("found the files that spawn git", spawners.length >= 2, spawners.map((s) => s.file).join(", "));
+  for (const want of ["test/secret-scan.mjs", "test/ps1-encoding.mjs"])
+    ok(`  ${want} is among them`, spawners.some((s) => s.file === want));
+
+  const unscrubbed = spawners.filter((s) => !/gitSafeEnv/.test(s.text));
+  ok("every file that spawns git routes its environment through gitSafeEnv",
+     unscrubbed.length === 0, unscrubbed.map((s) => s.file).join(", "));
+
+  // CONTROL: the check must be able to say no. Without this, "0 unscrubbed" is the same sentence a broken
+  // detector prints.
+  const fakeUnscrubbed = [{ file: "x.mjs", text: 'execFileSync("git", ["status"])' }]
+    .filter((s) => !/gitSafeEnv/.test(s.text));
+  ok("CONTROL: a spawn with no gitSafeEnv is reported", fakeUnscrubbed.length === 1);
+  const fakeScrubbed = [{ file: "y.mjs", text: 'execFileSync("git", ["status"], { env: gitSafeEnv() })' }]
+    .filter((s) => !/gitSafeEnv/.test(s.text));
+  ok("CONTROL: and one that scrubs is not", fakeScrubbed.length === 0);
 }
 
 console.log(fail ? `\nSEARCHABLE-SOURCE FAILURES ✗ — ${pass} passed, ${fail} failed`
