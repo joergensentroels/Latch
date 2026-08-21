@@ -11,7 +11,32 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    # BOTH PLATFORMS, because neither one alone is a superset and the gap is where the bugs live.
+    #
+    # Latch is developed and deployed on Windows -- the pre-push hook, the scheduled task, the 31 tracked
+    # .ps1 files -- and this workflow only ever ran ubuntu. A test carrying a platform assumption therefore
+    # passed one side and failed the other with nothing in between to notice.
+    #
+    # Not hypothetical, and not from this repo's imagination: the sibling Bureau repo added windows-latest
+    # to its matrix on 2026-08-21 and the new leg went red within minutes on a REAL defect -- a repo path
+    # guard that compared a realpath'd file against an unresolved root, so any repository reached through a
+    # symlink, a junction or an 8.3 short name had every legitimate read refused. That one also hit macOS
+    # (/tmp is a symlink to /private/tmp) and any Linux path with a symlinked component, and neither
+    # platform's suite could see it alone. Latch is the credential boundary; it is the last place to keep a
+    # blind spot for the sake of a shorter CI run.
+    #
+    # fail-fast: false because the whole value is seeing BOTH answers on one push. Cancelling the second leg
+    # when the first fails reproduces exactly the blind spot this removes.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # NO `defaults.run.shell` here, deliberately, unlike the sibling repo's workflow which needs bash for
+    # PIPESTATUS and friends. The only run step below is `npm test`, which is shell-agnostic: npm executes
+    # the script through cmd on Windows and sh on Linux, and the script is a plain `&&` chain that both
+    # accept. Anything added later that uses bash syntax must pin the shell, or it will pass here and fail
+    # on the Windows leg -- which is the failure mode this matrix exists to surface rather than to create.
     steps:
       # All three at v7 — current, and the reason for moving at all was the RUNTIME. The runners no longer
       # offer node20: an action declaring `using: node20` is forced onto node24 and announced as deprecated
@@ -46,5 +71,5 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Run smoke tests
+      - name: Run smoke tests (${{ matrix.os }})
         run: npm test
