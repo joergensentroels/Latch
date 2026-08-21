@@ -96,12 +96,53 @@ explicit_github_file = bridge.detect_github_file_request(
 assert explicit_github_file is not None
 assert explicit_github_file.github_repo_name == "CompassProjects"
 
+# THE GUARD ASKED A PROXY QUESTION, and so did the first attempt to fix it.
+#
+# It was `if shutil.which("bash")`. Git Bash is on PATH on the windows-latest runner, so the guard passed,
+# the case ran, and `assert exitCode == 124` failed there on the first Windows CI run of this repo.
+#
+# The first fix was to skip on Windows entirely, on the reasoning that latch-agent-executor is a Linux
+# systemd unit (ExecStart=/opt/latch-agent-executor/bin/python, state under /var/lib) so POSIX process
+# behaviour is not assertable elsewhere. That reasoning was tidy and WRONG: run directly on the operator's
+# own Windows machine, this case returns 124 correctly -- bash runs, `sleep 2` sleeps, the timeout fires and
+# the executor sets its own exit code. Skipping on Windows would have deleted coverage that works, on a
+# platform story that is not true. Reproducing locally is what caught it; the platform argument alone would
+# not have.
+#
+# So the precondition is neither "is there a bash" nor "is this Linux". It is: CAN THE SHELL THIS EXECUTOR
+# WOULD USE ACTUALLY RUN A COMMAND HERE. That is what the timeout assertion depends on, and it is the only
+# question whose answer settles whether a failure means the contract is broken or the environment cannot
+# host the case. On windows-latest `bash` most likely resolves to the WSL stub in System32, which without a
+# distro fails immediately -- so the command never lasts long enough for a timeout to fire, and the exit
+# code is whatever that failure produced. That is a guess about the runner and is deliberately not asserted;
+# the probe below settles it either way without needing to know.
+#
+# 124 is the executor's OWN contract, set on subprocess.TimeoutExpired rather than borrowed from the
+# timeout(1) coreutil, so the number was never the platform-specific part.
+#
+# EVERY SKIP IS STATED, and names the exit code it saw. A case that quietly disappears on one leg is
+# indistinguishable from one that passed there, which is the failure the two-platform matrix exists to
+# remove -- and the original had no `else` at all, so a machine without bash skipped this in silence.
+probe = None
 if shutil.which("bash"):
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = executor.run_shell_plan({"timeoutSeconds": 10, "commands": ["exit 0"]}, Path(tmp))
+
+if probe is None:
+    print("Executor tests: SKIPPED the shell-timeout case -- no bash on PATH to run it with.")
+elif probe.get("exitCode") != 0:
+    print("Executor tests: SKIPPED the shell-timeout case -- bash is on PATH but cannot run a trivial "
+          "command here (exit %r), so a timeout assertion would measure this environment rather than the "
+          "executor." % (probe.get("exitCode"),))
+else:
     with tempfile.TemporaryDirectory() as tmp:
         timeout_result = executor.run_shell_plan(
             {"timeoutSeconds": 1, "commands": ["sleep 2"]},
             Path(tmp),
         )
-        assert timeout_result["exitCode"] == 124
+        # The failure message carries the whole result: "assert == 124" alone told CI nothing about what it
+        # got instead, which is why the cause took a local reproduction to find.
+        assert timeout_result["exitCode"] == 124, (
+            "a 1s timeout on `sleep 2` should report the executor's 124, got %r" % (timeout_result,))
 
 print("Executor tests passed.")
