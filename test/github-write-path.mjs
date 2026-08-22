@@ -531,6 +531,31 @@ try {
   assert.ok(report.unprovable?.length >= 1, "the doctor must still report what no read can verify");
   assert.ok(!JSON.stringify(report).includes(githubToken), "the doctor must never echo the token");
 
+  // A GET-ONLY PROBE MAY NEVER CLAIM A WRITE PERMISSION.
+  //
+  // Every probe in that endpoint is a GET with allow404, so it can only establish the READ half of a
+  // permission: a token holding `Contents: Read` answers `GET contents/README.md` exactly as one holding
+  // Read-and-write does. Two checks were nevertheless labelled "file read/commit" needing "Contents: Read
+  // and write" and "issues read/post" needing "Issues: Read and write" — green, while naming capabilities
+  // nothing had exercised, and those are precisely the two an agent proposes. Observed 2026-08-22 against a
+  // freshly-rotated fine-grained token: allOk true, "file read/commit: ok", and no write attempted at all.
+  //
+  // Stated as an invariant over `needs` rather than as a list of forbidden labels, so it holds for a probe
+  // nobody has written yet. If a real write probe is ever added, it will trip this — and that is the moment
+  // to decide deliberately whether the endpoint should be making writes, not to widen the check quietly.
+  const claimsWrite = (report.checks || []).filter((c) => /write/i.test(String(c.needs || "")));
+  assert.equal(claimsWrite.length, 0,
+    `a GET probe cannot establish a write permission, but these checks name one: `
+    + claimsWrite.map((c) => `${c.capability} (needs ${c.needs})`).join(", "));
+
+  // …and the write halves must be reported SOMEWHERE, or relabelling the checks would simply have deleted
+  // the information rather than moved it.
+  const un = (report.unprovable || []).join(" ");
+  assert.ok(/Contents: Read and write/.test(un), "the unprovable list must name the file-commit permission no read can verify");
+  assert.ok(/Issues: Read and write/.test(un), "the unprovable list must name the issue-post permission no read can verify");
+  assert.ok(report.unprovable.length >= 3,
+    `Administration plus both write halves should be unprovable, got ${report.unprovable.length}`);
+
   vm.runInContext(`renderGithubDoctor(${JSON.stringify(report)})`, sandbox);
   assert.ok(doctorGrid.innerHTML.length > 0, "the doctor panel rendered nothing at all");
   for (const check of report.checks) {

@@ -1034,8 +1034,32 @@ async function handleApi(req, res, url) {
     if (owner && repo) {
       const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
       checks.push(await probe("repo metadata", base, "Metadata: Read"));
-      checks.push(await probe("file read/commit", `${base}/contents/README.md`, "Contents: Read and write"));
-      checks.push(await probe("issues read/post", `${base}/issues?per_page=1`, "Issues: Read and write"));
+      // NAMED FOR WHAT A GET PROVES, which is only the read half.
+      //
+      // These probes used to be labelled "file read/commit" needing "Contents: Read and write", and
+      // "issues read/post" needing "Issues: Read and write". Every probe here is a GET with allow404, so a
+      // token holding only `Contents: Read` produces exactly the same 404 on a missing README as one
+      // holding Read-and-write, and a `GET /issues` succeeds identically with `Issues: Read`. The checks
+      // were therefore green while naming a capability they had not established — and the two capabilities
+      // in question are precisely the ones an agent proposes: committing a file, and opening an issue.
+      //
+      // Observed 2026-08-22 on a freshly-rotated fine-grained token: allOk was true with "file
+      // read/commit: ok" while nothing had exercised a write at all. A commit would have 403'd minutes
+      // into a run instead of here, which is the failure this endpoint exists to prevent.
+      //
+      // So the write halves join Administration below. That is not a new idea: the Administration note
+      // already reasons that a permission no read can verify must be reported as unprovable rather than
+      // as a passing check, and app.js already tells the reader that `allOk` covers the PROBED
+      // capabilities only. These two were simply not being held to it.
+      checks.push(await probe("file read", `${base}/contents/README.md`, "Contents: Read"));
+      checks.push(await probe("issues read", `${base}/issues?per_page=1`, "Issues: Read"));
+      unprovable.push(`file COMMIT (Contents: Read and write) cannot be verified by any read — the probe `
+        + `above is a GET, and a token with only Contents: Read answers it identically. Check the grant `
+        + `where the token was issued, or make one commit into ${owner}/${repo}. github_file and github_pr `
+        + `both need it.`);
+      unprovable.push(`issue POST (Issues: Read and write) cannot be verified by any read either — `
+        + `listing issues succeeds with Issues: Read alone. github_issue and github_comment both need the `
+        + `write half, and both are on Bureau's hard floor, so a human sees them before they fire.`);
       // Repo SETTINGS (delete_branch_on_merge, etc.) need Administration — and it CANNOT be probed. The
       // obvious idea is `permissions.admin` on the repo object, and it is wrong: that field is the
       // authenticated ACCOUNT's role on the repo, not the token's granted scopes. Measured here — it read
