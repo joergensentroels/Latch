@@ -1,6 +1,8 @@
 # Compass, powered by Latch
 
-> **New here? Start with [GETTING-STARTED.md](./GETTING-STARTED.md)** — zero to first task, for both a two-machine and a two-VM setup.
+> **Not technical, or just want the gist?** Read **[WHAT-IS-THIS.md](./WHAT-IS-THIS.md)** — one page, no jargon.
+>
+> **Ready to install it? Start with [GETTING-STARTED.md](./GETTING-STARTED.md)** — zero to first task, for both a two-machine and a two-VM setup.
 
 Compass is the user-facing companion app for sending instructions, receiving status updates, managing context, and reviewing approvals. Latch is the private infrastructure layer underneath it: routing, approvals, keys, bridges, nodes, and worker trust boundaries.
 
