@@ -67,16 +67,18 @@ stealing, and it is meant to be thrown away and rebuilt.
 virtual machines on one — a free [Tailscale](https://tailscale.com) account to connect them
 privately, and about an evening.
 
+**Option A — two machines**
+
 ```mermaid
-flowchart TB
-  subgraph A["Option A — two machines"]
-    direction LR
-    A1["Your laptop<br/>the safe"] -- "private network" --> A2["A spare PC<br/>the worker"]
-  end
-  subgraph B["Option B — two virtual machines"]
-    direction LR
-    B1["Host VM<br/>the safe"] -- "private network" --> B2["Worker VM<br/>the worker"]
-  end
+flowchart LR
+  A1["Your laptop<br/>the safe"] -- "private network" --> A2["A spare PC<br/>the worker"]
+```
+
+**Option B — two virtual machines on one box**
+
+```mermaid
+flowchart LR
+  B1["Host VM<br/>the safe"] -- "private network" --> B2["Worker VM<br/>the worker"]
 ```
 
 That second machine is not accidental complexity — it *is* the safety. One computer holding

@@ -17,20 +17,18 @@ That split is the whole point: a compromised or prompt-injected worker still can
 
 Both halves need to run *somewhere separate*. Two supported layouts — the software steps are identical, only **where** each half lives differs:
 
+**Option A — two machines**
+
 ```mermaid
-flowchart TB
-  subgraph A["Option A — two machines"]
-    direction LR
-    A1["Trusted host<br/>server.js · data/ · every secret"]
-    A2["Worker box<br/>OpenClaw · bridge · agent key only"]
-    A1 -- "Tailscale" --> A2
-  end
-  subgraph B["Option B — two VMs on one box"]
-    direction LR
-    B1["Host VM<br/>server.js · data/ · every secret"]
-    B2["Worker VM<br/>OpenClaw · bridge · agent key only"]
-    B1 -- "Tailscale" --> B2
-  end
+flowchart LR
+  A1["Trusted host<br/>server.js · data/ · every secret"] -- "Tailscale" --> A2["Worker box<br/>OpenClaw · bridge<br/>agent key only"]
+```
+
+**Option B — two VMs on one box**
+
+```mermaid
+flowchart LR
+  B1["Host VM<br/>server.js · data/ · every secret"] -- "Tailscale" --> B2["Worker VM<br/>OpenClaw · bridge<br/>agent key only"]
 ```
 
 The boundary is the same in both: the worker holds the agent key and nothing else, and reaches
