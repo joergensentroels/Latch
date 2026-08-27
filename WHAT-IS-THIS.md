@@ -13,27 +13,46 @@ It exists for a specific reason: good ideas die from lack of time, energy or hea
 from lack of ideas. This is meant to be a shared, not-for-profit service for getting them done
 — not another thing competing for your attention.
 
-## The one idea worth understanding
-
-Assistants that can do real things need your passwords. That is the whole problem.
-
-So this splits in two, and **the half that does the work never holds your keys**:
-
-| | Where it runs | What it holds | What it does |
-|---|---|---|---|
-| **The safe** | Your own computer | Every password and key | You operate from here. Approvals happen here. |
-| **The worker** | A second, throwaway machine | Nothing of yours | Does the browsing, the clicking, the files |
+## What happens when you ask for something
 
 ```mermaid
 flowchart LR
-  A["You"] --> B["Compass<br/>the safe"]
-  B -- "may I?" --> A
-  B --> C["Worker<br/>holds no keys"]
-  C --> D["The real world<br/>web · files · email"]
+  YOU["You"] -- "1 · ask" --> C["Compass"]
+  C -- "2 · go and do this" --> W["Worker"]
+  W -- "3 · here is a draft" --> C
+  C -- "4 · may I send it?" --> YOU
+  YOU -- "5 · yes" --> C
+  C -- "6 · sends it, with your key" --> WORLD["Email · web · files"]
 ```
 
-If the worker is tricked — and assistants do get tricked — it still cannot reach your accounts,
-because it never had anything to reach them with.
+Step 4 is the one that matters. The worker did the work, but it cannot send anything — it comes
+back to Compass, and Compass comes back to you.
+
+## Why it is split in two
+
+Assistants that can do real things need your passwords. That is the whole problem. So the half
+that does the work never holds them:
+
+```mermaid
+flowchart TB
+  subgraph SAFE["🔒 Your computer — the safe"]
+    direction TB
+    C["Compass + Latch"]
+    K[("Your keys<br/>passwords · tokens · mailbox")]
+    C --- K
+  end
+  subgraph WORK["♻️ A throwaway machine"]
+    direction TB
+    W["Worker<br/>browser · shell · files"]
+  end
+  C -- "tasks, never keys" --> W
+  W -- "asks Compass to act" --> C
+  BAD["A web page that<br/>tries to trick it"] --> W
+```
+
+**There is no line from the worker to your keys.** That is the entire design. Assistants do get
+tricked by things they read — so the one that reads the web is the one given nothing worth
+stealing, and it is meant to be thrown away and rebuilt.
 
 ## What you get, at three levels
 
@@ -45,16 +64,27 @@ because it never had anything to reach them with.
 
 ## Setting it up
 
-**Honest warning: there is no easy version of this.** It needs two separate computers (or two
-virtual machines), a free [Tailscale](https://tailscale.com) account to connect them privately,
-and about an evening.
+**Honest warning: there is no easy version of this.** It needs two separate computers — or two
+virtual machines on one — a free [Tailscale](https://tailscale.com) account to connect them
+privately, and about an evening.
 
-That is not accidental complexity — it *is* the safety. One machine holding both your keys and
-the thing that browses the web is the arrangement this exists to avoid.
+```mermaid
+flowchart TB
+  subgraph A["Option A — two machines"]
+    direction LR
+    A1["Your laptop<br/>the safe"] -- "private network" --> A2["A spare PC<br/>the worker"]
+  end
+  subgraph B["Option B — two virtual machines"]
+    direction LR
+    B1["Host VM<br/>the safe"] -- "private network" --> B2["Worker VM<br/>the worker"]
+  end
+```
+
+That second machine is not accidental complexity — it *is* the safety. One computer holding
+both your keys and the thing that browses the web is the arrangement this exists to avoid.
 
 If that sounds like your kind of evening, start at
-**[GETTING-STARTED.md](./GETTING-STARTED.md)** — it walks the whole thing, twice, for both
-layouts.
+**[GETTING-STARTED.md](./GETTING-STARTED.md)** — it walks the whole thing for both layouts.
 
 ## More
 
