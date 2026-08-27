@@ -16,17 +16,16 @@ from lack of ideas. This is meant to be a shared, not-for-profit service for get
 ## What happens when you ask for something
 
 ```mermaid
-flowchart LR
-  YOU["You"] -- "1 · ask" --> C["Compass"]
-  C -- "2 · go and do this" --> W["Worker"]
-  W -- "3 · here is a draft" --> C
-  C -- "4 · may I send it?" --> YOU
-  YOU -- "5 · yes" --> C
-  C -- "6 · sends it, with your key" --> WORLD["Email · web · files"]
+flowchart TD
+  A["You ask for something"] --> B["Compass hands the job<br/>to the worker"]
+  B --> C["The worker does it and<br/>brings back a draft"]
+  C --> D{"Compass asks you:<br/>may I send this?"}
+  D -- "yes" --> E["Compass sends it,<br/>using your key"]
+  D -- "no" --> F["Nothing happens"]
 ```
 
-Step 4 is the one that matters. The worker did the work, but it cannot send anything — it comes
-back to Compass, and Compass comes back to you.
+The diamond is the one that matters. The worker did the work, but it cannot send anything — it
+has to come back through Compass, and Compass comes back to you.
 
 ## Why it is split in two
 
